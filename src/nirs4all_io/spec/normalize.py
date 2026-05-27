@@ -175,6 +175,7 @@ def legacy_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
         y_val = config.get(f"{partition}_y")
         y_filter = config.get(f"{partition}_y_filter")
         g_val = config.get(f"{partition}_group")
+        g_filter = config.get(f"{partition}_group_filter")
 
         if x_val is not None:
             x_inputs = _as_list(x_val)
@@ -208,6 +209,9 @@ def legacy_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
             sources.append(ysrc)
         if g_val is not None:
             gsrc: dict[str, Any] = {"id": f"{partition}_m", "role": "metadata", "input": g_val, "partition": partition}
+            if g_filter is not None:
+                gsrc["columns"] = [{"role": "metadata", "select": g_filter}]
+                gsrc["role"] = "mixed"
             if anchor:
                 gsrc["join"] = {"to": anchor, "how": "1:1"}
             sources.append(gsrc)
