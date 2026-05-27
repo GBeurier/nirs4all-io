@@ -45,7 +45,17 @@ def infer(inp: object, *, conventions: list[str] | None = None, hints: dict | No
     elif result.assignments:
         kind, score = _structure_kind(result)
         plan.structure = Decision(kind, score, [f"matched {len(result.assignments)} file(s) via conventions"])
-        plan.assignments = [{"ref": a.name, "role": a.role.value, "partition": a.partition.value if a.partition else None, "source_index": a.source_index, "evidence": [f"filename matches {a.matched_pattern}"]} for a in result.assignments]
+        plan.assignments = [
+            {
+                "ref": a.name,
+                "role": a.role.value,
+                "partition": a.partition.value if a.partition else None,
+                "source_index": a.source_index,
+                "score": 0.75 if a.matched_pattern.startswith("bare:") else 0.9,  # bare-stem match is weaker than a role pattern
+                "evidence": [f"filename matches {a.matched_pattern}"],
+            }
+            for a in result.assignments
+        ]
         spec_dict = assignments_to_spec_dict(result, name="dataset")
     elif len(file_items) == 1:
         plan.structure = Decision("single_combined", 0.7, ["one tabular file; column roles inferred"])
@@ -175,12 +185,40 @@ def _infer_signal_and_task(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -
                 wl = None
         sig, sscore, reason = detect_signal_type(x, wl)
         plan.signal_type = Decision(sig, sscore, [reason], ambiguous=sig == "unknown")
-    # task type from a targets column if the spec has one
-    target_cols = [c["select"] for c in (feature_src.get("columns") or []) if isinstance(c, dict) and c.get("role") == "targets"]
-    flat = [t for sub in target_cols for t in (sub if isinstance(sub, list) else [sub])]
-    if flat and flat[0] in df.columns:
-        task, tscore = detect_task_type(pd.to_numeric(df[flat[0]], errors="coerce").to_numpy())
-        plan.task_type = Decision(task, tscore, [f"target '{flat[0]}' value distribution"])
+    # task type: from a target column in the feature source, OR a separate targets file
+    values, where = _first_target_values(spec_dict, feature_src, df, base_dir)
+    if values is not None and values.size:
+        task, tscore = detect_task_type(values)
+        plan.task_type = Decision(task, tscore, [f"target {where} value distribution"])
+
+
+def _first_target_values(spec_dict: dict, feature_src: dict, feature_df: pd.DataFrame, base_dir: Path):
+    """Find a target column's values: inside the feature source, else a separate targets source."""
+    in_feature = _resolve_role_columns(feature_src, feature_df, "targets")
+    if in_feature and in_feature[0] in feature_df.columns:
+        return pd.to_numeric(feature_df[in_feature[0]], errors="coerce").to_numpy(), f"'{in_feature[0]}'"
+    for src in spec_dict.get("sources", []):
+        if src.get("id") == feature_src.get("id"):
+            continue
+        is_targets = src.get("role") == "targets" or any(isinstance(c, dict) and c.get("role") == "targets" for c in (src.get("columns") or []))
+        if not is_targets:
+            continue
+        inp = src.get("input")
+        first = inp[0] if isinstance(inp, list) else inp
+        if not isinstance(first, str):
+            continue
+        p = Path(first) if Path(first).is_absolute() else base_dir / first
+        if not p.exists():
+            continue
+        try:
+            tdf = read_table(p, _params_from(src)).df
+        except Exception:  # noqa: BLE001 - best-effort
+            continue
+        cols = _resolve_role_columns(src, tdf, "targets")
+        col = cols[0] if cols else (str(tdf.columns[0]) if len(tdf.columns) else None)
+        if col and col in tdf.columns:
+            return pd.to_numeric(tdf[col], errors="coerce").to_numpy(), f"source '{src.get('id')}'"
+    return None, ""
 
 
 def _absolutize_inputs(spec_dict: dict, base_dir: Path, iset) -> None:
