@@ -29,6 +29,9 @@ _FEATURE_ROLES = ["x", "feature", "features", "spectrum", "spectra", "signal", "
 _TARGET_ROLES = ["y", "target", "targets", "label", "labels", "response", "responses"]
 _METADATA_ROLES = ["group", "groups", "meta", "metadata", "m", "samplemeta", "samplemetadata"]
 
+# Root-level loading-param keys accepted as a shorthand (A.12/75), folded into params.
+_ROOT_PARAM_KEYS = {"delimiter", "decimal_separator", "decimal", "has_header", "header", "header_unit", "na", "na_policy", "categorical", "categorical_mode", "encoding", "signal_type"}
+
 
 def normalize_key(key: Any) -> str:
     """Case/separator-insensitive key: keep alphanumerics, lowercase."""
@@ -146,8 +149,14 @@ def legacy_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
         spec["description"] = config["description"]
     if config.get("task_type") is not None:
         spec["task_type"] = config["task_type"]
-    if config.get("global_params") is not None:
-        spec["params"] = config["global_params"]
+    # root-level loading params (A.12/75 shorthand) folded into global params;
+    # an explicit `global_params` block wins over root keys.
+    root_params = {k: config[k] for k in _ROOT_PARAM_KEYS if k in config}
+    gp = config.get("global_params")
+    global_block: dict[str, Any] = gp if isinstance(gp, dict) else {}
+    merged_params = {**root_params, **global_block}
+    if merged_params:
+        spec["params"] = merged_params
     if config.get("repetition") is not None:
         spec["repetition"] = config["repetition"]
         spec.setdefault("sample_index", {})["repetition_id"] = config["repetition"]
