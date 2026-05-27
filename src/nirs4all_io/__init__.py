@@ -16,8 +16,9 @@ materialization time (see ``nirs4all_io.materialize``). ``nirs4all`` may be used
 
 from ._version import __version__
 from .api import load, to_spec
+from .infer import DatasetPlan, describe, infer
 from .materialize.assemble import AssembledDataset
 from .spec import DatasetSpec, SpecError
 
-__all__ = ["__version__", "load", "to_spec", "DatasetSpec", "AssembledDataset", "SpecError"]
+__all__ = ["__version__", "load", "infer", "to_spec", "describe", "DatasetSpec", "DatasetPlan", "AssembledDataset", "SpecError"]
 
