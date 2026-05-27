@@ -48,11 +48,23 @@ class LoadedTable:
 # --------------------------------------------------------------------------- #
 # Param precedence (global -> source); source wins on explicitly-set fields    #
 # --------------------------------------------------------------------------- #
+def _merge_na(base: NaConfig, over: NaConfig) -> NaConfig:
+    """Field-wise NA merge: the source configures NA but inherits unset fill bits."""
+    if over.policy is NaPolicy.AUTO and over.fill_method is None:
+        return base
+    return NaConfig(
+        policy=over.policy if over.policy is not NaPolicy.AUTO else base.policy,
+        fill_method=over.fill_method or base.fill_method,
+        fill_value=over.fill_value if over.fill_value is not None else base.fill_value,
+        fill_per_column=over.fill_per_column,
+    )
+
+
 def effective_params(global_params: LoadingParams | None, source_params: LoadingParams | None) -> LoadingParams:
     """Merge global and source loading params (source wins on set fields)."""
     base = global_params or LoadingParams()
     over = source_params or LoadingParams()
-    na = over.na if (over.na.policy is not NaPolicy.AUTO or over.na.fill_method is not None) else base.na
+    na = _merge_na(base.na, over.na)
     fmt_values = {**base.format.values, **over.format.values}
     from ..spec.dataset_spec import FormatParams
 

@@ -62,7 +62,7 @@ class NaConfig:
     policy: NaPolicy = NaPolicy.AUTO
     fill_method: FillMethod | None = None
     fill_value: Any = None
-    fill_per_column: bool = False
+    fill_per_column: bool = True  # matches nirs4all NAFillConfig.per_column default
 
     @classmethod
     def from_dict(cls, d: dict | None) -> NaConfig:
@@ -73,7 +73,7 @@ class NaConfig:
             policy=NaPolicy.coerce(d.get("policy", "auto"), field="na.policy"),
             fill_method=FillMethod.coerce(fill["method"], field="na.fill.method") if fill.get("method") else None,
             fill_value=fill.get("fill_value"),
-            fill_per_column=bool(fill.get("per_column", False)),
+            fill_per_column=bool(fill.get("per_column", True)),
         )
 
     def to_dict(self) -> dict:

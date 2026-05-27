@@ -191,11 +191,27 @@ def _split_partition_mask(df: pd.DataFrame, spec: DatasetSpec) -> dict[str, np.n
     if p is None or p.by is None:
         return {"train": np.ones(n, dtype=bool)}
     if p.by is PartitionBy.COLUMN:
+        if p.column not in df.columns:
+            raise SpecError(f"partitions.column '{p.column}' not found in the assembled data (columns: {list(df.columns)})")
         col = df[p.column].astype(str).str.lower()
         train_vals = {str(v).lower() for v in p.train_values}
         test_vals = {str(v).lower() for v in p.test_values}
         predict_vals = {str(v).lower() for v in p.predict_values}
-        masks = {"train": col.isin(train_vals).to_numpy(), "test": col.isin(test_vals).to_numpy()}
+        known = train_vals | test_vals | predict_vals
+        train_mask = col.isin(train_vals).to_numpy()
+        test_mask = col.isin(test_vals).to_numpy()
+        unknown_mask = (~col.isin(known)).to_numpy()
+        if unknown_mask.any():
+            from ..spec.enums import UnknownPolicy
+
+            if p.unknown_policy is UnknownPolicy.ERROR:
+                raise SpecError(f"partitions: unknown values in '{p.column}': {sorted(set(col[unknown_mask]))}")
+            if p.unknown_policy is UnknownPolicy.TRAIN:
+                train_mask = train_mask | unknown_mask
+            elif p.unknown_policy is UnknownPolicy.TEST:
+                test_mask = test_mask | unknown_mask
+            # DROP: leave unknown rows out of every partition
+        masks = {"train": train_mask, "test": test_mask}
         if predict_vals:
             masks["predict"] = col.isin(predict_vals).to_numpy()
         return {k: v for k, v in masks.items() if v.any()}
@@ -246,15 +262,14 @@ def assemble(spec: DatasetSpec, base_dir: str | Path = ".") -> AssembledDataset:
     if partitions:
         for part in partitions:
             part_tables = {sid: t for sid, t in tables.items() if t.partition == part or t.kind == SourceKind.LOOKUP.value}
-            assembled.blocks[part] = _assemble_block(part_tables, spec, audits, assembled.warnings)
+            assembled.blocks[part], _ = _assemble_block(part_tables, spec, audits, assembled.warnings)
     else:
-        combined = {sid: t for sid, t in tables.items()}
-        masks = _split_partition_mask(_first_feature_df(combined), spec)
-        if set(masks) == {"train"} and spec.partitions is None:
-            assembled.blocks["train"] = _assemble_block(combined, spec, audits, assembled.warnings)
+        block, combined_df = _assemble_block(dict(tables), spec, audits, assembled.warnings)
+        if spec.partitions is None:
+            assembled.blocks["train"] = block
         else:
-            block = _assemble_block(combined, spec, audits, assembled.warnings)
-            for part, mask in masks.items():
+            # split on the FINAL (post-join) frame so masks line up with the assembled rows
+            for part, mask in _split_partition_mask(combined_df, spec).items():
                 assembled.blocks[part] = _slice_block(block, mask)
 
     assembled.audits = audits
@@ -266,14 +281,7 @@ def _has_role(table: SourceTable, role: str) -> bool:
     return any(r == role for r in table.roles.values())
 
 
-def _first_feature_df(tables: dict[str, SourceTable]) -> pd.DataFrame:
-    for t in tables.values():
-        if t.kind != SourceKind.LOOKUP.value and _has_role(t, "features"):
-            return t.df
-    return next(iter(tables.values())).df
-
-
-def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: list[dict], warnings: list[str]) -> PartitionBlock:
+def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: list[dict], warnings: list[str]) -> tuple[PartitionBlock, pd.DataFrame]:
     feature_tables = [t for t in tables.values() if t.kind != SourceKind.LOOKUP.value and _has_role(t, "features")]
     if not feature_tables:
         raise SpecError("partition has no feature source")
@@ -316,7 +324,7 @@ def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: l
     meta_cols = [c for c, rs in role_cols.items() if rs[0] == "metadata"]
     if meta_cols:
         block.metadata = combined[meta_cols].reset_index(drop=True)
-    return block
+    return block, combined.reset_index(drop=True)
 
 
 def _row_align(combined: pd.DataFrame, t: SourceTable, primary: SourceTable) -> pd.DataFrame:
@@ -326,22 +334,34 @@ def _row_align(combined: pd.DataFrame, t: SourceTable, primary: SourceTable) -> 
     return merged
 
 
+def _as_key_list(on: str | list[str] | None) -> list[str] | None:
+    if on is None:
+        return None
+    return [on] if isinstance(on, str) else list(on)
+
+
 def _join_onto(combined: pd.DataFrame, primary: SourceTable, t: SourceTable, audits: list[dict], warnings: list[str]) -> pd.DataFrame:
     if t.join is not None:
         j = t.join
-        left_on = j.left_on or (primary.key[0] if primary.key else None)
-        right_on = j.right_on or (t.key[0] if t.key else None)
-        if isinstance(left_on, str) and isinstance(right_on, str) and left_on in combined.columns and right_on in t.df.columns:
-            out, audit = join_tables(combined, t.df, left_on=left_on, right_on=right_on, cardinality=j.cardinality, coverage=j.coverage, left_name=primary.source_id, right_name=t.source_id)
+        left_on = _as_key_list(j.left_on)  # left keys reference the accumulating combined frame
+        right_on = _as_key_list(j.right_on) or _as_key_list(t.key)
+        if left_on is not None and right_on is not None:
+            missing_l = [c for c in left_on if c not in combined.columns]
+            missing_r = [c for c in right_on if c not in t.df.columns]
+            if missing_l or missing_r:
+                # keys were declared but are absent -> hard error, never a silent row-align (Codex)
+                raise SpecError(f"source '{t.source_id}': join keys not found (left missing {missing_l} in assembled data, right missing {missing_r} in '{t.source_id}')")
+            out, audit = join_tables(combined, t.df, left_on=left_on, right_on=right_on, cardinality=j.cardinality, coverage=j.coverage, left_name=j.left or primary.source_id, right_name=t.source_id)
             audits.append({"join": audit.operation, "dropped": len(audit.dropped_rows), "warnings": audit.warnings})
             warnings.extend(audit.warnings)
             return out
         if j.cardinality is Cardinality.ONE_TO_ONE:
-            return _row_align(combined, t, primary)  # 1:1 with no usable keys -> row order
-        raise SpecError(f"source '{t.source_id}': {j.cardinality.value} join needs key columns present on both sides")
-    # no join: align by shared key (1:1) or row order
-    if primary.key and t.key and primary.key[0] in combined.columns and t.key[0] in t.df.columns:
-        out, audit = join_tables(combined, t.df, left_on=primary.key[0], right_on=t.key[0], cardinality=Cardinality.ONE_TO_ONE, coverage=Coverage.COMPLETE, left_name=primary.source_id, right_name=t.source_id)
+            return _row_align(combined, t, primary)  # 1:1 with no declared keys -> row order
+        raise SpecError(f"source '{t.source_id}': {j.cardinality.value} join needs explicit left_on/right_on")
+    # no join spec: align by a shared key (1:1) if both declare one, else row order
+    lkeys, rkeys = _as_key_list(primary.key), _as_key_list(t.key)
+    if lkeys and rkeys and all(c in combined.columns for c in lkeys) and all(c in t.df.columns for c in rkeys):
+        out, audit = join_tables(combined, t.df, left_on=lkeys, right_on=rkeys, cardinality=Cardinality.ONE_TO_ONE, coverage=Coverage.COMPLETE, left_name=primary.source_id, right_name=t.source_id)
         warnings.extend(audit.warnings)
         return out
     return _row_align(combined, t, primary)
