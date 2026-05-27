@@ -1,0 +1,54 @@
+# nirs4all-io
+
+> **Dataset-assembly bridge.** Turn *any* user input — a directory, a list of
+> files, a glob, a config dict/JSON/YAML, in-memory arrays, a folder of vendor
+> spectra + a reference table — into a pipeline-ready dataset.
+
+`nirs4all-io` owns the dataset-level concepts that the low-level reader library
+[`nirs4all-formats`](https://github.com/GBeurier/nirs4all-formats) deliberately
+does **not**: X/Y/metadata roles, train/test/folds, multi-source, relational
+joins, signal/task-type inference, and a declarative convention system. It
+matches the expressiveness of `nirs4all`'s `DatasetConfig`/`DatasetLoader` and
+adds a score-based inference engine.
+
+```
+any input ──► RESOLVE ──► INFER ──► CONFIGURE ──► MATERIALIZE ──► SpectroDataset
+              (InputSet)  (DatasetPlan, scored)   (DatasetSpec)    (and later: dag-ml-data)
+```
+
+## Status
+
+**Phase 1 (Python MVP) — under construction.** Targets `SpectroDataset`. The
+Rust core + `dag-ml-data` target are Phase 2 (gated). See
+[`../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md`](../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md)
+for the full design.
+
+## Quick start (target API)
+
+```python
+import nirs4all_io as nio
+
+# Inspect a directory and get a scored recommendation
+plan = nio.infer("data/mango/", conventions=["nirs4all-classic"])
+print(plan.recommendations)
+
+# Materialize a spec/plan/input into a SpectroDataset
+ds = nio.load(plan, target="spectrodataset")
+ds = nio.load({"sources": [{"id": "x", "role": "features", "input": "X.csv"}]})
+
+# Vendor corpus + reference table (headline new capability)
+plan = nio.infer(["spectra/*.0", "reference.csv"], conventions=["vendor-corpus"])
+```
+
+## Design principles
+
+- **Self-contained**: no runtime dependency on `nirs4all`. The only touch-point
+  is a lazy import of the `SpectroDataset` class at materialization.
+- **Parsers live in `nirs4all-formats`**: vendor byte-decoding is never
+  reimplemented here; tabular loading logic is copied from `nirs4all`
+  (see [`COPY_PROVENANCE.md`](COPY_PROVENANCE.md)).
+- **Versioned, machine-validatable `DatasetSpec`** is the canonical contract.
+
+## License
+
+Dual-licensed `CeCILL-2.1 OR AGPL-3.0-or-later` — see [`LICENSE`](LICENSE).

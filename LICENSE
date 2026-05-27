@@ -1,0 +1,27 @@
+# License
+
+`nirs4all-io` is distributed under a **dual open-source license**:
+
+> **SPDX-License-Identifier: `CeCILL-2.1 OR AGPL-3.0-or-later`**
+
+You may use, modify, and redistribute this software under the terms of **either**:
+
+1. the **CeCILL Free Software License Agreement, version 2.1** — full text in
+   [`LICENSES/CeCILL-2.1.txt`](LICENSES/CeCILL-2.1.txt); **or**
+2. the **GNU Affero General Public License, version 3.0 or (at your option) any
+   later version** — full text in [`LICENSES/AGPL-3.0-or-later.txt`](LICENSES/AGPL-3.0-or-later.txt).
+
+Choose whichever of the two licenses you prefer.
+
+## Why this license
+
+`nirs4all-io` reuses ("copies and re-orchestrates") business logic from the
+[`nirs4all`](https://github.com/GBeurier/nirs4all) library, whose default
+open-source license is **AGPL-3.0-or-later** with **CeCILL-2.1** as an accepted
+variant. Matching that dual offering keeps the copied logic license-compatible
+(see [`COPY_PROVENANCE.md`](COPY_PROVENANCE.md)). Both projects are owned by the
+same author, who authorizes this use.
+
+Recommended SPDX header for source files:
+
+    # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
