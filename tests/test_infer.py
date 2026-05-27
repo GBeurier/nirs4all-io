@@ -124,6 +124,50 @@ def test_infer_task_from_separate_classification_target(tmp_path):
     assert plan.task_type is not None and plan.task_type.value == "multiclass"
 
 
+def test_infer_detects_sample_id_and_audits_coverage(tmp_path):
+    """Detect a sample-id column, key the joins by it, and verify each sample has a target + metadata."""
+    wl = [str(1000 + i * 5) for i in range(8)]
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(rng.random((5, 8)), columns=wl)
+    X.insert(0, "Sample_ID", [f"s{i}" for i in range(5)])
+    X["site"] = ["A", "A", "B", "B", "A"]
+    _csv(tmp_path / "X.csv", X)
+    _csv(tmp_path / "Y.csv", pd.DataFrame({"Sample_ID": ["s0", "s1", "s2", "s4"], "protein": rng.random(4)}))  # s3 missing
+    _csv(tmp_path / "meta.csv", pd.DataFrame({"site": ["A", "B"], "region": ["north", "south"]}))  # shared m:1 dimension
+    plan = nio.infer([str(tmp_path / "X.csv"), str(tmp_path / "Y.csv"), str(tmp_path / "meta.csv")])
+    assert plan.identity is not None and plan.identity.value == "Sample_ID"
+    assert plan.resolved_spec.sample_index.by.value == "id" and plan.resolved_spec.sample_index.key == "Sample_ID"
+    by_role = {a["role"]: a for a in plan.alignment}
+    assert by_role["targets"]["n_missing"] == 1 and by_role["targets"]["missing"] == ["s3"]   # s3 has no y
+    assert by_role["metadata"]["relation"] == "m:1" and by_role["metadata"]["n_missing"] == 0  # shared metadata
+    assert any("NO target" in w for w in plan.warnings)
+
+
+def test_infer_combined_file_detects_sample_id_column(tmp_path):
+    wl = [str(1000 + i * 5) for i in range(8)]
+    rng = np.random.default_rng(1)
+    df = pd.DataFrame(rng.random((6, 8)), columns=wl)
+    df.insert(0, "sample_id", [f"m{i}" for i in range(6)])
+    df["protein"] = rng.random(6)
+    _csv(tmp_path / "data.csv", df)
+    plan = nio.infer(tmp_path / "data.csv")
+    assert plan.identity is not None and plan.identity.value == "sample_id"
+    assert plan.resolved_spec.sample_index.key == "sample_id"
+    roles = {g["col"]: g["role"] for g in plan.columns[0]["column_roles"]}
+    assert roles["sample_id"] == "id"  # the id column is identity, not a feature/target/metadata role
+    assert roles[wl[0]] == "features" and roles["protein"] == "targets"
+
+
+def test_infer_no_false_sample_id(tmp_path):
+    # pure wavelengths + a float target -> no id column -> row indexing (identity stays None)
+    wl = [str(1000 + i * 5) for i in range(8)]
+    df = pd.DataFrame(np.random.default_rng(2).random((6, 8)), columns=wl)
+    df["protein"] = np.arange(6.0)
+    _csv(tmp_path / "data.csv", df)
+    plan = nio.infer(tmp_path / "data.csv")
+    assert plan.identity is None
+
+
 def test_infer_plan_is_json_serializable(tmp_path):
     import json
 

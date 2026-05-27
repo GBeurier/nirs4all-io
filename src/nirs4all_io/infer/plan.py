@@ -34,6 +34,8 @@ class DatasetPlan:
     columns: list[dict] = field(default_factory=list)
     params: dict = field(default_factory=dict)
     axis: dict | None = None
+    identity: Decision | None = None  # detected sample-id column
+    alignment: list[dict] = field(default_factory=list)  # per-sample y/metadata coverage audit
     signal_type: Decision | None = None
     task_type: Decision | None = None
     warnings: list[str] = field(default_factory=list)
@@ -60,6 +62,8 @@ class DatasetPlan:
             "columns": self.columns,
             "params": self.params,
             "axis": self.axis,
+            "identity": self.identity.to_dict() if self.identity else None,
+            "alignment": self.alignment,
             "signal_type": self.signal_type.to_dict() if self.signal_type else None,
             "task_type": self.task_type.to_dict() if self.task_type else None,
             "warnings": self.warnings,
