@@ -150,6 +150,14 @@ class LoadingParams:
 # --------------------------------------------------------------------------- #
 # Column roles (E.1) and joins (E.2)                                          #
 # --------------------------------------------------------------------------- #
+def _coerce_column_role(value: Any, *, field: str) -> Role:
+    """Coerce a *column* role; ``mixed`` is a source-level role only (Codex)."""
+    role = Role.coerce(value, field=field)
+    if role is Role.MIXED:
+        raise SpecError(f"{field}: 'mixed' is a source-level role, not a column role")
+    return role
+
+
 @dataclass
 class ColumnRole:
     role: Role
@@ -159,7 +167,7 @@ class ColumnRole:
     def from_dict(cls, d: dict) -> ColumnRole:
         if "role" not in d or "select" not in d:
             raise SpecError(f"column-role entry needs 'role' and 'select': {d!r}")
-        return cls(role=Role.coerce(d["role"], field="columns[].role"), select=parse_selector(d["select"]))
+        return cls(role=_coerce_column_role(d["role"], field="columns[].role"), select=parse_selector(d["select"]))
 
     def to_dict(self) -> dict:
         return {"role": self.role.value, "select": self.select.to_spec()}
@@ -173,7 +181,7 @@ def parse_columns(value: Any) -> tuple[list[ColumnRole], bool]:
         return [ColumnRole.from_dict(item) for item in value], False
     if isinstance(value, dict):
         # map shorthand {role: selector, ...}; only valid when disjoint (validated later)
-        roles = [ColumnRole(role=Role.coerce(role, field="columns key"), select=parse_selector(sel)) for role, sel in value.items()]
+        roles = [ColumnRole(role=_coerce_column_role(role, field="columns key"), select=parse_selector(sel)) for role, sel in value.items()]
         return roles, True
     raise SpecError(f"'columns' must be a list or a map, got {type(value).__name__}")
 
@@ -263,9 +271,14 @@ class SourceSpec:
             raise SpecError(f"each source needs an 'id': {d!r}")
         columns, from_map = parse_columns(d.get("columns"))
         join = JoinSpec.from_dict(d["join"], this_source=d["id"]) if d.get("join") else None
+        # When per-column roles are declared but no source role is given, the
+        # source role is 'mixed' (roles come from columns) -- so a metadata
+        # lookup with `columns:[{role:metadata,...}]` does not silently become
+        # `features` on round-trip (Codex foundation review).
+        default_role = "mixed" if (columns and "role" not in d) else "features"
         return cls(
             id=str(d["id"]),
-            role=Role.coerce(d.get("role", "features"), field=f"source[{d['id']}].role"),
+            role=Role.coerce(d.get("role", default_role), field=f"source[{d['id']}].role"),
             kind=SourceKind.coerce(d.get("kind", "table"), field=f"source[{d['id']}].kind"),
             modality=Modality.coerce(d["modality"], field="modality") if d.get("modality") else None,
             input=d.get("input"),

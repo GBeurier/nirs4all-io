@@ -159,7 +159,6 @@ L8 = {
         {
             "id": "sites",
             "kind": "lookup",
-            "role": "metadata",
             "input": "sites.csv",
             "columns": [{"role": "metadata", "select": "rest"}],
             "join": {"left": "measurements", "right": "sites", "left_on": "site_code", "right_on": "site_code", "cardinality": "m:1", "coverage": "complete"},
@@ -183,3 +182,46 @@ def test_flagship_join_semantics():
     meas = spec.sources[0]
     assert meas.merge is MergeMode.CONCAT_SAMPLES
     assert [c.role for c in meas.columns] == [Role.FEATURES, Role.TARGETS, Role.METADATA, Role.IGNORE]
+    # lookup with columns but no source role -> defaults to 'mixed' (roles come
+    # from columns), not silently 'features' (Codex foundation fix #3).
+    assert sites.role is Role.MIXED
+
+
+# --------------------------------------------------------------------------- #
+# Codex foundation-review fixes                                               #
+# --------------------------------------------------------------------------- #
+def test_column_role_mixed_rejected():
+    with pytest.raises(SpecError, match="source-level role"):
+        DatasetSpec.from_dict({"sources": [{"id": "x", "role": "mixed", "input": "x.csv", "columns": [{"role": "mixed", "select": "rest"}]}]})
+
+
+def test_m1_join_requires_explicit_keys_not_source_key():
+    # full-form m:1 with only a per-source 'key' (alignment) must be rejected
+    bad = {
+        "sources": [
+            {"id": "x", "role": "features", "input": "x.csv"},
+            {"id": "sites", "kind": "lookup", "input": "sites.csv", "key": "site_code", "columns": [{"role": "metadata", "select": "rest"}], "join": {"left": "x", "right": "sites", "cardinality": "m:1"}},
+        ]
+    }
+    with pytest.raises(SpecError, match="needs explicit left_on/right_on"):
+        validate_dict(bad)
+
+
+def test_m1_join_shorthand_on_is_accepted():
+    ok = {
+        "sources": [
+            {"id": "x", "role": "features", "input": "x.csv"},
+            {"id": "sites", "kind": "lookup", "input": "sites.csv", "columns": [{"role": "metadata", "select": "rest"}], "join": {"to": "x", "on": "site_code", "how": "m:1"}},
+        ]
+    }
+    spec = validate_dict(ok)
+    j = spec.sources[1].join
+    assert j.left_on == "site_code" and j.right_on == "site_code"
+
+
+def test_lookup_with_columns_defaults_to_mixed_and_roundtrips():
+    d = {"sources": [{"id": "x", "role": "features", "input": "x.csv"}, {"id": "ref", "kind": "lookup", "input": "ref.csv", "columns": [{"role": "targets", "select": ["protein"]}, {"role": "metadata", "select": "rest"}], "join": {"to": "x", "on": "id", "how": "m:1"}}]}
+    spec = DatasetSpec.from_dict(d)
+    assert spec.sources[1].role is Role.MIXED
+    # round-trip keeps role 'mixed' (not silently 'features')
+    assert DatasetSpec.from_dict(spec.to_dict()).sources[1].role is Role.MIXED
