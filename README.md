@@ -44,6 +44,13 @@ ds = nio.load({"sources": [{"id": "x", "role": "features", "input": "X.csv"}]})
 plan = nio.infer(["spectra/*.0", "reference.csv"], conventions=["vendor-corpus"])
 ```
 
+## What can it load?
+
+[`docs/DATASET_CONFIGURATIONS.md`](docs/DATASET_CONFIGURATIONS.md) is the complete
+reference: **every** input form, `DatasetSpec` field, column selector, merge mode,
+relational join, partition, fold and loading parameter — with a use-case cookbook
+and an honest ✅/🟡/📋 implementation status on each option.
+
 ## Design principles
 
 - **Self-contained**: no runtime dependency on `nirs4all`. The only touch-point
