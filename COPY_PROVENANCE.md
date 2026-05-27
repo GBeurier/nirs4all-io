@@ -23,3 +23,8 @@ This file records every block of logic copied or adapted from `nirs4all` into
 | 4 | `data/parsers/folder_parser.py` (`FILE_PATTERNS`, word-boundary match) | `conventions/builtin/*.toml` + `conventions/engine.py` | GENERALIZE | patterns → declarative profiles; extension set widened beyond CSV |
 
 _(rows are appended as each piece is copied)_
+| 7,9,10 | `data/detection/detector.py`, `data/signal_type.py`, `core/task_detection.py` | `infer/` (pending) | COPY-LOGIC | detection heuristics distilled (HEADER_PATTERNS, signal scorers, water bands, task thresholds) — used by the inference engine |
+| 11,12,13 | `data/selection/{role_assigner,column_selector,row_selector,sample_linker}.py`, `data/partition/partition_assigner.py` | `spec/selectors.py`, `materialize/assemble.py`, `materialize/join.py` | COPY-LOGIC/GENERALIZE | column selectors E.1; per-source alignment; partition (column/percentage) split |
+| 14 | `controllers/splitters/fold_file_loader.py` | `materialize/folds.py` | COPY-LOGIC | fold-file parsing (csv-nirs4all/csv-assignment/json/yaml/txt) |
+| 5,6 | `data/loaders/*` (`base.py::apply_na_policy`, csv/numpy/parquet/excel) | `materialize/loaders.py` | COPY-LOGIC | tabular reading + NA policy + param precedence + dtype/categorical |
+| 15 | `data/config.py::_load_dataset`, `data/dataset.py` add_*/set_* | `materialize/spectrodataset.py` (build flow), `materialize/assemble.py` | COPY-LOGIC + EMIT(lazy) | build orchestration; SpectroDataset class imported lazily only |
