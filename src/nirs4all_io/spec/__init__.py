@@ -35,6 +35,7 @@ from .enums import (
     SpecError,
     TaskType,
 )
+from .json_schema import json_schema, validate_against_schema
 from .normalize import (
     alias_map,
     apply_key_aliases,
@@ -108,4 +109,7 @@ __all__ = [
     "normalize_key",
     "legacy_to_spec_dict",
     "normalize_to_spec_dict",
+    # json schema (portable wire contract)
+    "json_schema",
+    "validate_against_schema",
 ]
