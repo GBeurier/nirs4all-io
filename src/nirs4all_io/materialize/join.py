@@ -78,12 +78,12 @@ def concat_features(frames: list[pd.DataFrame], names: list[str], *, key: str | 
         return pd.DataFrame(), JoinAudit(operation="concat_features")
     audit = JoinAudit(operation="concat_features")
     if key is not None:
-        keys = _keys(key)
+        # same samples in each block -> validated 1:1 join (unique keys, complete coverage),
+        # NOT a raw inner merge (which would silently multiply dup keys / drop missing keys).
         out = frames[0]
-        _require_columns(out, keys, names[0])
         for frame, name in zip(frames[1:], names[1:], strict=False):
-            _require_columns(frame, keys, name)
-            out = out.merge(frame, how="inner", on=keys, suffixes=("", f"__{name}"))
+            out, step = join_tables(out, frame, left_on=key, right_on=key, cardinality=Cardinality.ONE_TO_ONE, coverage=Coverage.COMPLETE, left_name=names[0], right_name=name)
+            audit.warnings.extend(step.warnings)
         audit.n_result = len(out)
         return out, audit
     lengths = {len(f) for f in frames}

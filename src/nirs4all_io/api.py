@@ -63,13 +63,19 @@ def to_spec(
             return spec, path.parent
         raise SpecError(f"path does not exist: {inp}")
     if isinstance(inp, (list, tuple)) and all(isinstance(x, (str, Path)) for x in inp):
-        # a list/glob of files -> resolve + convention match
+        # a list/glob of files -> resolve + convention match, with ABSOLUTE inputs
+        # (files may live in different directories / share basenames)
         iset = resolve(list(inp))
-        result = match_items(iset.names, resolve_profiles(conventions or _DEFAULT_CONVENTIONS))
-        base = Path(iset.items[0].identity).parent if iset.items else Path(base_dir or ".")
+        name_to_abs = {it.ref: it.identity for it in iset.items}
+        result = match_items(list(name_to_abs), resolve_profiles(conventions or _DEFAULT_CONVENTIONS))
         spec_dict = assignments_to_spec_dict(result, name=name or "dataset")
-        # remap relative names to absolute (files may be in different dirs)
-        return DatasetSpec.from_dict(spec_dict), base
+        for src in spec_dict.get("sources", []):
+            value = src.get("input")
+            if isinstance(value, list):
+                src["input"] = [name_to_abs.get(n, n) for n in value]
+            elif isinstance(value, str):
+                src["input"] = name_to_abs.get(value, value)
+        return DatasetSpec.from_dict(spec_dict), Path(base_dir or ".")
     raise SpecError(f"cannot build a DatasetSpec from {type(inp).__name__}; pass arrays to load() directly")
 
 
