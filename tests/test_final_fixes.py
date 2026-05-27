@@ -35,6 +35,21 @@ def test_filename_stem_virtual_key_join(tmp_path):
     assert sorted(block.y.ravel()) == [1.0, 2.0, 3.0]
 
 
+def test_filename_stem_join_with_compressed_csv(tmp_path):
+    """filename_stem must use compound-extension stems (s1.csv.gz -> 's1'), matching get_stem."""
+    for stem in ("s1", "s2"):
+        pd.DataFrame({"400": [0.1], "401": [0.2]}).to_csv(tmp_path / f"{stem}.csv.gz", sep=";", index=False, compression="gzip")
+    _csv(tmp_path / "ref.csv", pd.DataFrame({"filename_stem": ["s1", "s2"], "y": [10.0, 20.0]}))
+    spec = {
+        "sources": [
+            {"id": "spectra", "role": "features", "input": ["s1.csv.gz", "s2.csv.gz"], "merge": "concat_samples", "key": "filename_stem"},
+            {"id": "ref", "kind": "lookup", "input": "ref.csv", "columns": [{"role": "targets", "select": ["y"]}], "join": {"to": "spectra", "on": "filename_stem", "how": "m:1", "coverage": "complete"}},
+        ],
+    }
+    asm = nio.load(spec, base_dir=tmp_path, target="assembled")  # coverage:complete -> would error if stems were 's1.csv'
+    assert sorted(asm.blocks["train"].y.ravel()) == [10.0, 20.0]
+
+
 def test_get_stem_compound_extensions():
     assert get_stem("X.csv.gz") == "X"
     assert get_stem("X.csv.zip") == "X"  # was "X." (off-by-one)
