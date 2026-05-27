@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -105,7 +106,7 @@ def load_profile(source: str | Path | dict) -> Profile:
     return Profile.from_dict(data)
 
 
-def resolve_profiles(profiles: list[str | Path | dict] | None) -> list[Profile]:
+def resolve_profiles(profiles: Sequence[str | Path | dict] | None) -> list[Profile]:
     """Resolve a list of profile references to :class:`Profile` objects."""
     if not profiles:
         return []
