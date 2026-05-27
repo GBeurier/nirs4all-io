@@ -94,6 +94,36 @@ def test_infer_single_combined_file_column_roles(tmp_path):
     assert asm.blocks["train"].y.shape == (8, 1)
 
 
+def test_infer_directory_full_decisions_with_scores(tmp_path):
+    """Directory / file-list inference yields scored decisions for every choice."""
+    cols = [str(1000 + i * 5) for i in range(12)]
+    rng = np.random.default_rng(0)
+    absb = rng.random((20, 12)) * 1.0 + 0.4  # unambiguous absorbance
+    _csv(tmp_path / "Xcal.csv", pd.DataFrame(absb, columns=cols))
+    _csv(tmp_path / "Ycal.csv", pd.DataFrame({"protein": rng.random(20) * 50}))
+    _csv(tmp_path / "Xval.csv", pd.DataFrame(rng.random((6, 12)) * 1.0 + 0.4, columns=cols))
+    _csv(tmp_path / "Yval.csv", pd.DataFrame({"protein": rng.random(6) * 50}))
+    for inp in (tmp_path, [str(tmp_path / f) for f in ("Xcal.csv", "Ycal.csv", "Xval.csv", "Yval.csv")]):
+        plan = nio.infer(inp)
+        assert plan.structure.value == "train_test_folder" and plan.structure.score > 0
+        # every file assignment carries a role, partition and a confidence score
+        assert plan.assignments and all("score" in a and a["partition"] for a in plan.assignments)
+        assert {(a["role"], a["partition"]) for a in plan.assignments} >= {("features", "train"), ("targets", "test")}
+        assert plan.axis and plan.axis["unit"] == "nm"
+        assert plan.signal_type.value == "absorbance"
+        # task type detected from the SEPARATE Ycal/Yval target file
+        assert plan.task_type is not None and plan.task_type.value == "regression"
+
+
+def test_infer_task_from_separate_classification_target(tmp_path):
+    cols = [str(1000 + i * 5) for i in range(8)]
+    rng = np.random.default_rng(1)
+    _csv(tmp_path / "Xcal.csv", pd.DataFrame(rng.random((30, 8)), columns=cols))
+    _csv(tmp_path / "Ycal.csv", pd.DataFrame({"grade": rng.integers(0, 3, 30)}))
+    plan = nio.infer(tmp_path)
+    assert plan.task_type is not None and plan.task_type.value == "multiclass"
+
+
 def test_infer_plan_is_json_serializable(tmp_path):
     import json
 
