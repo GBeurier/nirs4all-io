@@ -197,27 +197,16 @@ class JoinSpec:
 
     @classmethod
     def from_dict(cls, d: dict, *, this_source: str | None = None) -> JoinSpec:
-        # Shorthand: {to, on, how} == {right:to, left_on:on, right_on:on, cardinality:how}
-        if "to" in d or "how" in d:
+        # `how` is an accepted alias for `cardinality` in both forms; the shorthand
+        # is detected by `to` only (`{to, on, how}` == {right:to, left_on/right_on:on}).
+        cardinality = Cardinality.coerce(d.get("cardinality", d.get("how", "1:1")), field="join.cardinality")
+        coverage = Coverage.coerce(d.get("coverage", "complete"), field="join.coverage")
+        if "to" in d:
             on = d.get("on")
-            return cls(
-                left=d.get("left", this_source),
-                right=d["to"],
-                left_on=d.get("left_on", on),
-                right_on=d.get("right_on", on),
-                cardinality=Cardinality.coerce(d.get("how", "1:1"), field="join.how"),
-                coverage=Coverage.coerce(d.get("coverage", "complete"), field="join.coverage"),
-            )
+            return cls(left=d.get("left", this_source), right=d["to"], left_on=d.get("left_on", on), right_on=d.get("right_on", on), cardinality=cardinality, coverage=coverage)
         if "right" not in d:
             raise SpecError(f"join needs 'right' (or shorthand 'to'): {d!r}")
-        return cls(
-            left=d.get("left", this_source),
-            right=d["right"],
-            left_on=d.get("left_on"),
-            right_on=d.get("right_on"),
-            cardinality=Cardinality.coerce(d.get("cardinality", "1:1"), field="join.cardinality"),
-            coverage=Coverage.coerce(d.get("coverage", "complete"), field="join.coverage"),
-        )
+        return cls(left=d.get("left", this_source), right=d["right"], left_on=d.get("left_on"), right_on=d.get("right_on"), cardinality=cardinality, coverage=coverage)
 
     def to_dict(self) -> dict:
         return _drop_none(
