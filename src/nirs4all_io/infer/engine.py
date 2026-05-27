@@ -57,6 +57,7 @@ def infer(inp: object, *, conventions: list[str] | None = None, hints: dict | No
 
     _enrich_params(spec_dict, base_dir, plan)
     _infer_signal_and_task(spec_dict, base_dir, plan)
+    _absolutize_inputs(spec_dict, base_dir, iset)  # so load(plan.accept()) works anywhere
 
     if result.unmatched:
         plan.warnings.append(f"unassigned files: {result.unmatched}")
@@ -180,6 +181,21 @@ def _infer_signal_and_task(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -
     if flat and flat[0] in df.columns:
         task, tscore = detect_task_type(pd.to_numeric(df[flat[0]], errors="coerce").to_numpy())
         plan.task_type = Decision(task, tscore, [f"target '{flat[0]}' value distribution"])
+
+
+def _absolutize_inputs(spec_dict: dict, base_dir: Path, iset) -> None:
+    """Rewrite source inputs to absolute paths so the resolved_spec is location-independent."""
+    name_to_abs = {it.ref: it.identity for it in iset.items}
+
+    def _abs(name: str) -> str:
+        return name_to_abs.get(name) or str(base_dir / name)
+
+    for src in spec_dict.get("sources", []):
+        value = src.get("input")
+        if isinstance(value, list):
+            src["input"] = [_abs(n) for n in value]
+        elif isinstance(value, str):
+            src["input"] = _abs(value)
 
 
 def _params_from(src: dict):

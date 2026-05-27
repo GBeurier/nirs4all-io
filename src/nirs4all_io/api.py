@@ -37,6 +37,11 @@ def to_spec(
     name: str | None = None,
 ) -> tuple[DatasetSpec, Path]:
     """Normalize any (non-in-memory) input into a (DatasetSpec, base_dir) pair."""
+    from .infer.plan import DatasetPlan
+
+    if isinstance(inp, DatasetPlan):
+        # a plan's resolved_spec carries absolute input paths (Appendix I)
+        return inp.accept(), Path(base_dir or ".")
     if isinstance(inp, DatasetSpec):
         return inp, Path(base_dir or ".")
     if isinstance(inp, dict):

@@ -134,6 +134,7 @@ def _split_roles(source: SourceSpec, df: pd.DataFrame, dtypes: list[str]) -> dic
     key_cols = set(source.key if isinstance(source.key, list) else [source.key] if source.key else [])
     # join keys are identity, not a role -> exempt from role coverage
     key_cols |= _join_key_columns(source)
+    key_cols.add("filename_stem")  # reserved virtual key (vendor-corpus); never a role
     roles: dict[str, str] = {}
     if source.role is not Role.MIXED and not source.columns:
         for col in headers:
@@ -163,6 +164,11 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
     df, header_unit, signal, origins = _load_source_frame(source, spec, base_dir, audits)
     from .loaders import infer_dtypes
 
+    # materialize the `filename_stem` virtual key from concat_samples origins so a
+    # vendor-corpus lookup can join spectra to a reference by file stem (E.2).
+    if origins is not None and "filename_stem" not in df.columns:
+        df = df.copy()
+        df["filename_stem"] = origins
     roles = _split_roles(source, df, infer_dtypes(df))
     key = source.key if isinstance(source.key, list) else [source.key] if source.key else None
     partition = source.partition.value if source.partition else None

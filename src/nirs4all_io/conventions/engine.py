@@ -42,8 +42,10 @@ def pattern_matches(filename: str, pattern: str, *, word_boundary: bool = True) 
 def get_stem(filename: str) -> str:
     """Filename stem without extension, handling compound .csv.gz/.csv.zip."""
     low = filename.lower()
-    if low.endswith(".csv.gz") or low.endswith(".csv.zip"):
-        return filename[:-7]
+    if low.endswith(".csv.gz"):
+        return filename[: -len(".csv.gz")]
+    if low.endswith(".csv.zip"):
+        return filename[: -len(".csv.zip")]
     idx = filename.rfind(".")
     return filename[:idx] if idx > 0 else filename
 
