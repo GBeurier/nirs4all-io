@@ -35,6 +35,13 @@ from .enums import (
     SpecError,
     TaskType,
 )
+from .normalize import (
+    alias_map,
+    apply_key_aliases,
+    legacy_to_spec_dict,
+    normalize_key,
+    normalize_to_spec_dict,
+)
 from .selectors import (
     AutoSelector,
     DtypeSelector,
@@ -95,4 +102,10 @@ __all__ = [
     # validation
     "validate_spec",
     "validate_dict",
+    # normalization
+    "alias_map",
+    "apply_key_aliases",
+    "normalize_key",
+    "legacy_to_spec_dict",
+    "normalize_to_spec_dict",
 ]
