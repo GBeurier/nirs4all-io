@@ -28,6 +28,23 @@ class SampleIdGuess:
     evidence: list[str] = field(default_factory=list)
 
 
+@dataclass
+class RepetitionProfile:
+    n_rows: int
+    n_unique: int
+    avg_reps: float
+    is_repetition: bool  # systematic repeats (vs sporadic duplicates)
+
+
+def repetition_profile(ids: pd.Series) -> RepetitionProfile:
+    """Decide whether a non-unique id column is *repeated measurements* (avg >=1.5
+    rows/id) or just sporadic duplicate ids (a data-quality issue)."""
+    n = len(ids)
+    u = int(ids.nunique(dropna=False)) or 1
+    avg = n / u
+    return RepetitionProfile(n_rows=n, n_unique=u, avg_reps=round(avg, 2), is_repetition=(u < n and avg >= 1.5))
+
+
 def detect_sample_id(df: pd.DataFrame) -> SampleIdGuess | None:
     """Pick the most likely sample-id column, or None. Requires score >= 0.5."""
     n = len(df)

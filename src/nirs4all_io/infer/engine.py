@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..conventions.engine import match_items
+from ..conventions.engine import get_stem, match_items
 from ..conventions.profiles import resolve_profiles
 from ..conventions.to_spec import assignments_to_spec_dict
 from ..materialize.loaders import coerce_numeric, read_table
@@ -24,7 +24,7 @@ from ..spec import DatasetSpec
 from ..spec.enums import Role
 from .describe import FileDescription, describe
 from .detectors import detect_signal_type, detect_task_type
-from .identity import classify_metadata_relation, coverage_audit, detect_sample_id
+from .identity import classify_metadata_relation, coverage_audit, detect_sample_id, repetition_profile
 from .plan import DatasetPlan, Decision
 
 _WL_RE = re.compile(r"^\d+(\.\d+)?(nm|cm-1)?$", re.IGNORECASE)
@@ -69,6 +69,9 @@ def infer(inp: object, *, conventions: list[str] | None = None, hints: dict | No
     _enrich_params(spec_dict, base_dir, plan)
     _infer_identity_and_alignment(spec_dict, base_dir, plan)  # detect sample id + audit y/metadata coverage
     _infer_signal_and_task(spec_dict, base_dir, plan)
+    # a proposed aggregation over repetitions uses 'vote' for classification targets
+    if plan.task_type and plan.task_type.value in ("binary", "multiclass") and isinstance(spec_dict.get("aggregate"), dict):
+        spec_dict["aggregate"]["method"] = "vote"
     _absolutize_inputs(spec_dict, base_dir, iset)  # so load(plan.accept()) works anywhere
 
     if result.unmatched:
@@ -141,6 +144,7 @@ def _infer_single_file(path: str, plan: DatasetPlan) -> dict:
     if id_col:
         source["key"] = id_col
         spec["sample_index"] = {"by": "id", "key": id_col}
+        _apply_repetition(spec, plan, id_col, table.df[id_col])
     return spec
 
 
@@ -257,19 +261,47 @@ def _params_from(src: dict):
     return LoadingParams.from_dict(src.get("params"))
 
 
-def _read_source_df(src: dict, base_dir: Path) -> pd.DataFrame | None:
-    """Read a source's first input file (best-effort) for id detection / coverage."""
+def _source_paths(src: dict, base_dir: Path) -> list[Path]:
+    import glob as _glob
+
+    out: list[Path] = []
     inp = src.get("input")
-    first = inp[0] if isinstance(inp, list) else inp
-    if not isinstance(first, str):
+    for item in inp if isinstance(inp, list) else [inp]:
+        if not isinstance(item, str):
+            continue
+        if any(c in item for c in "*?["):
+            out.extend(Path(p) for p in sorted(_glob.glob(item) or _glob.glob(str(base_dir / item))))
+        else:
+            p = Path(item) if Path(item).is_absolute() else base_dir / item
+            out.append(p)
+    return [p for p in out if p.exists()]
+
+
+def _read_source_df(src: dict, base_dir: Path) -> pd.DataFrame | None:
+    """Read + concat ALL of a source's input files for id detection / coverage.
+
+    A multi-file source also gets a per-row `filename_stem` (so vendor corpora,
+    one file per sample, expose a usable identity).
+    """
+    paths = _source_paths(src, base_dir)
+    if not paths:
         return None
-    path = Path(first) if Path(first).is_absolute() else base_dir / first
-    if not path.exists():
+    params = _params_from(src)
+    frames, stems = [], []
+    for p in paths:
+        try:
+            df = read_table(p, params).df
+        except Exception:  # noqa: BLE001 - best-effort
+            continue
+        frames.append(df)
+        stems.extend([get_stem(p.name)] * len(df))
+    if not frames:
         return None
-    try:
-        return read_table(path, _params_from(src)).df
-    except Exception:  # noqa: BLE001 - best-effort during inference
-        return None
+    if len(frames) == 1:
+        return frames[0]
+    out = pd.concat(frames, axis=0, ignore_index=True, sort=False)
+    out["filename_stem"] = stems
+    return out
 
 
 def _infer_identity_and_alignment(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -> None:
@@ -284,35 +316,39 @@ def _infer_identity_and_alignment(spec_dict: dict, base_dir: Path, plan: Dataset
     if fdf is None:
         return
     guess = detect_sample_id(fdf)
-    if guess is None:
+    if guess is not None:
+        id_col, score, evidence, unique = guess.column, guess.score, list(guess.evidence), guess.unique
+    elif "filename_stem" in fdf.columns:  # multi-file X with no id column: one file per sample
+        id_col, score, unique = "filename_stem", 0.7, bool(fdf["filename_stem"].is_unique)
+        evidence = ["one file per sample -> identity = filename stem"]
+    else:
         return  # keep row-order indexing; alignment is positional (row-count checked at load)
 
-    plan.identity = Decision(guess.column, guess.score, guess.evidence, ambiguous=not guess.unique)
-    spec_dict["sample_index"] = {"by": "id", "key": guess.column}
-    if not guess.unique:
-        plan.warnings.append(f"sample id '{guess.column}' has duplicate values (not unique per row)")
-    x_ids = fdf[guess.column]
+    plan.identity = Decision(id_col, score, evidence, ambiguous=not unique)
+    spec_dict["sample_index"] = {"by": "id", "key": id_col}
+    _apply_repetition(spec_dict, plan, id_col, fdf[id_col])
+    x_ids = fdf[id_col]
 
     for s in sources:
         if s.get("role") in ("features", "mixed") and s.get("kind") != "lookup":
             sdf_feat = fdf if s.get("id") == feature_src.get("id") else _read_source_df(s, base_dir)
-            if sdf_feat is not None and guess.column in sdf_feat.columns:
-                s.setdefault("key", guess.column)
+            if sdf_feat is not None and id_col in sdf_feat.columns:
+                s.setdefault("key", id_col)
             continue
         sdf = _read_source_df(s, base_dir)
         if sdf is None:
             continue
         if s.get("role") == "targets":
-            if guess.column in sdf.columns:
-                s["key"] = guess.column
-                _key_join(s, guess.column, "1:1")
-                audit = coverage_audit(x_ids, sdf[guess.column], other_name=s.get("id", "targets"))
+            if id_col in sdf.columns:
+                s["key"] = id_col
+                _key_join(s, id_col, "1:1")
+                audit = coverage_audit(x_ids, sdf[id_col], other_name=s.get("id", "targets"))
                 audit["role"] = "targets"
                 plan.alignment.append(audit)
                 if audit["n_missing"]:
                     plan.warnings.append(f"{audit['n_missing']} sample(s) have NO target in '{s.get('id')}' (e.g. {audit['missing'][:3]})")
         elif s.get("role") == "metadata" or s.get("kind") == "lookup":
-            rel = classify_metadata_relation(fdf, sdf, guess.column)
+            rel = classify_metadata_relation(fdf, sdf, id_col)
             if rel is None:
                 continue
             card, key, ev = rel
@@ -326,6 +362,20 @@ def _infer_identity_and_alignment(spec_dict: dict, base_dir: Path, plan: Dataset
                 plan.alignment.append(audit)
                 if audit["n_missing"]:
                     plan.warnings.append(f"{audit['n_missing']} {key}(s) have NO metadata in '{s.get('id')}' (e.g. {audit['missing'][:3]})")
+
+
+def _apply_repetition(spec_dict: dict, plan: DatasetPlan, id_col: str, ids: pd.Series) -> None:
+    """Non-unique id -> repetition + aggregation (systematic), else a duplicate-id warning."""
+    prof = repetition_profile(ids)
+    if prof.is_repetition:
+        spec_dict["repetition"] = id_col
+        spec_dict.setdefault("sample_index", {})["repetition_id"] = id_col
+        spec_dict.setdefault("aggregate", {"by": id_col, "method": "median"})
+        if plan.identity is not None:
+            plan.identity.evidence.append(f"repeated measurements: {prof.n_rows} rows / {prof.n_unique} samples (avg {prof.avg_reps} reps)")
+        plan.recommendations.append(f"repeated measurements detected -> set repetition='{id_col}' + aggregate by it (method default 'median')")
+    elif prof.n_unique < prof.n_rows:
+        plan.warnings.append(f"sample id '{id_col}' has {prof.n_rows - prof.n_unique} duplicate value(s) (not unique per row, not a clean repetition pattern)")
 
 
 def _key_join(src: dict, key: str, how: str) -> None:
