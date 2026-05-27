@@ -158,6 +158,46 @@ def test_infer_combined_file_detects_sample_id_column(tmp_path):
     assert roles[wl[0]] == "features" and roles["protein"] == "targets"
 
 
+def test_infer_repetition_proposes_aggregation(tmp_path):
+    """A systematically non-unique sample id -> repeated measurements -> repetition + aggregate."""
+    wl = [str(1000 + i * 5) for i in range(8)]
+    rng = np.random.default_rng(3)
+    ids = [f"s{i}" for i in range(4) for _ in range(3)]  # 4 samples x 3 reps = 12 rows
+    df = pd.DataFrame(rng.random((12, 8)), columns=wl)
+    df.insert(0, "sample_id", ids)
+    df["protein"] = rng.random(12) * 50
+    _csv(tmp_path / "reps.csv", df)
+    plan = nio.infer(tmp_path / "reps.csv")
+    rspec = plan.resolved_spec
+    assert rspec.repetition == "sample_id"
+    assert rspec.aggregate is not None and rspec.aggregate.by == "sample_id" and rspec.aggregate.method.value == "median"
+    assert any("repeated" in r for r in plan.recommendations)
+
+    # classification target -> aggregate by vote
+    df["protein"] = [0, 1, 2] * 4
+    _csv(tmp_path / "reps_cls.csv", df)
+    plan2 = nio.infer(tmp_path / "reps_cls.csv")
+    assert plan2.resolved_spec.aggregate.method.value == "vote"
+
+
+def test_infer_multifile_filename_stem_identity(tmp_path):
+    """Multi-file X with no id column (one file per sample) -> identity = filename_stem + coverage audit."""
+    from nirs4all_io.infer.engine import _infer_identity_and_alignment
+    from nirs4all_io.infer.plan import DatasetPlan
+
+    wl = [str(1000 + i * 5) for i in range(6)]
+    for s in ("a", "b", "c"):
+        _csv(tmp_path / f"{s}.csv", pd.DataFrame(np.random.default_rng().random((1, 6)), columns=wl))
+    _csv(tmp_path / "ref.csv", pd.DataFrame({"filename_stem": ["a", "b", "c"], "y": [1.0, 2.0, 3.0]}))
+    plan = DatasetPlan()
+    spec = {"sources": [{"id": "spectra", "role": "features", "input": ["a.csv", "b.csv", "c.csv"], "merge": "concat_samples"}, {"id": "ref", "role": "targets", "input": "ref.csv"}]}
+    _infer_identity_and_alignment(spec, tmp_path, plan)
+    assert plan.identity is not None and plan.identity.value == "filename_stem"
+    assert spec["sample_index"] == {"by": "id", "key": "filename_stem"}
+    tgt = next(a for a in plan.alignment if a["role"] == "targets")
+    assert tgt["n_samples"] == 3 and tgt["n_missing"] == 0
+
+
 def test_infer_no_false_sample_id(tmp_path):
     # pure wavelengths + a float target -> no id column -> row indexing (identity stays None)
     wl = [str(1000 + i * 5) for i in range(8)]
