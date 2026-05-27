@@ -157,7 +157,11 @@ def _infer_signal_and_task(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -
     except Exception:  # noqa: BLE001 - inference is best-effort
         return
     df = table.df
-    feature_cols = [str(c) for c in df.columns if _WL_RE.match(str(c)) or pd.api.types.is_numeric_dtype(df[c])]
+    # use ONLY the columns marked 'features' (declared roles); a contaminating
+    # target/metadata column would wreck signal detection. Fall back to numeric.
+    feature_cols = _resolve_role_columns(feature_src, df, "features")
+    if not feature_cols:
+        feature_cols = [str(c) for c in df.columns if _WL_RE.match(str(c)) or pd.api.types.is_numeric_dtype(df[c])]
     if feature_cols:
         x = coerce_numeric(df[feature_cols])
         wl = None
@@ -182,3 +186,24 @@ def _params_from(src: dict):
     from ..spec.dataset_spec import LoadingParams
 
     return LoadingParams.from_dict(src.get("params"))
+
+
+def _resolve_role_columns(src: dict, df: pd.DataFrame, role: str) -> list[str]:
+    """Resolve the declared column selectors of a given role to concrete column names."""
+    cols_spec = src.get("columns")
+    if not cols_spec:
+        return []
+    from ..materialize.loaders import infer_dtypes
+    from ..spec.selectors import parse_selector
+
+    headers = [str(c) for c in df.columns]
+    dtypes = infer_dtypes(df)
+    entries = cols_spec if isinstance(cols_spec, list) else [{"role": r, "select": s} for r, s in cols_spec.items()]
+    out: list[str] = []
+    for e in entries:
+        if e.get("role") == role:
+            try:
+                out.extend(headers[i] for i in parse_selector(e["select"]).resolve(headers, dtypes, set()))
+            except Exception:  # noqa: BLE001 - best-effort during inference
+                continue
+    return out
