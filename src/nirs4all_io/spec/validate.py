@@ -89,9 +89,10 @@ def _validate_source(src: SourceSpec, id_set: set[str], errors: list[str]) -> No
         left = j.left or src.id
         if left not in id_set:
             errors.append(f"{where}: join.left '{left}' is not a known source id")
-        if j.cardinality == Cardinality.MANY_TO_ONE and (j.left_on is None or j.right_on is None) and src.key is None:
-            # m:1 needs join keys (or a usable per-source key); row-order m:1 is undefined
-            errors.append(f"{where}: m:1 join needs left_on/right_on (or a source 'key')")
+        if j.cardinality in (Cardinality.MANY_TO_ONE, Cardinality.ONE_TO_MANY) and (j.left_on is None or j.right_on is None):
+            # broadcast joins need explicit join keys; the per-source 'key' is
+            # sample-axis alignment, NOT a relational join key (kept distinct).
+            errors.append(f"{where}: {j.cardinality.value} join needs explicit left_on/right_on (the shorthand 'on' sets both; a per-source 'key' is alignment, not a join key)")
 
 
 def _all_same_role(src: SourceSpec) -> bool:
