@@ -24,7 +24,7 @@ from ..spec import DatasetSpec
 from ..spec.enums import Role
 from .describe import FileDescription, describe
 from .detectors import detect_signal_type, detect_task_type
-from .identity import classify_metadata_relation, coverage_audit, detect_sample_id, repetition_profile
+from .identity import classify_metadata_relation, coverage_audit, detect_replicate_grouping, detect_sample_id, repetition_profile
 from .plan import DatasetPlan, Decision
 
 _WL_RE = re.compile(r"^\d+(\.\d+)?(nm|cm-1)?$", re.IGNORECASE)
@@ -317,18 +317,29 @@ def _infer_identity_and_alignment(spec_dict: dict, base_dir: Path, plan: Dataset
         return
     guess = detect_sample_id(fdf)
     if guess is not None:
-        id_col, score, evidence, unique = guess.column, guess.score, list(guess.evidence), guess.unique
-    elif "filename_stem" in fdf.columns:  # multi-file X with no id column: one file per sample
-        id_col, score, unique = "filename_stem", 0.7, bool(fdf["filename_stem"].is_unique)
-        evidence = ["one file per sample -> identity = filename stem"]
+        id_col, x_ids = guess.column, fdf[guess.column]
+        plan.identity = Decision(id_col, guess.score, list(guess.evidence), ambiguous=not guess.unique)
+        spec_dict["sample_index"] = {"by": "id", "key": id_col}
+        _apply_repetition(spec_dict, plan, id_col, fdf[id_col])
+    elif "filename_stem" in fdf.columns:  # multi-file X with no id column
+        stems = [str(v) for v in fdf["filename_stem"].tolist()]
+        grouping = detect_replicate_grouping(stems)
+        if grouping is not None:  # vendor replicates: mango_001_a/_b/_c -> sample mango_001
+            id_col = "sample_id"
+            plan.identity = Decision(id_col, 0.7, [*grouping.evidence, "derived from filename_stem"], ambiguous=False)
+            spec_dict["sample_index"] = {"by": "id", "key": id_col, "repetition_id": "filename_stem", "derive": {"from": "filename_stem", "strip_suffix": grouping.pattern}}
+            spec_dict["repetition"] = id_col
+            spec_dict.setdefault("aggregate", {"by": id_col, "method": "median"})
+            plan.recommendations.append(f"replicate files detected -> group into '{id_col}' (strip /{grouping.pattern}/) + repetition + aggregate")
+            x_ids = pd.Series(grouping.sample_ids, name=id_col)
+        else:  # one file per sample
+            id_col, x_ids = "filename_stem", fdf["filename_stem"]
+            plan.identity = Decision(id_col, 0.7, ["one file per sample -> identity = filename stem"], ambiguous=not bool(fdf["filename_stem"].is_unique))
+            spec_dict["sample_index"] = {"by": "id", "key": id_col}
     else:
         return  # keep row-order indexing; alignment is positional (row-count checked at load)
 
-    plan.identity = Decision(id_col, score, evidence, ambiguous=not unique)
-    spec_dict["sample_index"] = {"by": "id", "key": id_col}
-    _apply_repetition(spec_dict, plan, id_col, fdf[id_col])
-    x_ids = fdf[id_col]
-
+    feature_src.setdefault("key", id_col)
     for s in sources:
         if s.get("role") in ("features", "mixed") and s.get("kind") != "lookup":
             sdf_feat = fdf if s.get("id") == feature_src.get("id") else _read_source_df(s, base_dir)

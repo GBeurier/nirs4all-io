@@ -113,6 +113,27 @@ name (`sample_id`/`id`/`name`/`code`/`*_id`/…) + uniqueness + dtype, sets
 duplicate ids, and whether a metadata source is **per-sample (1:1)** or a **shared
 dimension table (m:1)**. See `plan.identity` and `plan.alignment`.
 
+**Repeated measurements** ✅: a *systematically* non-unique sample id (avg ≥ 1.5
+rows/sample) is inferred as repetitions → `repetition: <id>` + `aggregate`
+(`median`, or `vote` for classification). For **vendor corpora** (one file per
+spectrum, no id column), the identity falls back to `filename_stem`; and replicate
+files of the same sample (`mango_001_a/_b/_c → mango_001`) are detected and grouped
+via a **derive** rule:
+
+```yaml
+sample_index:
+  by: id
+  key: sample_id                 # the grouped sample id (materialized at load)
+  repetition_id: filename_stem   # the per-file replicate
+  derive: { from: filename_stem, strip_suffix: '[_\-. ][a-z]$' }   # mango_001_a -> mango_001
+repetition: sample_id
+aggregate: { by: sample_id, method: median }
+```
+
+The loader **materializes** `key` by stripping `strip_suffix` from `from`
+(recognized replicate suffixes: `_a/_b`, `_rep\d+`, `_r\d+`, `_scan\d+`, `_dup`,
+`(\d)`; a bare trailing number is treated as a sample number, not a replicate).
+
 ---
 
 ## 4. Sources — `sources[]`

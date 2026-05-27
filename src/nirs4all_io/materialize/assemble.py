@@ -172,7 +172,15 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
     if origins is not None and "filename_stem" not in df.columns:
         df = df.copy()
         df["filename_stem"] = origins
+    # derive the grouped sample id (e.g. mango_001_a -> mango_001) for vendor replicates
+    si = spec.sample_index
+    if si.derive_from and si.derive_from in df.columns and isinstance(si.key, str) and si.key not in df.columns:
+        df = df.copy()
+        derived = df[si.derive_from].astype(str)
+        df[si.key] = derived.str.replace(si.derive_pattern, "", regex=True) if si.derive_pattern else derived
     roles = _split_roles(source, df, infer_dtypes(df))
+    if isinstance(si.key, str):
+        roles.pop(si.key, None)  # the sample identity column is never a feature/target/metadata role
     key = source.key if isinstance(source.key, list) else [source.key] if source.key else None
     partition = source.partition.value if source.partition else None
     return SourceTable(

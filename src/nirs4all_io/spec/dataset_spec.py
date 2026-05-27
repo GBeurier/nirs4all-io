@@ -323,21 +323,28 @@ class SampleIndex:
     observation_id: str | None = None
     repetition_id: str | None = None
     group_id: str | None = None
+    # derive `key` by stripping a replicate-suffix regex from another column
+    # (e.g. from "filename_stem": mango_001_a -> mango_001) -- vendor replicates.
+    derive_from: str | None = None
+    derive_pattern: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict | None) -> SampleIndex:
         if not d:
             return cls()
+        derive = d.get("derive") or {}
         return cls(
             by=SampleIndexBy.coerce(d.get("by", "row"), field="sample_index.by"),
             key=d.get("key"),
             observation_id=d.get("observation_id"),
             repetition_id=d.get("repetition_id"),
             group_id=d.get("group_id"),
+            derive_from=derive.get("from"),
+            derive_pattern=derive.get("strip_suffix"),
         )
 
     def to_dict(self) -> dict:
-        return _drop_none(
+        out = _drop_none(
             {
                 "by": self.by.value,
                 "key": self.key,
@@ -346,6 +353,9 @@ class SampleIndex:
                 "group_id": self.group_id,
             }
         )
+        if self.derive_from:
+            out["derive"] = {"from": self.derive_from, "strip_suffix": self.derive_pattern}
+        return out
 
 
 @dataclass

@@ -30,7 +30,14 @@ DATASET_SPEC_SCHEMA: dict[str, Any] = {
         "conventions": {"type": "array", "items": {"type": "string"}},
         "sample_index": {
             "type": "object",
-            "properties": {"by": {"enum": ["row", "id"]}, "key": {"oneOf": [{"type": "string"}, {"type": "array"}]}, "observation_id": {"type": "string"}, "repetition_id": {"type": "string"}, "group_id": {"type": "string"}},
+            "properties": {
+                "by": {"enum": ["row", "id"]},
+                "key": {"oneOf": [{"type": "string"}, {"type": "array"}]},
+                "observation_id": {"type": "string"},
+                "repetition_id": {"type": "string"},
+                "group_id": {"type": "string"},
+                "derive": {"type": "object", "properties": {"from": {"type": "string"}, "strip_suffix": {"type": "string"}}},
+            },
         },
         "sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/source"}},
         "partitions": {"$ref": "#/$defs/partitions"},

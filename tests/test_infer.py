@@ -198,6 +198,53 @@ def test_infer_multifile_filename_stem_identity(tmp_path):
     assert tgt["n_samples"] == 3 and tgt["n_missing"] == 0
 
 
+def test_detect_replicate_grouping_unit():
+    from nirs4all_io.infer.identity import detect_replicate_grouping
+
+    g = detect_replicate_grouping(["mango_001_a", "mango_001_b", "mango_001_c", "mango_002_a", "mango_002_b"])
+    assert g is not None and g.n_samples == 2 and g.avg_reps == 2.5
+    assert detect_replicate_grouping(["s1", "s2", "s3"]) is None  # bare numbers are sample ids, not reps
+    assert detect_replicate_grouping(["a", "b", "c"]) is None  # no separator -> not replicate suffixes
+
+
+def test_infer_replicate_files_grouped_into_sample_id(tmp_path):
+    from nirs4all_io.infer.engine import _infer_identity_and_alignment
+    from nirs4all_io.infer.plan import DatasetPlan
+
+    wl = [str(1000 + i * 5) for i in range(6)]
+    files = ["mango_001_a", "mango_001_b", "mango_001_c", "mango_002_a", "mango_002_b"]
+    for f in files:
+        _csv(tmp_path / f"{f}.csv", pd.DataFrame(np.random.default_rng().random((1, 6)), columns=wl))
+    plan = DatasetPlan()
+    spec = {"sources": [{"id": "spectra", "role": "features", "input": [str(tmp_path / f"{f}.csv") for f in files], "merge": "concat_samples"}]}
+    _infer_identity_and_alignment(spec, tmp_path, plan)
+    assert plan.identity.value == "sample_id"
+    assert spec["sample_index"]["derive"]["from"] == "filename_stem"
+    assert spec["repetition"] == "sample_id" and spec["aggregate"]["by"] == "sample_id"
+
+
+def test_load_derives_grouped_sample_id_and_broadcasts(tmp_path):
+    """End-to-end: a derive rule materializes the grouped sample_id; a per-sample target broadcasts to reps."""
+    wl = [str(1000 + i * 5) for i in range(6)]
+    files = ["m001_a", "m001_b", "m001_c", "m002_a", "m002_b"]
+    for f in files:
+        _csv(tmp_path / f"{f}.csv", pd.DataFrame(np.random.default_rng().random((1, 6)), columns=wl))
+    _csv(tmp_path / "ref.csv", pd.DataFrame({"sample_id": ["m001", "m002"], "protein": [12.0, 20.0]}))
+    spec = {
+        "sample_index": {"by": "id", "key": "sample_id", "repetition_id": "filename_stem", "derive": {"from": "filename_stem", "strip_suffix": r"[_\-. ][a-z]$"}},
+        "repetition": "sample_id",
+        "sources": [
+            {"id": "spectra", "role": "features", "input": [str(tmp_path / f"{f}.csv") for f in files], "merge": "concat_samples", "key": "sample_id"},
+            {"id": "ref", "kind": "lookup", "input": "ref.csv", "columns": [{"role": "targets", "select": ["protein"]}], "join": {"to": "spectra", "on": "sample_id", "how": "m:1", "coverage": "complete"}},
+        ],
+    }
+    asm = nio.load(spec, base_dir=tmp_path, target="assembled")
+    block = asm.blocks["train"]
+    assert block.X[0].shape[0] == 5  # 5 replicate rows
+    assert sorted(block.y.ravel().tolist()) == [12.0, 12.0, 12.0, 20.0, 20.0]  # broadcast per sample
+    assert asm.repetition == "sample_id"
+
+
 def test_infer_no_false_sample_id(tmp_path):
     # pure wavelengths + a float target -> no id column -> row indexing (identity stays None)
     wl = [str(1000 + i * 5) for i in range(8)]

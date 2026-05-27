@@ -36,6 +36,58 @@ class RepetitionProfile:
     is_repetition: bool  # systematic repeats (vs sporadic duplicates)
 
 
+# Replicate-suffix patterns on a filename stem (mango_001_a / sample-rep2 / scan_3 / (2)).
+# A bare trailing number (_1, _2) is deliberately EXCLUDED: it is usually the sample
+# number, not a replicate index, and would over-group distinct samples.
+_REPLICATE_SUFFIX_PATTERNS = [
+    r"[_\-. ]rep(?:licate)?[_\-. ]?\d+$",
+    r"[_\-. ]r\d+$",
+    r"[_\-. ]scan[_\-. ]?\d+$",
+    r"[_\-. ]dup(?:licate)?\d*$",
+    r"\s*\(\d+\)$",
+    r"[_\-. ][a-z]$",  # single trailing letter: mango_001_a / _b / _c
+]
+
+
+@dataclass
+class ReplicateGrouping:
+    pattern: str
+    sample_ids: list[str]  # the grouped sample id per file (suffix stripped)
+    n_files: int
+    n_samples: int
+    avg_reps: float
+    evidence: list[str] = field(default_factory=list)
+
+
+def detect_replicate_grouping(stems: list[str]) -> ReplicateGrouping | None:
+    """Detect replicate files of the same sample (mango_001_a/_b/_c -> mango_001).
+
+    Tries replicate-suffix patterns; accepts one only if a majority of stems carry
+    it AND stripping it merges files into fewer samples with avg >= 1.5 reps.
+    """
+    n = len(stems)
+    if n < 2:
+        return None
+    best: tuple[float, ReplicateGrouping] | None = None
+    for pat in _REPLICATE_SUFFIX_PATTERNS:
+        rx = re.compile(pat, re.IGNORECASE)
+        stripped = [rx.sub("", s) for s in stems]
+        matched = sum(1 for s, st in zip(stripped, stems, strict=True) if s != st)
+        if matched < n * 0.5:  # most files must carry the suffix
+            continue
+        n_samples = len(set(stripped))
+        if n_samples >= n:  # nothing merged
+            continue
+        avg = n / n_samples
+        if avg < 1.5:  # not a real repetition pattern
+            continue
+        score = matched / n
+        if best is None or score > best[0]:
+            ev = [f"replicate suffix /{pat}/ on {matched}/{n} files -> {n_samples} sample(s), avg {round(avg, 2)} reps"]
+            best = (score, ReplicateGrouping(pat, stripped, n, n_samples, round(avg, 2), ev))
+    return best[1] if best else None
+
+
 def repetition_profile(ids: pd.Series) -> RepetitionProfile:
     """Decide whether a non-unique id column is *repeated measurements* (avg >=1.5
     rows/id) or just sporadic duplicate ids (a data-quality issue)."""
