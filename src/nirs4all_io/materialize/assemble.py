@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ..conventions.engine import get_stem
 from ..spec.dataset_spec import AggregateSpec, DatasetSpec, SourceSpec
 from ..spec.enums import Cardinality, Coverage, MergeMode, PartitionBy, Role, SourceKind, SpecError
 from ..spec.selectors import RestSelector
@@ -102,7 +103,9 @@ def _load_source_frame(source: SourceSpec, spec: DatasetSpec, base_dir: Path, au
     if len(tables) == 1:
         return tables[0].df, header_unit, signal, None
     frames = [t.df for t in tables]
-    names = [Path(p).stem for p in paths]
+    # use the convention engine's compound-extension-aware stem so `filename_stem`
+    # is consistent (s1.csv.gz -> "s1", matching a reference keyed by stem), not "s1.csv"
+    names = [get_stem(p.name) for p in paths]
     if source.merge is MergeMode.CONCAT_SAMPLES:
         df, origins, audit = concat_samples(frames, names)
     elif source.merge is MergeMode.CONCAT_FEATURES:
