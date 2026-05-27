@@ -24,6 +24,7 @@ from ..spec import DatasetSpec
 from ..spec.enums import Role
 from .describe import FileDescription, describe
 from .detectors import detect_signal_type, detect_task_type
+from .identity import classify_metadata_relation, coverage_audit, detect_sample_id
 from .plan import DatasetPlan, Decision
 
 _WL_RE = re.compile(r"^\d+(\.\d+)?(nm|cm-1)?$", re.IGNORECASE)
@@ -66,6 +67,7 @@ def infer(inp: object, *, conventions: list[str] | None = None, hints: dict | No
         spec_dict = {"name": "dataset", "sources": []}
 
     _enrich_params(spec_dict, base_dir, plan)
+    _infer_identity_and_alignment(spec_dict, base_dir, plan)  # detect sample id + audit y/metadata coverage
     _infer_signal_and_task(spec_dict, base_dir, plan)
     _absolutize_inputs(spec_dict, base_dir, iset)  # so load(plan.accept()) works anywhere
 
@@ -120,13 +122,26 @@ def _infer_single_file(path: str, plan: DatasetPlan) -> dict:
     table = read_table(path, LoadingParams(delimiter=desc.delimiter, has_header=True))
     desc.column_names = list(table.df.columns)
     guesses = infer_column_roles(desc, table.df)
+    # detect a sample-id column; it is the identity key, not a feature/target/metadata role
+    id_guess = detect_sample_id(table.df)
+    id_col = id_guess.column if id_guess else None
+    if id_guess:
+        plan.identity = Decision(id_guess.column, id_guess.score, id_guess.evidence, ambiguous=not id_guess.unique)
+        for g in guesses:
+            if g["col"] == id_col:
+                g["role"], g["evidence"] = "id", ["detected sample-id column"]
     plan.columns = [{"ref": Path(path).name, "column_roles": guesses}]
     columns: list[dict] = []
     for role in ("features", "targets", "metadata"):
-        cols = [g["col"] for g in guesses if g["role"] == role]
+        cols = [g["col"] for g in guesses if g["role"] == role and g["col"] != id_col]
         if cols:
             columns.append({"role": role, "select": cols})
-    return {"name": Path(path).stem, "sources": [{"id": "data", "role": "mixed", "input": Path(path).name, "columns": columns, "params": {"delimiter": desc.delimiter, "has_header": True}}]}
+    source: dict = {"id": "data", "role": "mixed", "input": Path(path).name, "columns": columns, "params": {"delimiter": desc.delimiter, "has_header": True}}
+    spec: dict = {"name": Path(path).stem, "sources": [source]}
+    if id_col:
+        source["key"] = id_col
+        spec["sample_index"] = {"by": "id", "key": id_col}
+    return spec
 
 
 def _enrich_params(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -> None:
@@ -240,6 +255,85 @@ def _params_from(src: dict):
     from ..spec.dataset_spec import LoadingParams
 
     return LoadingParams.from_dict(src.get("params"))
+
+
+def _read_source_df(src: dict, base_dir: Path) -> pd.DataFrame | None:
+    """Read a source's first input file (best-effort) for id detection / coverage."""
+    inp = src.get("input")
+    first = inp[0] if isinstance(inp, list) else inp
+    if not isinstance(first, str):
+        return None
+    path = Path(first) if Path(first).is_absolute() else base_dir / first
+    if not path.exists():
+        return None
+    try:
+        return read_table(path, _params_from(src)).df
+    except Exception:  # noqa: BLE001 - best-effort during inference
+        return None
+
+
+def _infer_identity_and_alignment(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -> None:
+    """Detect a sample-id column; key the sources by it; audit y/metadata coverage."""
+    if plan.identity is not None:  # already handled (single combined file)
+        return
+    sources = spec_dict.get("sources", [])
+    feature_src = next((s for s in sources if s.get("role") in ("features", "mixed") and s.get("kind") != "lookup"), None)
+    if feature_src is None:
+        return
+    fdf = _read_source_df(feature_src, base_dir)
+    if fdf is None:
+        return
+    guess = detect_sample_id(fdf)
+    if guess is None:
+        return  # keep row-order indexing; alignment is positional (row-count checked at load)
+
+    plan.identity = Decision(guess.column, guess.score, guess.evidence, ambiguous=not guess.unique)
+    spec_dict["sample_index"] = {"by": "id", "key": guess.column}
+    if not guess.unique:
+        plan.warnings.append(f"sample id '{guess.column}' has duplicate values (not unique per row)")
+    x_ids = fdf[guess.column]
+
+    for s in sources:
+        if s.get("role") in ("features", "mixed") and s.get("kind") != "lookup":
+            sdf_feat = fdf if s.get("id") == feature_src.get("id") else _read_source_df(s, base_dir)
+            if sdf_feat is not None and guess.column in sdf_feat.columns:
+                s.setdefault("key", guess.column)
+            continue
+        sdf = _read_source_df(s, base_dir)
+        if sdf is None:
+            continue
+        if s.get("role") == "targets":
+            if guess.column in sdf.columns:
+                s["key"] = guess.column
+                _key_join(s, guess.column, "1:1")
+                audit = coverage_audit(x_ids, sdf[guess.column], other_name=s.get("id", "targets"))
+                audit["role"] = "targets"
+                plan.alignment.append(audit)
+                if audit["n_missing"]:
+                    plan.warnings.append(f"{audit['n_missing']} sample(s) have NO target in '{s.get('id')}' (e.g. {audit['missing'][:3]})")
+        elif s.get("role") == "metadata" or s.get("kind") == "lookup":
+            rel = classify_metadata_relation(fdf, sdf, guess.column)
+            if rel is None:
+                continue
+            card, key, ev = rel
+            s["key"] = key
+            if card == "m:1":
+                s["kind"] = "lookup"
+            _key_join(s, key, card)
+            if key in fdf.columns:
+                audit = coverage_audit(fdf[key], sdf[key], other_name=s.get("id", "metadata"))
+                audit.update({"role": "metadata", "relation": card, "evidence": ev})
+                plan.alignment.append(audit)
+                if audit["n_missing"]:
+                    plan.warnings.append(f"{audit['n_missing']} {key}(s) have NO metadata in '{s.get('id')}' (e.g. {audit['missing'][:3]})")
+
+
+def _key_join(src: dict, key: str, how: str) -> None:
+    join = src.get("join")
+    if isinstance(join, dict):
+        src["join"] = {**join, "on": key, "how": how}
+    elif join is None and src.get("role") != "features":
+        pass  # leave row-order if no join was declared
 
 
 def _resolve_role_columns(src: dict, df: pd.DataFrame, role: str) -> list[str]:

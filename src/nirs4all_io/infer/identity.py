@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+"""Sample-identity inference + cross-file alignment audit (Epic 3.3, R-IDX).
+
+Detects a **sample-id column** (so the loader can align by id, not row order),
+classifies a metadata source as **per-sample (1:1)** vs **shared/dimension (m:1)**,
+and audits coverage: does every sample have a target and metadata? Duplicate ids?
+These feed the inference engine's resolved spec (keys + joins) and plan warnings.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import Counter
+from dataclasses import dataclass, field
+
+import pandas as pd
+
+# id-like column names (case-insensitive): sample_id, id, name, code, ref, key, *_id, ...
+_ID_NAME_RE = re.compile(r"^(sample[_ ]?id|sampleid|sample|id|name|code|ref(erence)?|key|index|spectrum[_ ]?id|scan[_ ]?id|.*_id|id_.*)$", re.IGNORECASE)
+_WL_RE = re.compile(r"^\d+(\.\d+)?(nm|cm-1)?$", re.IGNORECASE)
+
+
+@dataclass
+class SampleIdGuess:
+    column: str
+    score: float
+    unique: bool
+    evidence: list[str] = field(default_factory=list)
+
+
+def detect_sample_id(df: pd.DataFrame) -> SampleIdGuess | None:
+    """Pick the most likely sample-id column, or None. Requires score >= 0.5."""
+    n = len(df)
+    if n == 0:
+        return None
+    best: SampleIdGuess | None = None
+    for col in df.columns:
+        name = str(col)
+        if _WL_RE.match(name):  # a wavelength column is never the id
+            continue
+        s = df[col]
+        nunique = int(s.nunique(dropna=False))
+        unique = nunique == n
+        score, ev = 0.0, []
+        if _ID_NAME_RE.match(name):
+            score += 0.5
+            ev.append(f"id-like name '{name}'")
+        if unique:
+            score += 0.35
+            ev.append("unique per row")
+        elif nunique >= 0.9 * n:
+            score += 0.15
+            ev.append("near-unique values")
+        if pd.api.types.is_float_dtype(s):
+            score -= 0.25  # continuous float is unlikely to be an identifier
+        elif not pd.api.types.is_numeric_dtype(s):
+            score += 0.1
+            ev.append("string identifier")
+        if score > 0 and (best is None or score > best.score):
+            best = SampleIdGuess(name, min(score, 1.0), unique, ev)
+    return best if best and best.score >= 0.5 else None
+
+
+def coverage_audit(x_ids: pd.Series, other_ids: pd.Series, *, other_name: str) -> dict:
+    """Does every sample id have a match in `other_ids`? Report missing/extra/duplicates."""
+    x_list = [str(v) for v in x_ids.tolist()]
+    o_set = {str(v) for v in other_ids.tolist()}
+    x_set = set(x_list)
+    missing = sorted(x_set - o_set)
+    extra = sorted(o_set - x_set)
+    dup_x = sorted(k for k, c in Counter(x_list).items() if c > 1)
+    return {
+        "against": other_name,
+        "n_samples": len(x_set),
+        "n_missing": len(missing),
+        "missing": missing[:20],
+        "n_extra": len(extra),
+        "extra": extra[:20],
+        "duplicate_sample_ids": dup_x[:20],
+    }
+
+
+def classify_metadata_relation(x_df: pd.DataFrame, meta_df: pd.DataFrame, x_id: str) -> tuple[str, str, list[str]] | None:
+    """Classify a metadata source vs the samples: ('1:1'|'m:1', key, evidence).
+
+    1:1 = per-sample metadata keyed by the sample id; m:1 = a shared dimension
+    table keyed by a grouping column present in X (fewer rows, broadcast).
+    """
+    # per-sample: metadata carries the sample id, one row per sample
+    if x_id in meta_df.columns and meta_df[x_id].is_unique and len(meta_df) >= len(x_df) * 0.5:
+        return "1:1", x_id, [f"keyed by sample id '{x_id}' (one row per sample)"]
+    # shared/dimension: a column present in both, unique in metadata, fewer rows than samples
+    for col in meta_df.columns:
+        if col == x_id or col not in x_df.columns:
+            continue
+        if meta_df[col].is_unique and len(meta_df) < len(x_df):
+            return "m:1", col, [f"shared dimension table keyed by '{col}' ({len(meta_df)} rows broadcast to {len(x_df)} samples)"]
+    return None

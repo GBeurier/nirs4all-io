@@ -106,6 +106,13 @@ sample_index:
 | `row` | ✅ | sample identity = row position (default) |
 | `id` | ✅ | sample identity = a key column; requires `key` |
 
+**`infer()` detects the sample-id automatically** ✅: it scores each column by id-like
+name (`sample_id`/`id`/`name`/`code`/`*_id`/…) + uniqueness + dtype, sets
+`sample_index: {by: id, key: <col>}`, keys the cross-file joins by it, and runs a
+**coverage audit** — reporting which samples have **no target** or **no metadata**,
+duplicate ids, and whether a metadata source is **per-sample (1:1)** or a **shared
+dimension table (m:1)**. See `plan.identity` and `plan.alignment`.
+
 ---
 
 ## 4. Sources — `sources[]`
@@ -570,6 +577,7 @@ sources: [{ id: a, role: mixed, input: wide.csv, strict_columns: true,
 | Area | ✅ implemented | 📋 planned / 🟡 limited |
 |---|---|---|
 | Inputs | dir, file, list, glob, dict, JSON/YAML, spec, plan, in-memory | RecordSet/SpectroDataset passthrough 🟡 |
+| Inference | structure, file roles+partitions (scored), column roles, axis, signal, task, params, **sample-id detection + per-sample y/metadata coverage audit + 1:1-vs-m:1 metadata** | scores uncalibrated (C5); abstention only on signal_type |
 | Selectors | positional, slice, names, name_range, regex, dtype, rest | `auto` 🟡 (via `infer` only) |
 | Merge | concat_samples, concat_features, by_key, none | — |
 | Joins | 1:1, m:1, 1:m × complete/warn/drop/error; composite + virtual keys | — |
