@@ -66,6 +66,17 @@
         },
         "group_id": {
           "type": "string"
+        },
+        "derive": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "strip_suffix": {
+              "type": "string"
+            }
+          }
         }
       }
     },
