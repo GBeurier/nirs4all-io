@@ -8,28 +8,26 @@
 
 ## Phase 2 — Rust core + `dag-ml-data` target
 
-Status: **gated** — see [`PHASE2_GATE.md`](PHASE2_GATE.md). The Python MVP's
-`AssembledDataset` IR is already target-agnostic, so a `to_dag_ml_data(assembled)`
-adapter slots in beside `to_spectrodataset(assembled)` the day the gate flips
-green.
+Status: **unblocked** (both gate blockers resolved 2026-05-28). The **actionable,
+multi-agent plan** is in [`RUST_REWRITE_ROADMAP.md`](RUST_REWRITE_ROADMAP.md); gate status
+in [`PHASE2_GATE.md`](PHASE2_GATE.md). The Python MVP's `AssembledDataset` IR is already
+target-agnostic, so a `to_dag_ml_data(assembled)` adapter slots in beside
+`to_spectrodataset(assembled)`.
 
-What we are waiting on (owner: `dag-ml-data` maintainers):
+Former blockers — both **resolved** by the `dag-ml-data` owners (2026-05-28):
 
-1. **`AxisKind::Wavenumber`** in `dag-ml-data-core/src/model.rs` — one-line
-   enum addition (or formally ratify the interim `Feature` + `unit:"cm-1"` +
-   `coordinates` convention in a dag-ml-data doc).
-2. **Connector-ownership ADR** — record that `nirs4all-io` owns the
-   `SpectroDataset → CoordinatorDataPlanEnvelope` bridge, and descope
-   `dag-ml-data` ROADMAP Phase 4 to "accept io-emitted artifacts".
+1. ✅ **`AxisKind::Wavenumber`** added in `dag-ml-data-core/src/model.rs` (commit `5063fb0`).
+2. ✅ **Connector-ownership ADR** (`ADR-0001`, Accepted) — `nirs4all-io` owns the
+   `SpectroDataset → CoordinatorDataPlanEnvelope` bridge; `dag-ml-data` ROADMAP Phase 4 descoped.
 
 What we will then do here (already designed, see Appendix H.2 of the redesign
 doc):
 
 - **`to_dag_ml_data(assembled)`** adapter — `DatasetSpec` → `DatasetSchema` +
-  `SampleRelationTable` + the dag-ml campaign `FoldSet` / `DataBinding` /
-  `ExternalDataPlanEnvelope`. Consumes the `observation_id` / `group_id`
-  fields from `sample_index` (already parsed and carried in the IR, see
-  [`DATASET_CONFIGURATIONS.md §3`](DATASET_CONFIGURATIONS.md)).
+  `DataPlan` + `SampleRelationTable`, assembled into a `CoordinatorDataPlanEnvelope`.
+  **io does not emit `FoldSet` / `DataBinding`** (those stay in `dag-ml`). Consumes the
+  `observation_id` / `group_id` fields from `sample_index` (already parsed and carried in
+  the IR, see [`DATASET_CONFIGURATIONS.md §3`](DATASET_CONFIGURATIONS.md)).
 - **Rust port of the Python core** (`describe` / spec parse / resolver /
   inference) so the same logic powers both Python and Rust callers; the
   Python lib becomes a thin facade over the Rust core (or stays Python --
