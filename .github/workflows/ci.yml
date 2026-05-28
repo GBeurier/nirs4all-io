@@ -33,7 +33,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install
-        run: pip install -e ".[dev]"
+        # The `dev` extra pulls the nirs4all / nirs4all-formats oracles, which
+        # are not on PyPI; a clean runner only has this repo. Install the
+        # available runtime + data extras + tooling, and skip the parity oracle
+        # (the only `parity`/`formats`-marked tests; `importorskip`-guarded too).
+        run: pip install -e ".[parquet,excel]" scipy pytest ruff mypy
       - name: Ruff
         run: ruff check .
       - name: Mypy

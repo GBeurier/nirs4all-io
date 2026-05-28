@@ -16,7 +16,11 @@ Canonical form:
   layout to ``serde_json::to_string_pretty``.
 - **Line endings:** ``\\n`` with a single trailing ``\\n``.
 - **Floats:** finite only (``allow_nan=False`` raises on NaN/Inf). The contract
-  domain is finite decimals in normal range (scores, ratios).
+  domain is finite decimals in **normal range** — scores rounded to 3 decimals
+  and wavelengths (``|x|`` in roughly ``[1e-3, 25000]``). Values requiring
+  exponent notation (``|x| >= 1e16`` or ``0 < |x| < 1e-4``) are the only known
+  point where Python ``repr`` and Rust Ryū can disagree; the IR never emits
+  them. The ``contract_domain_floats`` parity case pins this range.
 """
 
 from __future__ import annotations

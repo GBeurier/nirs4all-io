@@ -29,10 +29,13 @@ readme = "README.md"
 # Internal crates (path deps so members reference them via `.workspace = true`).
 nirs4all-io-core = { path = "crates/nirs4all-io-core" }
 nirs4all-io = { path = "crates/nirs4all-io" }
-# Third-party. serde_json MUST keep its default (BTreeMap-backed) object map so
-# canonical JSON gets sorted keys for free — do NOT enable `preserve_order`.
+# Third-party. serde_json enables `preserve_order` so that *input* object order
+# mirrors Python dict insertion order (load-bearing for legacy-config
+# normalization, where input order can leak into output list order). Canonical
+# JSON therefore sorts object keys EXPLICITLY (see canonical_json.rs) rather than
+# relying on the map type.
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 thiserror = "2.0"
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

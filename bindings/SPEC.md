@@ -32,9 +32,11 @@ mirrored in `nirs4all_io/canonical_json.py`:
 - Finite numbers only (NaN/Inf rejected on the Python side, mapped to `null`
   by serde on the Rust side; the IR never emits non-finite numbers).
 
-The workspace MUST NOT enable serde_json's `preserve_order` feature (it would
-break sorted-key output). Parity is gated by `tests/test_canonical_json.py` and
-`crates/nirs4all-io-core/tests/canonical_parity.rs` against the same blessed
+The workspace enables serde_json's `preserve_order` so *input* object order
+mirrors Python dict insertion order (load-bearing for legacy-config
+normalization); `canonical_json` therefore sorts object keys EXPLICITLY rather
+than relying on the map type. Parity is gated by `tests/test_canonical_json.py`
+and `crates/nirs4all-io-core/tests/canonical_parity.rs` against the same blessed
 corpus.
 
 ## 3. Status and error model (C ABI)

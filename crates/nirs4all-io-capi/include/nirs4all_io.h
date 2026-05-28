@@ -42,5 +42,3 @@ char *n4io_abi_version(void);
 void n4io_string_free(char *ptr);
 
 #endif  /* NIRS4ALL_IO_H */
-
-

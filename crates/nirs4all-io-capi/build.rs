@@ -43,7 +43,12 @@ fn main() {
         Ok(bindings) => {
             std::fs::create_dir_all(output_path.parent().expect("include dir parent"))
                 .expect("create include directory");
-            bindings.write_to_file(&output_path);
+            // Normalize to exactly one trailing newline (cbindgen emits a blank
+            // line before EOF, which trips `git diff --check` whitespace lint).
+            let mut buf: Vec<u8> = Vec::new();
+            bindings.write(&mut buf);
+            let text = format!("{}\n", String::from_utf8_lossy(&buf).trim_end());
+            std::fs::write(&output_path, text).expect("write header");
         }
         Err(err) => {
             eprintln!("warning: cbindgen failed to generate header: {err}");
