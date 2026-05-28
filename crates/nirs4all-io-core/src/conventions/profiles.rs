@@ -136,14 +136,15 @@ impl Profile {
     }
 }
 
-// Built-in profiles, embedded from the Python package (single source).
-const BARE_TOML: &str = include_str!("../../../../src/nirs4all_io/conventions/builtin/bare.toml");
-const CLASSIC_TOML: &str =
-    include_str!("../../../../src/nirs4all_io/conventions/builtin/nirs4all-classic.toml");
-const TRAIN_TEST_TOML: &str =
-    include_str!("../../../../src/nirs4all_io/conventions/builtin/train-test.toml");
-const VENDOR_CORPUS_TOML: &str =
-    include_str!("../../../../src/nirs4all_io/conventions/builtin/vendor-corpus.toml");
+// Built-in profiles, embedded from a crate-local copy so a packaged crate
+// (cargo package / crates.io / vendored) still compiles. The copies are kept
+// byte-identical to the Python `src/nirs4all_io/conventions/builtin/` source by
+// `tests/test_convention_toml_sync.py`; they consolidate into a single
+// top-level `conventions/` anchor when the Python MVP is relegated (EPIC 12).
+const BARE_TOML: &str = include_str!("../../conventions/builtin/bare.toml");
+const CLASSIC_TOML: &str = include_str!("../../conventions/builtin/nirs4all-classic.toml");
+const TRAIN_TEST_TOML: &str = include_str!("../../conventions/builtin/train-test.toml");
+const VENDOR_CORPUS_TOML: &str = include_str!("../../conventions/builtin/vendor-corpus.toml");
 
 fn builtin_toml(name: &str) -> Option<&'static str> {
     match name {

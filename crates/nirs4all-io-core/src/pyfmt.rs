@@ -151,6 +151,27 @@ pub fn py_repr(value: &serde_json::Value) -> String {
     }
 }
 
+/// Python `int(value)` coercion for a JSON value: ints as-is, floats truncated
+/// toward zero, integer strings parsed, `True`/`False` → `1`/`0`. Returns `None`
+/// for values Python `int()` would reject (non-integer strings, null, containers).
+pub fn py_int(value: &serde_json::Value) -> Option<i64> {
+    use serde_json::Value;
+    match value {
+        Value::Bool(b) => Some(i64::from(*b)),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(i)
+            } else if let Some(u) = n.as_u64() {
+                i64::try_from(u).ok()
+            } else {
+                n.as_f64().map(|f| f.trunc() as i64)
+            }
+        }
+        Value::String(s) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
 /// Python `bool(value)` truthiness for a JSON value: `false`/`0`/`0.0`/`""`/
 /// `[]`/`{}`/`null` are falsy; everything else (incl. non-empty strings like
 /// `"false"`) is truthy.
@@ -288,5 +309,19 @@ mod tests {
         assert_eq!(nanmean(&[f64::NAN]), None);
         assert_eq!(py_fmt_f3(f64::NAN), "nan");
         assert_eq!(py_pct0(f64::NAN), "nan%");
+    }
+
+    #[test]
+    fn py_int_matches_cpython_int() {
+        use serde_json::json;
+        assert_eq!(py_int(&json!(2)), Some(2));
+        assert_eq!(py_int(&json!(2.7)), Some(2)); // trunc toward zero
+        assert_eq!(py_int(&json!(-2.7)), Some(-2));
+        assert_eq!(py_int(&json!("2")), Some(2));
+        assert_eq!(py_int(&json!(true)), Some(1));
+        assert_eq!(py_int(&json!(false)), Some(0));
+        assert_eq!(py_int(&json!("2.5")), None); // int("2.5") raises
+        assert_eq!(py_int(&json!(null)), None);
+        assert_eq!(py_int(&json!([1])), None);
     }
 }

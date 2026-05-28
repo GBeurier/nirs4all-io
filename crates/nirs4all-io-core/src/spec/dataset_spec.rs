@@ -18,7 +18,7 @@ use super::enums::{
     SourceKind, SpecError, TaskType, UnknownPolicy,
 };
 use super::selectors::Selector;
-use crate::pyfmt::{py_repr, py_truthy};
+use crate::pyfmt::{py_int, py_repr, py_truthy};
 use crate::versions::DATASET_SPEC_SCHEMA_VERSION;
 
 // --------------------------------------------------------------------------- //
@@ -894,10 +894,18 @@ impl DatasetSpec {
             _ => vec![],
         };
         Ok(Self {
-            schema_version: m
-                .get("schema_version")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(DATASET_SPEC_SCHEMA_VERSION as i64),
+            // Python `int(d.get("schema_version", SCHEMA_VERSION))`: coerce
+            // ints/floats/int-strings; reject un-coercible values (don't silently
+            // default a malformed/future version to v1).
+            schema_version: match m.get("schema_version") {
+                Some(v) => py_int(v).ok_or_else(|| {
+                    SpecError::new(format!(
+                        "schema_version must be an integer, got {}",
+                        py_repr(v)
+                    ))
+                })?,
+                None => DATASET_SPEC_SCHEMA_VERSION as i64,
+            },
             name: opt_string(m.get("name")),
             description: opt_string(m.get("description")),
             task_type: match m.get("task_type") {
@@ -1034,5 +1042,21 @@ mod tests {
         assert_eq!(join.left.as_deref(), Some("y"));
         assert_eq!(join.cardinality, Cardinality::OneToOne);
         assert_eq!(join.coverage, Coverage::Complete);
+    }
+
+    #[test]
+    fn schema_version_coercion() {
+        let sv = |v: serde_json::Value| DatasetSpec::from_value(&v).map(|s| s.schema_version);
+        assert_eq!(sv(json!({"schema_version": 1, "sources": []})).unwrap(), 1);
+        assert_eq!(
+            sv(json!({"schema_version": "2", "sources": []})).unwrap(),
+            2
+        ); // int("2")
+        assert_eq!(
+            sv(json!({"schema_version": 2.0, "sources": []})).unwrap(),
+            2
+        ); // int(2.0)
+        assert_eq!(sv(json!({"sources": []})).unwrap(), 1); // default
+        assert!(sv(json!({"schema_version": "bad", "sources": []})).is_err()); // not silently v1
     }
 }

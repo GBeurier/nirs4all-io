@@ -53,6 +53,11 @@ fn params_from(src: &Value) -> LoadingParams {
 }
 
 /// Resolve the input string (dir/file/glob) and infer a plan.
+///
+/// Resolution is non-recursive, mirroring `engine.py` which does not consult a
+/// profile's `match.recursive` when expanding a directory (a known Python
+/// limitation reproduced for parity — e.g. `vendor-corpus` is recursive but the
+/// Python pipeline still resolves the top level only).
 pub fn infer_path(input: &str, conventions: Option<&[String]>) -> Result<DatasetPlan, SpecError> {
     infer_inputset(resolve_path(input, false), conventions)
 }

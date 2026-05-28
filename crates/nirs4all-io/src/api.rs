@@ -166,7 +166,10 @@ fn to_spec_paths(
     name: Option<&str>,
 ) -> Result<(DatasetSpec, PathBuf), SpecError> {
     let iset = crate::resolve::resolve_list(paths, false);
-    // refs (basenames) -> absolute identities
+    // refs (basenames) -> absolute identities. Mirrors Python `api.py`, which
+    // also builds `{it.ref: it.identity}` — so file lists with duplicate
+    // basenames collapse to one entry. Reproduced for parity (a known Python
+    // limitation), NOT a Rust regression; do not "fix" without changing Python.
     let name_to_abs: std::collections::HashMap<String, String> = iset
         .items
         .iter()

@@ -9,7 +9,7 @@
 use std::sync::LazyLock;
 
 use indexmap::IndexMap;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 
 use crate::pyfmt::{nanmean, nanstd};
 
@@ -23,7 +23,8 @@ struct HeaderPatterns {
 }
 
 static HEADER_PATTERNS: LazyLock<HeaderPatterns> = LazyLock::new(|| {
-    let c = |p: &str| Regex::new(p).unwrap();
+    // Python matches these with re.IGNORECASE.
+    let c = |p: &str| RegexBuilder::new(p).case_insensitive(true).build().unwrap();
     HeaderPatterns {
         nm: vec![c(r"^\d{3,4}(?:\.\d+)?$"), c(r"^\d{3,4}(?:\.\d+)?nm$")],
         cm1: vec![
@@ -421,5 +422,13 @@ mod tests {
         assert_eq!(d.n_cols, 1);
         assert!(approx(d.confidence["delimiter"], 0.01));
         assert!(approx(d.confidence["has_header"], 1.0));
+    }
+
+    #[test]
+    fn header_unit_case_insensitive() {
+        // Python uses re.IGNORECASE: uppercase unit suffixes still detect nm/cm-1.
+        let nm: Vec<String> = (0..12).map(|i| format!("{}NM", 1000 + i * 5)).collect();
+        let (u, _) = detect_header_unit(&nm);
+        assert_eq!(u, "nm");
     }
 }

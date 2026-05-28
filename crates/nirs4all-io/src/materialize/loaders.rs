@@ -289,6 +289,43 @@ fn ext_lower(path: &Path) -> String {
     }
 }
 
+/// Read a file, transparently decompressing `.gz` (gzip) and `.zip` (first
+/// entry) so compressed CSVs (`.csv.gz`/`.csv.zip`) parse correctly.
+fn read_maybe_compressed(path: &Path) -> Result<Vec<u8>, SpecError> {
+    use std::io::Read;
+    let raw = std::fs::read(path)
+        .map_err(|e| SpecError::new(format!("file not found: {} ({e})", path.display())))?;
+    let lower = path.to_string_lossy().to_lowercase();
+    if lower.ends_with(".gz") {
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(&raw[..])
+            .read_to_end(&mut out)
+            .map_err(|e| {
+                SpecError::new(format!("gzip decode failed for {}: {e}", path.display()))
+            })?;
+        Ok(out)
+    } else if lower.ends_with(".zip") {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(raw))
+            .map_err(|e| SpecError::new(format!("zip open failed for {}: {e}", path.display())))?;
+        if archive.is_empty() {
+            return Err(SpecError::new(format!(
+                "empty zip archive: {}",
+                path.display()
+            )));
+        }
+        let mut entry = archive.by_index(0).map_err(|e| {
+            SpecError::new(format!("zip entry read failed for {}: {e}", path.display()))
+        })?;
+        let mut out = Vec::new();
+        entry.read_to_end(&mut out).map_err(|e| {
+            SpecError::new(format!("zip decompress failed for {}: {e}", path.display()))
+        })?;
+        Ok(out)
+    } else {
+        Ok(raw)
+    }
+}
+
 fn read_csv(path: &Path, params: &LoadingParams) -> Result<LoadedTable, SpecError> {
     let delimiter = params
         .delimiter
@@ -305,8 +342,7 @@ fn read_csv(path: &Path, params: &LoadingParams) -> Result<LoadedTable, SpecErro
         .next()
         .unwrap_or('.');
     let has_header = params.has_header.unwrap_or(true);
-    let bytes = std::fs::read(path)
-        .map_err(|e| SpecError::new(format!("file not found: {} ({e})", path.display())))?;
+    let bytes = read_maybe_compressed(path)?;
     let text = match String::from_utf8(bytes.clone()) {
         Ok(t) => t,
         Err(_) => bytes.iter().map(|&b| b as char).collect(), // latin-1 fallback
@@ -455,5 +491,25 @@ mod tests {
         assert!(!idc.is_float_dtype());
         assert!(idc.is_numeric_dtype());
         assert_eq!(idc.str_values, vec!["1", "2"]);
+    }
+
+    #[test]
+    fn reads_gzip_csv() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("X.csv.gz");
+        let mut enc = GzEncoder::new(std::fs::File::create(&p).unwrap(), Compression::default());
+        enc.write_all(b"1000;1005\n0.4;1.3\n0.5;1.2\n").unwrap();
+        enc.finish().unwrap();
+        let params = LoadingParams {
+            delimiter: Some(";".into()),
+            has_header: Some(true),
+            ..Default::default()
+        };
+        let t = read_table(&p, &params).unwrap();
+        assert_eq!(t.column_names(), vec!["1000", "1005"]);
+        assert_eq!(t.n_rows, 2);
+        assert_eq!(t.numeric_column_f64("1000"), vec![0.4, 0.5]);
     }
 }
