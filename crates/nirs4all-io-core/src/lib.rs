@@ -10,7 +10,11 @@
 //! descriptions into this core (D-R4).
 
 pub mod canonical_json;
+pub mod pyfmt;
+pub mod spec;
 pub mod versions;
+
+pub use spec::SpecError;
 
 pub use canonical_json::{canonical_json, CanonicalJsonError};
 pub use versions::{
