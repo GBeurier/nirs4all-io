@@ -6,8 +6,10 @@
 
 pub mod folds;
 pub mod frame;
+pub mod join;
 pub mod loaders;
 
 pub use folds::{parse_fold_file, Fold};
 pub use frame::{Cell, Column, Frame, Matrix};
+pub use join::{concat_features, concat_samples, join_tables, merge_by_key, JoinAudit};
 pub use loaders::{read_table, LoadedTable};

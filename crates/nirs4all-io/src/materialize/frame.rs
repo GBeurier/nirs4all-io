@@ -52,6 +52,25 @@ impl Cell {
             Cell::Na => GroupKey::Na,
         }
     }
+
+    /// A join-match key: `Int(1)` and `Float(1.0)` unify; NaN/NA never match
+    /// (returns `None`), mirroring pandas merge (NaN keys don't join).
+    pub fn join_key(&self) -> Option<JoinKey> {
+        match self {
+            Cell::Int(i) => Some(JoinKey::Num((*i as f64).to_bits())),
+            Cell::Float(f) if f.is_nan() => None,
+            Cell::Float(f) => Some(JoinKey::Num(f.to_bits())),
+            Cell::Str(s) => Some(JoinKey::Str(s.clone())),
+            Cell::Na => None,
+        }
+    }
+}
+
+/// A hashable join key (numeric values unified by f64 bits; strings verbatim).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum JoinKey {
+    Num(u64),
+    Str(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -83,6 +102,64 @@ impl Column {
             .collect::<HashSet<_>>()
             .len()
     }
+    /// Build a column from cells, inferring the pandas dtype: object if any
+    /// string; int64 if all-int and no NA; else float64 (with int→float and
+    /// NA→NaN promotion, as pandas does on a join/concat).
+    pub fn from_cells(name: &str, cells: Vec<Cell>) -> Column {
+        let mut any_str = false;
+        let mut any_na = false;
+        let mut all_int = true;
+        for c in &cells {
+            match c {
+                Cell::Str(_) => {
+                    any_str = true;
+                    all_int = false;
+                }
+                Cell::Float(f) => {
+                    all_int = false;
+                    if f.is_nan() {
+                        any_na = true;
+                    }
+                }
+                Cell::Na => {
+                    any_na = true;
+                    all_int = false;
+                }
+                Cell::Int(_) => {}
+            }
+        }
+        if any_str {
+            Column {
+                name: name.into(),
+                dtype: ColDtype::String,
+                numeric_kind: NumericKind::NonNumeric,
+                values: cells,
+            }
+        } else if all_int && !any_na {
+            Column {
+                name: name.into(),
+                dtype: ColDtype::Numeric,
+                numeric_kind: NumericKind::NonFloatNumeric,
+                values: cells,
+            }
+        } else {
+            let values = cells
+                .into_iter()
+                .map(|c| match c {
+                    Cell::Int(i) => Cell::Float(i as f64),
+                    Cell::Na => Cell::Float(f64::NAN),
+                    other => other,
+                })
+                .collect();
+            Column {
+                name: name.into(),
+                dtype: ColDtype::Numeric,
+                numeric_kind: NumericKind::Float,
+                values,
+            }
+        }
+    }
+
     fn to_profile(&self, n_rows: usize) -> ColumnProfile {
         let nunique = self.nunique_with_na();
         ColumnProfile {
@@ -120,6 +197,46 @@ impl Frame {
             n_rows: 0,
             header_unit: "text".into(),
         }
+    }
+
+    /// Build a frame from columns (n_rows from the first column).
+    pub fn from_columns(columns: Vec<Column>, header_unit: &str) -> Frame {
+        let n_rows = columns.first().map(|c| c.values.len()).unwrap_or(0);
+        Frame {
+            columns,
+            n_rows,
+            header_unit: header_unit.into(),
+        }
+    }
+
+    /// Per-row join keys over `keys` (`None` if any key cell is NA — never matches).
+    pub fn join_key_tuples(&self, keys: &[String]) -> Vec<Option<Vec<JoinKey>>> {
+        let cols: Vec<&Column> = keys.iter().filter_map(|k| self.column(k)).collect();
+        (0..self.n_rows)
+            .map(|row| {
+                let mut tuple = Vec::with_capacity(cols.len());
+                for c in &cols {
+                    match c.values[row].join_key() {
+                        Some(k) => tuple.push(k),
+                        None => return None,
+                    }
+                }
+                Some(tuple)
+            })
+            .collect()
+    }
+
+    /// Whether any two rows share a key (pandas `duplicated(subset=keys)`; NA groups).
+    pub fn has_duplicate_keys(&self, keys: &[String]) -> bool {
+        let cols: Vec<&Column> = keys.iter().filter_map(|k| self.column(k)).collect();
+        let mut seen: HashSet<Vec<GroupKey>> = HashSet::new();
+        for row in 0..self.n_rows {
+            let tuple: Vec<GroupKey> = cols.iter().map(|c| c.values[row].group_key()).collect();
+            if !seen.insert(tuple) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn column_names(&self) -> Vec<String> {
