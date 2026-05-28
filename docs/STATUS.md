@@ -35,8 +35,9 @@ deferred items live in [`ROADMAP.md`](ROADMAP.md).
 
 See [`ROADMAP.md`](ROADMAP.md) for the consolidated list. Highlights:
 
-- **Phase 2** (Rust core + `dag-ml-data` target) — gated externally; see
-  [`PHASE2_GATE.md`](PHASE2_GATE.md).
+- **Phase 2** (Rust core + `dag-ml-data` target) — **unblocked** (2026-05-28); the
+  actionable plan is in [`RUST_REWRITE_ROADMAP.md`](RUST_REWRITE_ROADMAP.md) (gate status
+  in [`PHASE2_GATE.md`](PHASE2_GATE.md)).
 - **SpectroDataset extension** for `observation_id` / `group_id` / `weights` as
   first-class slots — out of scope here (host-side change on `nirs4all`).
 - **Inference calibration** (Brier/ECE, story 3.6) — needs a labelled corpus.
