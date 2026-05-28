@@ -43,3 +43,4 @@ sha2 = "0.10"
 regex = "1.10"
 toml = "0.8"
 indexmap = { version = "2.2", features = ["serde"] }
+csv = "1.3"
