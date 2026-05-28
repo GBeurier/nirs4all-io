@@ -225,6 +225,43 @@ class JoinSpec:
 # Source (A.6 multi-source)                                                   #
 # --------------------------------------------------------------------------- #
 @dataclass
+class VariationSpec:
+    """A pre-computed preprocessing variant of a feature source.
+
+    The file(s) hold the same samples (in the same row order) as the parent
+    source, transformed by an external preprocessing (e.g. SNV, MSC pre-applied
+    in a vendor tool). At load time, each variation becomes a named *processing*
+    on the parent SpectroDataset source -- i.e. ``ds.add_features(variation_array,
+    ["<name>"], source=<src_idx>)``. Variations are not augmentations and not
+    repetitions: they are alternative views of the same samples.
+
+    Same column count as the parent feature block (the variation's role-selected
+    columns); same row count as the parent source. Joins that reorder the
+    parent's rows propagate to variations automatically (rows are tracked by a
+    per-source positional index).
+    """
+
+    name: str
+    input: Any = None  # path | glob | [paths]
+    params: LoadingParams = field(default_factory=LoadingParams)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> VariationSpec:
+        if "name" not in d:
+            raise SpecError(f"variation needs a 'name': {d!r}")
+        if d.get("input") is None:
+            raise SpecError(f"variation '{d['name']}': 'input' is required")
+        return cls(name=str(d["name"]), input=d.get("input"), params=LoadingParams.from_dict(d.get("params")))
+
+    def to_dict(self) -> dict:
+        out: dict = {"name": self.name, "input": self.input}
+        params = self.params.to_dict()
+        if params:
+            out["params"] = params
+        return out
+
+
+@dataclass
 class SourceSpec:
     id: str
     role: Role = Role.FEATURES
@@ -239,6 +276,9 @@ class SourceSpec:
     columns_from_map: bool = False
     join: JoinSpec | None = None
     params: LoadingParams = field(default_factory=LoadingParams)
+    # Pre-computed preprocessing variants attached to this (feature) source --
+    # one named *processing* per variation in the resulting SpectroDataset.
+    variations: list[VariationSpec] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> SourceSpec:
@@ -265,6 +305,7 @@ class SourceSpec:
             columns_from_map=from_map,
             join=join,
             params=LoadingParams.from_dict(d.get("params")),
+            variations=[VariationSpec.from_dict(v) for v in d.get("variations", [])],
         )
 
     def to_dict(self) -> dict:
@@ -293,6 +334,8 @@ class SourceSpec:
         params = self.params.to_dict()
         if params:
             out["params"] = params
+        if self.variations:
+            out["variations"] = [v.to_dict() for v in self.variations]
         return out
 
 

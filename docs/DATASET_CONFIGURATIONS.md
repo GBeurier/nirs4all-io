@@ -154,6 +154,7 @@ sources:
     strict_columns: true      # true (disjoint required) | false (first-match-wins)
     join: { ... }             # relational join onto another source (§5.2)
     params: { ... }           # per-source loading params, override global (§6)
+    variations: [ ... ]       # pre-computed preprocessing variants (§4.1)
 ```
 
 ### Source `role`
@@ -163,7 +164,7 @@ sources:
 | `features` | ✅ | the whole source is X (one source = one feature block) |
 | `targets` | ✅ | the whole source is Y |
 | `metadata` | ✅ | the whole source is metadata |
-| `weights` | 🟡 | parsed; carried as a column role, not yet a SpectroDataset weight |
+| `weights` | ✅ | per-sample training weights (sklearn-style `sample_weight`); surfaced on the SpectroDataset as a `__sample_weight__` metadata column |
 | `ignore` | ✅ | dropped |
 | `mixed` | ✅ | per-column roles come from `columns` (default when `columns` given, no `role`) |
 
@@ -173,6 +174,34 @@ sources:
 |---|---|---|
 | `table` | ✅ | a normal sample source |
 | `lookup` | ✅ | a dimension table joined `m:1`; not itself a sample source; its columns keep their declared roles when broadcast |
+
+### 4.1 Variations — pre-computed preprocessing variants
+
+A **variation** is a pre-computed transformation of a feature source's spectra
+(e.g. an SNV-applied or MSC-applied copy produced by a vendor tool), supplied as
+an additional file. Variations are **not** new samples (use `merge: concat_samples`),
+**not** repetitions (use `sample_index.repetition_id`), and **not** augmentations
+(those are pipeline-side). They populate the *processings* dimension of the
+parent feature source on the SpectroDataset:
+
+```yaml
+sources:
+  - id: spectra
+    role: features
+    input: raw_spectra.csv
+    variations:
+      - { name: snv, input: snv_spectra.csv }
+      - { name: msc, input: [msc_lot1.csv, msc_lot2.csv] }   # concat_samples-style
+```
+
+Materialization rule: one `ds.add_features(<array>, ["<name>"], source=<idx>)`
+per variation on the parent source. The variation file must row-align with the
+parent (post-merge) and provide the same number of feature columns; column
+headers are matched by name when possible, else positionally. Joins or
+partitions that reorder the parent's rows propagate automatically to its
+variations (each source carries a hidden `__src_row_idx__` index column).
+
+`status: ✅` implemented end-to-end in `to_spectrodataset`.
 
 ---
 
@@ -606,7 +635,8 @@ sources: [{ id: a, role: mixed, input: wide.csv, strict_columns: true,
 | Params | delimiter/decimal/header/encoding/header_unit, NA policy (all), categorical, format | — |
 | Aggregation | repetition, aggregate (mean/median/vote/robust_mean) | — |
 | Formats | CSV/TSV/npy/npz/parquet/excel | matlab 🟡, vendor 🟡 (nirs4all-formats) |
-| Weights | — | 🟡 column role parsed, not a SpectroDataset weight |
+| Weights | ✅ `role: weights` → `__sample_weight__` metadata column on the SpectroDataset | — |
+| Variations | ✅ pre-computed preprocessing variants (CSV/Parquet/...) attached to a feature source → named processings via `add_features()` | — |
 
 ---
 

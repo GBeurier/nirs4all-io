@@ -26,6 +26,7 @@ CATALOGUE = {
     "partition:column", "partition:percentage",
     "folds:inline", "folds:file", "folds:column",
     "lookup", "composite_key",
+    "variations", "role:weights",
 }
 
 
@@ -52,9 +53,13 @@ def vocab_elements(spec: DatasetSpec) -> set[str]:
             els.add("virtual_key")
         for c in s.columns:
             els.add(f"selector:{c.select.kind}")
+            if c.role.value == "weights":
+                els.add("role:weights")
         if s.join:
             els.add(f"cardinality:{s.join.cardinality.value}")
             els.add(f"coverage:{s.join.coverage.value}")
+        if s.variations:
+            els.add("variations")
     return els
 
 
@@ -139,6 +144,14 @@ def _cases():
     # folds by column (each distinct value of cv_fold -> one fold)
     df_cv = X6(6).assign(y=np.arange(6.0), cv_fold=[0, 1, 0, 1, 0, 1])
     cases.append(("folds_column", {"all.csv": df_cv}, {"sources": [{"id": "d", "role": "mixed", "input": "all.csv", "columns": [{"role": "features", "select": {"regex": r"^\d+$"}}, {"role": "targets", "select": ["y"]}, {"role": "metadata", "select": ["cv_fold"]}]}], "folds": {"column": "cv_fold"}}))
+
+    # weights as a column role: surfaced on the SpectroDataset as a `__sample_weight__` metadata column
+    df_w = X6(6).assign(y=np.arange(6.0), w=[1.0, 1.0, 2.0, 0.5, 1.0, 1.5])
+    cases.append(("role_weights", {"data.csv": df_w}, {"sources": [{"id": "d", "role": "mixed", "input": "data.csv", "columns": [{"role": "features", "select": {"regex": r"^\d+$"}}, {"role": "targets", "select": ["y"]}, {"role": "weights", "select": ["w"]}]}]}))
+
+    # variations: a feature source with a pre-computed preprocessing variant (e.g. SNV) -> processings on the SpectroDataset
+    snv_df = X6(6)  # second file with identical column headers, different values
+    cases.append(("variations_snv", {"X.csv": X6(6), "X_snv.csv": snv_df, "Y.csv": pd.DataFrame({"y": np.arange(6.0)})}, {"sources": [{"id": "x", "role": "features", "input": "X.csv", "variations": [{"name": "snv", "input": "X_snv.csv"}]}, {"id": "y", "role": "targets", "input": "Y.csv", "join": {"to": "x", "how": "1:1"}}]}))
 
     return cases
 

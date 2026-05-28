@@ -14,6 +14,7 @@ from .dataset_spec import (
     SampleIndex,
     SourceSpec,
     ValidationSpec,
+    VariationSpec,
 )
 from .enums import (
     AggregateMethod,
@@ -60,6 +61,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "DatasetSpec",
     "SourceSpec",
+    "VariationSpec",
     "ColumnRole",
     "JoinSpec",
     "PartitionsSpec",
