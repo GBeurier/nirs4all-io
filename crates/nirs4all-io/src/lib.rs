@@ -8,5 +8,8 @@
 //!
 //! Re-exports the pure core so downstream crates depend on a single facade.
 
+pub mod resolve;
+
 pub use nirs4all_io_core as core;
 pub use nirs4all_io_core::{canonical_json, CanonicalJsonError};
+pub use resolve::{resolve_list, resolve_path, InputItem, InputSet};
