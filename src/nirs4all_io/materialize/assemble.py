@@ -19,13 +19,21 @@ import numpy as np
 import pandas as pd
 
 from ..conventions.engine import get_stem
-from ..spec.dataset_spec import AggregateSpec, DatasetSpec, SourceSpec
+from ..spec.dataset_spec import AggregateSpec, DatasetSpec, SourceSpec, VariationSpec
 from ..spec.enums import Cardinality, Coverage, MergeMode, PartitionBy, Role, SourceKind, SpecError
 from ..spec.selectors import RestSelector
 from .join import concat_features, concat_samples, join_tables, merge_by_key
 from .loaders import coerce_numeric, effective_params, encode_categorical, read_table
 
 _FEATURE_PARTITION_DEFAULT = "train"
+# Sentinel column carrying the source's original positional row index so that
+# variations (loaded once per source, before any join) can be re-aligned to the
+# combined frame after joins/reordering. Stripped before exposing to the user.
+_ROW_IDX_PREFIX = "__src_row_idx__"
+
+
+def _row_idx_col(source_id: str) -> str:
+    return f"{_ROW_IDX_PREFIX}{source_id}__"
 
 
 @dataclass
@@ -41,6 +49,10 @@ class SourceTable:
     signal_type: str | None
     header_unit: str
     origins: list[str] | None = None
+    # Pre-loaded variation matrices for this (feature) source: rows align with
+    # df's original row order; columns will be sub-selected to the feature
+    # columns at extraction time.
+    variations: list[tuple[str, np.ndarray, list[str]]] = field(default_factory=list)
 
 
 @dataclass
@@ -50,10 +62,18 @@ class PartitionBlock:
     feature_headers: list[list[str]] = field(default_factory=list)
     header_units: list[str] = field(default_factory=list)
     signal_types: list[str | None] = field(default_factory=list)
+    # Per feature source, the list of named preprocessing variants (additional
+    # processings on the SpectroDataset side, parallel to X[src_idx]). Empty
+    # outer list when no source declares variations.
+    processings: list[list[tuple[str, np.ndarray]]] = field(default_factory=list)
     y: np.ndarray | None = None
     y_headers: list[str] = field(default_factory=list)
     y_categorical: dict[str, dict] = field(default_factory=dict)
     metadata: pd.DataFrame | None = None
+    # Per-sample training weights (sklearn-style `sample_weight`), surfaced on
+    # the SpectroDataset side as a metadata column.
+    weights: np.ndarray | None = None
+    weights_header: str | None = None
 
 
 @dataclass
@@ -138,6 +158,7 @@ def _split_roles(source: SourceSpec, df: pd.DataFrame, dtypes: list[str]) -> dic
     # join keys are identity, not a role -> exempt from role coverage
     key_cols |= _join_key_columns(source)
     key_cols.add("filename_stem")  # reserved virtual key (vendor-corpus); never a role
+    key_cols.add(_row_idx_col(source.id))  # reserved virtual key (variation row tracking); never a role
     roles: dict[str, str] = {}
     if source.role is not Role.MIXED and not source.columns:
         for col in headers:
@@ -181,8 +202,15 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
     roles = _split_roles(source, df, infer_dtypes(df))
     if isinstance(si.key, str):
         roles.pop(si.key, None)  # the sample identity column is never a feature/target/metadata role
+    # stamp a per-source positional row index AFTER role-splitting so it does
+    # not shift positional selectors (e.g. `-1` keeps pointing at the last user
+    # column, not at the row-idx sentinel). The column survives joins as any
+    # other column and is used to re-align variations to the combined frame.
+    df = df.copy()
+    df[_row_idx_col(source.id)] = np.arange(len(df), dtype=np.int64)
     key = source.key if isinstance(source.key, list) else [source.key] if source.key else None
     partition = source.partition.value if source.partition else None
+    variations = _load_variations(source, spec, base_dir, df, roles)
     return SourceTable(
         source_id=source.id,
         df=df,
@@ -195,7 +223,82 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
         signal_type=signal or (spec.signal_type.value if spec.signal_type.value != "auto" else None),
         header_unit=header_unit,
         origins=origins,
+        variations=variations,
     )
+
+
+def _resolve_variation_inputs(input_val: Any, base_dir: Path) -> list[Path]:
+    """Resolve a variation's input (path/glob/list-of-paths) -- mirrors _resolve_inputs."""
+    import glob as _glob
+
+    paths: list[str] = []
+    for item in input_val if isinstance(input_val, list) else [input_val]:
+        text = str(item)
+        if any(c in text for c in "*?["):
+            paths.extend(sorted(_glob.glob(str(base_dir / text)) or _glob.glob(text)))
+        else:
+            p = base_dir / text
+            paths.append(str(p if p.exists() else Path(text)))
+    return [Path(p) for p in paths]
+
+
+def _read_variation_frame(variation: VariationSpec, spec: DatasetSpec, source: SourceSpec, base_dir: Path) -> pd.DataFrame:
+    """Load (and concatenate, if multi-file) a variation into a single frame.
+
+    A variation file has the same row order as the parent source's loaded frame
+    (post-merge). Multiple files concatenate by samples (rows) so the row count
+    matches the parent's post-merge row count -- same semantics as the parent's
+    own ``concat_samples`` flow.
+    """
+    params = effective_params(spec.params, source.params)
+    if variation.params.to_dict():
+        params = effective_params(params, variation.params)
+    paths = _resolve_variation_inputs(variation.input, base_dir)
+    if not paths:
+        raise SpecError(f"source '{source.id}': variation '{variation.name}': no input files resolved from {variation.input!r}")
+    frames = [read_table(p, params).df for p in paths]
+    return pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+
+
+def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, parent_df: pd.DataFrame, roles: dict[str, str]) -> list[tuple[str, np.ndarray, list[str]]]:
+    """Materialize a feature source's named preprocessing variants into arrays.
+
+    Each variation must row-align with the parent source (post-merge) and provide
+    one column per parent *feature* column (matched by name when possible, else
+    positionally). The resulting (name, array, headers) tuples are later
+    re-indexed by ``__src_row_idx__`` so joins/partitions on the parent propagate
+    automatically to the variations.
+    """
+    if not source.variations:
+        return []
+    if source.role is not Role.FEATURES and not any(r == "features" for r in roles.values()):
+        raise SpecError(f"source '{source.id}': variations are only meaningful on a feature source (role/columns must declare 'features')")
+    feature_cols = [c for c, r in roles.items() if r == "features"]
+    if not feature_cols:
+        raise SpecError(f"source '{source.id}': has variations but no feature columns to attach them to")
+    parent_n = len(parent_df)
+    out: list[tuple[str, np.ndarray, list[str]]] = []
+    seen: set[str] = set()
+    for variation in source.variations:
+        if variation.name in seen:
+            raise SpecError(f"source '{source.id}': duplicate variation name '{variation.name}'")
+        seen.add(variation.name)
+        vdf = _read_variation_frame(variation, spec, source, base_dir)
+        if len(vdf) != parent_n:
+            raise SpecError(f"source '{source.id}': variation '{variation.name}' has {len(vdf)} rows, expected {parent_n} (must row-align with the parent source)")
+        # prefer matching by feature column name (vendor exports often preserve
+        # wavelength headers); otherwise positionally consume the first N columns.
+        named = [c for c in feature_cols if c in vdf.columns]
+        if len(named) == len(feature_cols):
+            arr = coerce_numeric(vdf[feature_cols])
+            headers = list(feature_cols)
+        else:
+            if vdf.shape[1] < len(feature_cols):
+                raise SpecError(f"source '{source.id}': variation '{variation.name}' has {vdf.shape[1]} columns, need at least {len(feature_cols)} to cover the parent's feature columns")
+            arr = coerce_numeric(vdf.iloc[:, : len(feature_cols)])
+            headers = list(feature_cols)
+        out.append((variation.name, arr, headers))
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -325,6 +428,18 @@ def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: l
         block.feature_headers.append(cols)
         block.header_units.append(ft.header_unit)
         block.signal_types.append(ft.signal_type)
+        # variations: re-align each pre-loaded array to the combined frame using
+        # the parent source's positional row index (which survives joins as a
+        # regular column).
+        src_processings: list[tuple[str, np.ndarray]] = []
+        if ft.variations:
+            idx_col = _row_idx_col(ft.source_id)
+            if idx_col not in combined.columns:
+                raise SpecError(f"source '{ft.source_id}': row-index column '{idx_col}' lost during assembly; variations cannot be aligned")
+            row_idx = combined[idx_col].to_numpy(dtype=np.int64)
+            for name, arr, _hdrs in ft.variations:
+                src_processings.append((name, arr[row_idx, :]))
+        block.processings.append(src_processings)
 
     target_cols = [c for c, rs in role_cols.items() if rs[0] == "targets"]
     if target_cols:
@@ -338,6 +453,13 @@ def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: l
         block.y = np.column_stack(y_series)
         block.y_headers = target_cols
         block.y_categorical = cats
+
+    weight_cols = [c for c, rs in role_cols.items() if rs[0] == "weights"]
+    if weight_cols:
+        if len(weight_cols) > 1:
+            raise SpecError(f"only one 'weights' column is supported, got {weight_cols} (combine them upstream before declaring)")
+        block.weights = pd.to_numeric(combined[weight_cols[0]], errors="coerce").to_numpy(dtype=np.float32)
+        block.weights_header = weight_cols[0]
 
     meta_cols = [c for c, rs in role_cols.items() if rs[0] == "metadata"]
     if meta_cols:
@@ -405,10 +527,13 @@ def _slice_block(block: PartitionBlock, mask: np.ndarray) -> PartitionBlock:
     out.feature_headers = list(block.feature_headers)
     out.header_units = list(block.header_units)
     out.signal_types = list(block.signal_types)
+    out.processings = [[(name, arr[mask]) for name, arr in src] for src in block.processings]
     out.y = block.y[mask] if block.y is not None else None
     out.y_headers = list(block.y_headers)
     out.y_categorical = dict(block.y_categorical)
     out.metadata = block.metadata.iloc[mask].reset_index(drop=True) if block.metadata is not None else None
+    out.weights = block.weights[mask] if block.weights is not None else None
+    out.weights_header = block.weights_header
     return out
 
 

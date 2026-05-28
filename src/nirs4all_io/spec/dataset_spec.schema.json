@@ -240,6 +240,25 @@
         },
         "params": {
           "$ref": "#/$defs/params"
+        },
+        "variations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "input": {},
+              "params": {
+                "$ref": "#/$defs/params"
+              }
+            },
+            "required": [
+              "name",
+              "input"
+            ]
+          }
         }
       },
       "required": [
