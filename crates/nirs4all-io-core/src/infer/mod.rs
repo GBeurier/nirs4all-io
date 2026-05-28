@@ -5,10 +5,14 @@
 //! populates `FileDescription`/`TableProfile` from files and orchestrates the
 //! `infer()` pipeline.
 
+pub mod column_roles;
 pub mod describe;
 pub mod detectors;
+pub mod identity;
 pub mod plan;
+pub mod table;
 
 pub use describe::{describe_text, FileDescription};
 pub use detectors::{detect_signal_type, detect_task_type};
 pub use plan::{DatasetPlan, Decision};
+pub use table::{ColDtype, ColumnProfile, NumericKind, TableProfile};
