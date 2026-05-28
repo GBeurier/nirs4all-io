@@ -8,6 +8,7 @@
 //!
 //! Re-exports the pure core so downstream crates depend on a single facade.
 
+pub mod api;
 pub mod infer;
 pub mod materialize;
 pub mod resolve;
