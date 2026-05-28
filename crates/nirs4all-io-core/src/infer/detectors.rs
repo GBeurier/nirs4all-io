@@ -211,10 +211,9 @@ pub fn detect_signal_type(
         }
     }
     // max by value, first-in-order wins (matches Python max over dict).
-    let (best, best_score) =
-        scores
-            .iter()
-            .fold(scores[0], |acc, &cur| if cur.1 > acc.1 { cur } else { acc });
+    let (best, best_score) = scores
+        .iter()
+        .fold(scores[0], |acc, &cur| if cur.1 > acc.1 { cur } else { acc });
     let total: f64 = scores.iter().map(|(_, s)| *s).sum();
     let score = if total > 0.0 { best_score / total } else { 0.0 };
     let reason = format!(

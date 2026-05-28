@@ -7,6 +7,8 @@
 
 pub mod describe;
 pub mod detectors;
+pub mod plan;
 
 pub use describe::{describe_text, FileDescription};
 pub use detectors::{detect_signal_type, detect_task_type};
+pub use plan::{DatasetPlan, Decision};
