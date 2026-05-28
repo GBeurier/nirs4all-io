@@ -4,6 +4,8 @@
 //! Tabular loaders today; the relational join, assembler, folds, and the
 //! SpectroDataset adapter land with the load path.
 
+pub mod folds;
 pub mod loaders;
 
+pub use folds::{parse_fold_file, Fold};
 pub use loaders::{read_table, LoadedTable};
