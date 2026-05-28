@@ -18,6 +18,11 @@ htmlcov/
 # Build outputs
 docs/_build/
 
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.orig
+
 # OS
 .DS_Store
 Thumbs.db

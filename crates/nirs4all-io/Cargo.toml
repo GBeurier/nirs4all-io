@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+[package]
+name = "nirs4all-io"
+description = "Dataset-assembly bridge facade: resolve + file IO + tabular loaders + relational join + assemble + targets. Turns any input into a pipeline-ready dataset."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[features]
+default = []
+# The dag-ml-data emit target (EPIC 10) is behind an optional feature so the
+# facade does not depend on dag-ml-data unless a caller asks for it.
+dag-ml-data = []
+
+[dependencies]
+nirs4all-io-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

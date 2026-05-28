@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+[workspace]
+resolver = "2"
+members = [
+    "crates/nirs4all-io-core",
+    "crates/nirs4all-io",
+    "crates/nirs4all-io-capi",
+    "crates/nirs4all-io-cli",
+]
+# Language bindings build with their own toolchains (maturin / cargo-ndk /
+# wasm-pack) and are intentionally excluded from the cargo workspace.
+exclude = [
+    "bindings/python",
+    "bindings/wasm",
+]
+
+[workspace.package]
+version = "0.1.0-alpha.0"
+edition = "2021"
+# Rust crates are dual-licensed because they port nirs4all-derived logic
+# (D-R5); see COPY_PROVENANCE.md.
+license = "CeCILL-2.1 OR AGPL-3.0-or-later"
+authors = ["Gregory Beurier <beurier@cirad.fr>"]
+repository = "https://github.com/GBeurier/nirs4all-io"
+homepage = "https://github.com/GBeurier/nirs4all-io"
+readme = "README.md"
+
+[workspace.dependencies]
+# Internal crates (path deps so members reference them via `.workspace = true`).
+nirs4all-io-core = { path = "crates/nirs4all-io-core" }
+nirs4all-io = { path = "crates/nirs4all-io" }
+# Third-party. serde_json MUST keep its default (BTreeMap-backed) object map so
+# canonical JSON gets sorted keys for free — do NOT enable `preserve_order`.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+sha2 = "0.10"
+regex = "1.10"
+toml = "0.8"
