@@ -7,7 +7,11 @@
 
 pub mod dataset_spec;
 pub mod enums;
+pub mod normalize;
 pub mod selectors;
+pub mod validate;
 
 pub use dataset_spec::DatasetSpec;
 pub use enums::SpecError;
+pub use normalize::normalize_to_spec_dict;
+pub use validate::validate_spec;

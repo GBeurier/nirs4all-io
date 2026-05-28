@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use nirs4all_io_core::canonical_json::canonical_json;
-use nirs4all_io_core::spec::DatasetSpec;
+use nirs4all_io_core::spec::{normalize_to_spec_dict, DatasetSpec};
 use serde_json::Value;
 
 fn contract_dir() -> PathBuf {
@@ -35,8 +35,10 @@ fn dict_to_spec_cases_match_goldens() {
             continue;
         };
         let name = case["name"].as_str().unwrap();
+        // to_spec(dict) == DatasetSpec.from_dict(normalize_to_spec_dict(inp))
+        let normalized = normalize_to_spec_dict(spec_input);
         let produced =
-            canonical_json(&DatasetSpec::from_value(spec_input).unwrap().to_value()).unwrap();
+            canonical_json(&DatasetSpec::from_value(&normalized).unwrap().to_value()).unwrap();
         let golden =
             std::fs::read_to_string(dir.join(format!("{name}.to_spec.canonical"))).unwrap();
         assert_eq!(produced, golden, "IR drift for {name}");
