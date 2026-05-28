@@ -24,7 +24,7 @@ CATALOGUE = {
     "cardinality:1:1", "cardinality:m:1", "cardinality:1:m",
     "coverage:complete", "coverage:warn", "coverage:drop", "coverage:error",
     "partition:column", "partition:percentage",
-    "folds:inline", "folds:file",
+    "folds:inline", "folds:file", "folds:column",
     "lookup", "composite_key",
 }
 
@@ -135,6 +135,10 @@ def _cases():
 
     # folds inline
     cases.append(("folds_inline", {"X.csv": X6(), "Y.csv": pd.DataFrame({"y": np.arange(6.0)})}, {"sources": [{"id": "x", "role": "features", "input": "X.csv"}, {"id": "y", "role": "targets", "input": "Y.csv", "join": {"to": "x", "how": "1:1"}}], "folds": {"inline": [{"train": [0, 1, 2, 3], "val": [4, 5]}]}}))
+
+    # folds by column (each distinct value of cv_fold -> one fold)
+    df_cv = X6(6).assign(y=np.arange(6.0), cv_fold=[0, 1, 0, 1, 0, 1])
+    cases.append(("folds_column", {"all.csv": df_cv}, {"sources": [{"id": "d", "role": "mixed", "input": "all.csv", "columns": [{"role": "features", "select": {"regex": r"^\d+$"}}, {"role": "targets", "select": ["y"]}, {"role": "metadata", "select": ["cv_fold"]}]}], "folds": {"column": "cv_fold"}}))
 
     return cases
 

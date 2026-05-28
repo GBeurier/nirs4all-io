@@ -63,7 +63,6 @@ DATASET_SPEC_SCHEMA: dict[str, Any] = {
                 "strict_columns": {"type": "boolean"},
                 "columns": {"oneOf": [{"type": "array", "items": {"type": "object", "properties": {"role": {"enum": _ROLE}, "select": _SELECTOR}, "required": ["role", "select"]}}, {"type": "object"}]},
                 "join": {"$ref": "#/$defs/join"},
-                "variations": {"type": "array"},
                 "params": {"$ref": "#/$defs/params"},
             },
             "required": ["id"],

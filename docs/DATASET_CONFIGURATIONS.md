@@ -153,7 +153,6 @@ sources:
     columns: [ ... ]          # per-column role selectors (§5.1) — for role: mixed
     strict_columns: true      # true (disjoint required) | false (first-match-wins)
     join: { ... }             # relational join onto another source (§5.2)
-    variations: [ ... ]       # 📋 parsed, not yet materialized
     params: { ... }           # per-source loading params, override global (§6)
 ```
 
@@ -346,7 +345,7 @@ folds:
   inline: [ { train: [0,1,2], val: [3,4] } ]   # ✅ explicit
   file: folds.csv                               # ✅ external file
   format: auto                                  # auto | csv | json | yaml | txt
-  column: cv_fold                               # 📋 fold-by-column (planned)
+  column: cv_fold                               # ✅ each distinct value -> one fold (val = its rows, train = rest)
 ```
 
 Exactly one of `inline` / `file` / `column`. Fold-file formats (`format:`):
@@ -603,11 +602,10 @@ sources: [{ id: a, role: mixed, input: wide.csv, strict_columns: true,
 | Merge | concat_samples, concat_features, by_key, none | — |
 | Joins | 1:1, m:1, 1:m × complete/warn/drop/error; composite + virtual keys | — |
 | Partitions | column, percentage, per-source `partition` | index, index_file 📋 |
-| Folds | inline, file (csv/json/yaml/txt) | column 📋 |
+| Folds | inline, file (csv/json/yaml/txt), column | — |
 | Params | delimiter/decimal/header/encoding/header_unit, NA policy (all), categorical, format | — |
 | Aggregation | repetition, aggregate (mean/median/vote/robust_mean) | — |
 | Formats | CSV/TSV/npy/npz/parquet/excel | matlab 🟡, vendor 🟡 (nirs4all-formats) |
-| Variations | — | 📋 parsed, not materialized |
 | Weights | — | 🟡 column role parsed, not a SpectroDataset weight |
 
 ---

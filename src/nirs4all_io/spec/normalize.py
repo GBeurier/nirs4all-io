@@ -79,10 +79,6 @@ def alias_map() -> dict[str, str]:
         "sources": ["source_list", "sensor_sources", "input_sources", "feature_sources", "modalities"],
         "targets": ["target_spec", "targets_spec", "shared_targets", "shared_target", "common_targets"],
         "metadata": ["metadata_spec", "meta_spec", "shared_metadata", "shared_meta", "common_metadata"],
-        "variations": ["feature_variations", "data_variations", "preprocessing_variations"],
-        "variation_mode": ["variation_strategy", "variation_type", "variation_method"],
-        "variation_select": ["selected_variations", "variation_selection", "choose_variations", "chosen_variations"],
-        "variation_prefix": ["prefix_variations", "add_variation_prefix", "variation_name_prefix"],
     }
 
     # *_params and *_filter variants of the six partitioned x/y/group bases.
@@ -254,12 +250,12 @@ def normalize_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize any dict config to a canonical DatasetSpec dict.
 
     - applies the alias map;
-    - if the result already declares ``sources``/``variations``, it is treated as
-      a (mostly) canonical spec and returned as-is;
+    - if the result already declares ``sources``, it is treated as a (mostly)
+      canonical spec and returned as-is;
     - otherwise the legacy x/y/group/folds keys are wired into ``sources`` + ``folds``.
     """
     aliased = apply_key_aliases(config)
-    if "sources" in aliased or "variations" in aliased:
+    if "sources" in aliased:
         return aliased
     legacy_keys = {"train_x", "test_x", "train_y", "test_y", "train_group", "test_group", "folds"}
     if any(k in aliased for k in legacy_keys):

@@ -14,7 +14,6 @@ from .dataset_spec import (
     SampleIndex,
     SourceSpec,
     ValidationSpec,
-    VariationSpec,
 )
 from .enums import (
     AggregateMethod,
@@ -70,7 +69,6 @@ __all__ = [
     "LoadingParams",
     "NaConfig",
     "ValidationSpec",
-    "VariationSpec",
     # enums
     "Role",
     "SourceKind",

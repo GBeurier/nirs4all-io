@@ -238,9 +238,6 @@
         "join": {
           "$ref": "#/$defs/join"
         },
-        "variations": {
-          "type": "array"
-        },
         "params": {
           "$ref": "#/$defs/params"
         }

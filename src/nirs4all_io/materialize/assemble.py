@@ -276,6 +276,7 @@ def assemble(spec: DatasetSpec, base_dir: str | Path = ".") -> AssembledDataset:
         aggregate=spec.aggregate,
     )
 
+    combined_df: pd.DataFrame | None = None
     if partitions:
         for part in partitions:
             part_tables = {sid: t for sid, t in tables.items() if t.partition == part or t.kind == SourceKind.LOOKUP.value}
@@ -290,7 +291,7 @@ def assemble(spec: DatasetSpec, base_dir: str | Path = ".") -> AssembledDataset:
                 assembled.blocks[part] = _slice_block(block, mask)
 
     assembled.audits = audits
-    _attach_folds(spec, base_dir, assembled)
+    _attach_folds(spec, base_dir, assembled, combined_df)
     return assembled
 
 
@@ -411,11 +412,28 @@ def _slice_block(block: PartitionBlock, mask: np.ndarray) -> PartitionBlock:
     return out
 
 
-def _attach_folds(spec: DatasetSpec, base_dir: Path, assembled: AssembledDataset) -> None:
+def _attach_folds(spec: DatasetSpec, base_dir: Path, assembled: AssembledDataset, combined_df: pd.DataFrame | None = None) -> None:
     if spec.folds is None:
         return
     if spec.folds.inline:
         assembled.folds = [(list(f.get("train", [])), list(f.get("val", f.get("test", [])))) for f in spec.folds.inline]
+    elif spec.folds.column:
+        # each distinct value of the fold column defines one fold: val = its rows, train = rest
+        if combined_df is None:
+            raise SpecError(f"folds.column='{spec.folds.column}' requires a single combined frame (it does not apply with explicit per-source partitions)")
+        if spec.folds.column not in combined_df.columns:
+            raise SpecError(f"folds.column='{spec.folds.column}' not found in the assembled data (columns: {list(combined_df.columns)})")
+        col = combined_df[spec.folds.column]
+        all_idx = list(range(len(col)))
+        folds: list[tuple[list[int], list[int]]] = []
+        for value in sorted(col.dropna().unique(), key=lambda v: str(v)):
+            val_set = set(col.index[col == value].tolist())
+            val_idx = sorted(val_set)
+            train_idx = [i for i in all_idx if i not in val_set]
+            folds.append((train_idx, val_idx))
+        if not folds:
+            raise SpecError(f"folds.column='{spec.folds.column}' has no non-NaN values")
+        assembled.folds = folds
     elif spec.folds.file:
         from .folds import parse_fold_file
 
