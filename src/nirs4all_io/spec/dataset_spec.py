@@ -221,19 +221,6 @@ class JoinSpec:
         )
 
 
-@dataclass
-class VariationSpec:
-    id: str
-    preprocessing: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, d: dict) -> VariationSpec:
-        return cls(id=str(_get(d, "id", "name", default="variation")), preprocessing=d.get("preprocessing", {}))
-
-    def to_dict(self) -> dict:
-        return _drop_none({"id": self.id, "preprocessing": self.preprocessing})
-
-
 # --------------------------------------------------------------------------- #
 # Source (A.6 multi-source)                                                   #
 # --------------------------------------------------------------------------- #
@@ -251,7 +238,6 @@ class SourceSpec:
     strict_columns: bool = True
     columns_from_map: bool = False
     join: JoinSpec | None = None
-    variations: list[VariationSpec] = field(default_factory=list)
     params: LoadingParams = field(default_factory=LoadingParams)
 
     @classmethod
@@ -278,7 +264,6 @@ class SourceSpec:
             strict_columns=bool(d.get("strict_columns", True)),
             columns_from_map=from_map,
             join=join,
-            variations=[VariationSpec.from_dict(v) for v in d.get("variations", [])],
             params=LoadingParams.from_dict(d.get("params")),
         )
 
@@ -305,8 +290,6 @@ class SourceSpec:
             out["strict_columns"] = False
         if self.join:
             out["join"] = self.join.to_dict()
-        if self.variations:
-            out["variations"] = [v.to_dict() for v in self.variations]
         params = self.params.to_dict()
         if params:
             out["params"] = params
