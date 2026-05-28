@@ -5,7 +5,9 @@
 //! SpectroDataset adapter land with the load path.
 
 pub mod folds;
+pub mod frame;
 pub mod loaders;
 
 pub use folds::{parse_fold_file, Fold};
+pub use frame::{Cell, Column, Frame, Matrix};
 pub use loaders::{read_table, LoadedTable};
