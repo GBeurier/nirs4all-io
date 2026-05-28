@@ -11,6 +11,7 @@ Keeping the IR target-agnostic lets the assembly logic be tested without nirs4al
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,9 +20,9 @@ import numpy as np
 import pandas as pd
 
 from ..conventions.engine import get_stem
-from ..spec.dataset_spec import AggregateSpec, DatasetSpec, SourceSpec, VariationSpec
+from ..spec.dataset_spec import AggregateSpec, ColumnRole, DatasetSpec, SourceSpec, VariationSpec
 from ..spec.enums import Cardinality, Coverage, MergeMode, PartitionBy, Role, SourceKind, SpecError
-from ..spec.selectors import RestSelector
+from ..spec.selectors import AutoSelector, RestSelector
 from .join import concat_features, concat_samples, join_tables, merge_by_key
 from .loaders import coerce_numeric, effective_params, encode_categorical, read_table
 
@@ -169,7 +170,10 @@ def _split_roles(source: SourceSpec, df: pd.DataFrame, dtypes: list[str]) -> dic
     assigned: set[int] = set()
     has_rest = any(isinstance(cr.select, RestSelector) for cr in source.columns)
     for cr in source.columns:
-        idxs = cr.select.resolve(headers, dtypes, assigned)
+        if isinstance(cr.select, AutoSelector):
+            idxs = _resolve_auto_selector(source.id, cr, headers, dtypes, assigned, key_cols)
+        else:
+            idxs = cr.select.resolve(headers, dtypes, assigned)
         for i in idxs:
             if i in assigned:
                 if source.strict_columns:
@@ -182,6 +186,61 @@ def _split_roles(source: SourceSpec, df: pd.DataFrame, dtypes: list[str]) -> dic
     if unmatched and not has_rest:
         raise SpecError(f"source '{source.id}': columns {unmatched} are unassigned and no 'rest' selector is present")
     return roles
+
+
+def _resolve_auto_selector(
+    source_id: str,
+    cr: ColumnRole,
+    headers: list[str],
+    dtypes: list[str],
+    assigned: set[int],
+    key_cols: set[str],
+) -> list[int]:
+    """Resolve an `auto` selector at load time using deterministic, role-aware heuristics.
+
+    - Explicit ``candidates`` always win when one of them is present in the
+      headers (case-sensitive); the first matching candidate is used.
+    - Otherwise the role decides:
+        * ``features``        -> every unassigned numeric column.
+        * ``targets``         -> the last unassigned numeric column (a single column).
+        * ``metadata``        -> every unassigned non-numeric column.
+        * ``ignore``          -> every unassigned column.
+        * ``weights``         -> requires explicit ``candidates`` (no safe default).
+
+    The resolution is **deterministic** (no shuffling, no model in the loop):
+    it inspects only the loaded frame's column names and dtypes. A user who
+    wants a more nuanced choice should run ``infer()`` and store its
+    accepted plan as a concrete spec.
+    """
+    selector = cr.select
+    assert isinstance(selector, AutoSelector)
+    candidates = list(selector.candidates)
+    if candidates:
+        for name in candidates:
+            if name in headers and name not in key_cols:
+                idx = headers.index(name)
+                if idx not in assigned:
+                    return [idx]
+        raise SpecError(f"source '{source_id}': auto selector with candidates {candidates} matched no available column (headers: {headers})")
+    role = cr.role
+    free = [i for i, h in enumerate(headers) if i not in assigned and h not in key_cols]
+    numeric = [i for i in free if dtypes[i] == "numeric"]
+    non_numeric = [i for i in free if dtypes[i] != "numeric"]
+    if role is Role.FEATURES:
+        if not numeric:
+            raise SpecError(f"source '{source_id}': auto features selector found no unassigned numeric columns")
+        return numeric
+    if role is Role.TARGETS:
+        if not numeric:
+            raise SpecError(f"source '{source_id}': auto targets selector found no unassigned numeric columns (provide explicit candidates for a categorical target)")
+        return [numeric[-1]]
+    if role is Role.METADATA:
+        if not non_numeric:
+            raise SpecError(f"source '{source_id}': auto metadata selector found no unassigned non-numeric columns")
+        return non_numeric
+    if role is Role.IGNORE:
+        return free
+    raise SpecError(f"source '{source_id}': auto selector for role '{role.value}' requires explicit candidates")
 
 
 def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, audits: list[dict]) -> SourceTable:
@@ -312,10 +371,18 @@ def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, pare
 
 
 # --------------------------------------------------------------------------- #
-# Partition splitting (PartitionAssigner subset: column / percentage)         #
+# Partition splitting (PartitionAssigner subset: column / index / index_file) #
 # --------------------------------------------------------------------------- #
-def _split_partition_mask(df: pd.DataFrame, spec: DatasetSpec) -> dict[str, np.ndarray]:
-    """Return a {partition -> boolean row mask} for a single combined frame."""
+def _split_partition_mask(df: pd.DataFrame, spec: DatasetSpec, base_dir: Path) -> dict[str, np.ndarray]:
+    """Return a {partition -> boolean row mask} for a single combined frame.
+
+    Only deterministic-by-construction modes are supported (no shuffling at load
+    time): ``by: column`` (split on a column's values), ``by: index`` (explicit
+    row-index lists), ``by: index_file`` (lists read from a file). A user who
+    wants a stratified or percentage split should pre-compute the indices once
+    and feed them as an index list / column, or do the split inside the
+    pipeline's CV layer.
+    """
     p = spec.partitions
     n = len(df)
     if p is None or p.by is None:
@@ -345,28 +412,61 @@ def _split_partition_mask(df: pd.DataFrame, spec: DatasetSpec) -> dict[str, np.n
         if predict_vals:
             masks["predict"] = col.isin(predict_vals).to_numpy()
         return {k: v for k, v in masks.items() if v.any()}
-    if p.by is PartitionBy.PERCENTAGE:
-        idx = np.arange(n)
-        if p.shuffle:
-            rng = np.random.RandomState(p.random_state)
-            rng.shuffle(idx)
-        train_frac = _parse_pct(p.train, n)
-        train_idx = idx[:train_frac]
-        test_idx = idx[train_frac:]
-        m_train = np.zeros(n, dtype=bool)
-        m_test = np.zeros(n, dtype=bool)
-        m_train[train_idx] = True
-        m_test[test_idx] = True
-        return {"train": m_train, "test": m_test}
-    raise SpecError(f"partitions.by={p.by.value} is not yet supported in the MVP assembler")
+    if p.by is PartitionBy.INDEX:
+        return _mask_from_index_lists({"train": p.train, "test": p.test, "predict": p.predict}, n, source="partitions")
+    if p.by is PartitionBy.INDEX_FILE:
+        loaded = {
+            "train": _read_index_file(base_dir / p.train_file) if p.train_file else None,
+            "test": _read_index_file(base_dir / p.test_file) if p.test_file else None,
+            "predict": _read_index_file(base_dir / p.predict_file) if p.predict_file else None,
+        }
+        return _mask_from_index_lists(loaded, n, source="index file")
+    raise SpecError(f"partitions.by={p.by.value} is not supported by the assembler")
 
 
-def _parse_pct(spec_val: Any, n: int) -> int:
-    if isinstance(spec_val, str) and spec_val.endswith("%"):
-        return int(n * float(spec_val[:-1]) / 100)
-    if isinstance(spec_val, (int, float)):
-        return int(spec_val if spec_val > 1 else n * spec_val)
-    return int(n * 0.8)
+def _mask_from_index_lists(by_part: dict[str, Any], n: int, *, source: str) -> dict[str, np.ndarray]:
+    """Validate per-partition row-index lists and turn them into boolean masks.
+
+    Indices must be in [0, n), unique within a partition, and disjoint across
+    partitions; a row may belong to at most one partition (rows not listed
+    anywhere are simply omitted).
+    """
+    masks: dict[str, np.ndarray] = {}
+    seen: dict[int, str] = {}
+    for part, raw in by_part.items():
+        if raw is None:
+            continue
+        if not isinstance(raw, (list, tuple, np.ndarray)):
+            raise SpecError(f"{source}: '{part}' must be a list of row indices, got {type(raw).__name__}")
+        idx_list = [int(v) for v in raw]
+        if any(i < 0 or i >= n for i in idx_list):
+            raise SpecError(f"{source}: '{part}' contains out-of-range indices (n={n}): {[i for i in idx_list if i < 0 or i >= n]}")
+        if len(set(idx_list)) != len(idx_list):
+            raise SpecError(f"{source}: '{part}' contains duplicate indices")
+        for i in idx_list:
+            if i in seen and seen[i] != part:
+                raise SpecError(f"{source}: row {i} listed in both '{seen[i]}' and '{part}' (partitions must be disjoint)")
+            seen[i] = part
+        m = np.zeros(n, dtype=bool)
+        m[idx_list] = True
+        masks[part] = m
+    if not masks:
+        raise SpecError(f"{source}: no partition lists provided")
+    return masks
+
+
+def _read_index_file(path: Path) -> list[int]:
+    """Read a row-index list from a file. Accepts JSON arrays, CSV/TXT one-per-line, or comma-separated."""
+    if not path.exists():
+        raise SpecError(f"partitions.index_file: file not found: {path}")
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        return [int(v) for v in json.loads(text)]
+    # csv/txt: whitespace and/or comma separated; ignore blanks
+    tokens = [t.strip() for t in text.replace(",", "\n").splitlines() if t.strip()]
+    return [int(t) for t in tokens]
 
 
 # --------------------------------------------------------------------------- #
@@ -400,7 +500,7 @@ def assemble(spec: DatasetSpec, base_dir: str | Path = ".") -> AssembledDataset:
             assembled.blocks["train"] = block
         else:
             # split on the FINAL (post-join) frame so masks line up with the assembled rows
-            for part, mask in _split_partition_mask(combined_df, spec).items():
+            for part, mask in _split_partition_mask(combined_df, spec, base_dir).items():
                 assembled.blocks[part] = _slice_block(block, mask)
 
     assembled.audits = audits

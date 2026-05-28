@@ -155,7 +155,6 @@ class CategoricalMode(_StrEnum):
 class PartitionBy(_StrEnum):
     FILES = "files"
     COLUMN = "column"
-    PERCENTAGE = "percentage"
     INDEX = "index"
     INDEX_FILE = "index_file"
 

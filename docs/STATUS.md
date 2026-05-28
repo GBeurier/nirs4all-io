@@ -1,7 +1,14 @@
 # Status
 
 **Phase 1 (Python MVP) — COMPLETE & Codex-ACCEPTED** (2026-05-27).
-178 tests pass; ruff + mypy clean; parity-verified against the real `nirs4all`.
+200 tests pass; ruff + mypy clean; parity-verified against the real `nirs4all`.
+
+Post-acceptance additions (2026-05-28): `folds.column`, `variations`,
+`role: weights`, `partitions.by: index` / `index_file`, `selector: auto` at
+load time. Drop of `partitions.by: percentage` (and its `stratify` / `shuffle`
+/ `random_state` knobs) on the principle that `nirs4all-io` is a *loader, not a
+splitter*; all partition modes are now deterministic by construction. Updated
+deferred items live in [`ROADMAP.md`](ROADMAP.md).
 
 ## Per-epic
 
@@ -26,11 +33,14 @@
 
 ## Deferred (documented, not blocking)
 
-- **Brier/ECE calibration** (3.6) — needs a real vendor/domain-split corpus; current
-  scores are explicitly *uncalibrated* (triage/ranking only, Critique C5).
-- **Phase 2** (Rust core + `dag-ml-data`) — gated; see [`PHASE2_GATE.md`](PHASE2_GATE.md)
-  (needs `AxisKind::Wavenumber` + a connector-ownership ADR from the dag-ml owners).
-- **Cross-language goldens** (6.4) — Phase-2 gate.
+See [`ROADMAP.md`](ROADMAP.md) for the consolidated list. Highlights:
+
+- **Phase 2** (Rust core + `dag-ml-data` target) — gated externally; see
+  [`PHASE2_GATE.md`](PHASE2_GATE.md).
+- **SpectroDataset extension** for `observation_id` / `group_id` / `weights` as
+  first-class slots — out of scope here (host-side change on `nirs4all`).
+- **Inference calibration** (Brier/ECE, story 3.6) — needs a labelled corpus.
+- **Stratified percentage split** — intentionally rejected (loader ≠ splitter).
 
 ## Codex review trail
 

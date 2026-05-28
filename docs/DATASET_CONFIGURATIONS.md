@@ -96,15 +96,28 @@ Identity is kept **distinct** from per-source alignment keys and join keys.
 sample_index:
   by: row            # row (default) | id
   key: Sample_ID     # column (or [composite]) when by=id
-  observation_id: scan_id    # 📋 carried for dag-ml; not yet used at build
+  observation_id: scan_id    # 🟡 parsed for the dag-ml `SampleRelationTable`; not used at SpectroDataset materialization (see below)
   repetition_id: scan_id     # ✅ feeds set_repetition
-  group_id: site             # 📋 leakage group (dag-ml)
+  group_id: site             # 🟡 parsed for dag-ml leakage groups; not used at SpectroDataset materialization
 ```
 
 | `by` | Status | Meaning |
 |---|---|---|
 | `row` | ✅ | sample identity = row position (default) |
 | `id` | ✅ | sample identity = a key column; requires `key` |
+
+> **Why `observation_id` / `group_id` are 🟡** — These two fields are accepted
+> in the IR (and round-trip through JSON/YAML, schema-validated, surfaced by
+> `infer()`) because they are first-class concepts in the future `dag-ml-data`
+> target (`origin_id` ↔ `origin_sample_id` resolution and leakage groups). The
+> current `to_spectrodataset` materializer does **not** consume them: nirs4all's
+> `SpectroDataset` exposes `add_samples` / `add_targets` / `add_metadata` /
+> `set_repetition` / `set_folds` / `set_aggregate` -- but no first-class slot
+> for "observation" or "leakage group". Extending `SpectroDataset` to carry
+> them would be a host-side change; it is **out of scope for `nirs4all-io`**
+> (see [`ROADMAP.md`](ROADMAP.md)). In the meantime, store either field as a
+> regular metadata column (`role: metadata` on the source) and read it back
+> via `dataset.metadata({...})[<col>]`.
 
 **`infer()` detects the sample-id automatically** ✅: it scores each column by id-like
 name (`sample_id`/`id`/`name`/`code`/`*_id`/…) + uniqueness + dtype, sets
@@ -230,7 +243,7 @@ columns: { features: '0:-1', targets: -1 }
 | `{regex: "..."}` | ✅ | header regex (`re.search`) | `{regex: '^\d+$'}` |
 | `{dtype: "..."}` | ✅ | by inferred dtype: `numeric`/`string`/`datetime`/`bool` | `{dtype: string}` |
 | `"rest"` | ✅ | every column not yet assigned (**≤1 per source**) | `rest` |
-| `"auto"` / `{auto: {candidates: [...]}}` | 🟡 | inference decides — usable via `infer()` only, not a direct `load` spec | |
+| `"auto"` / `{auto: {candidates: [...]}}` | ✅ | role-aware deterministic heuristic at load time (`candidates` if any present; else by role: features→all unassigned numerics, targets→last unassigned numeric, metadata→all unassigned non-numerics, ignore→all unassigned). For nuanced choices run `infer()` and freeze the accepted plan. | |
 
 Rules: selectors must be **disjoint** (overlap → error) unless `strict_columns: false`
 (first-match-wins); **≤1 `rest`**; columns left unmatched with no `rest` → error
@@ -337,29 +350,33 @@ top level of a **legacy** dict and are folded into `params`. ✅
 
 ## 7. Partitions — `partitions` (split a combined input)
 
+`nirs4all-io` is a **loader, not a splitter**. Only modes that are deterministic
+by construction are supported -- the partition is fully determined by the spec
+itself (a column or an index list), never by a shuffle+cut. If you want a
+70/30 split, pre-compute the indices once and pass them as `by: index`, or do
+the split inside your pipeline's CV layer.
+
 ```yaml
 partitions:
-  by: column                 # column | percentage | index | index_file | files
+  by: column                 # column | index | index_file | files
   column: set
   train_values: [cal]
   test_values: [val]
   predict_values: []
   unknown_policy: train      # train | test | drop | error
-  train: "80%"               # percentage form (or index list / "0:80%")
-  test:  "20%"
-  shuffle: true
-  random_state: 0
-  stratify: y                # 📋 column split honors this; percentage stratify is basic
-  train_file: train_idx.csv  # index_file form
-  test_file:  test_idx.csv
+  train: [0, 1, 5, 7]        # index form: explicit row-index lists
+  test:  [2, 3, 4, 6]
+  predict: [8, 9]
+  train_file: train_idx.txt  # index_file form: each file holds one index per
+  test_file:  test_idx.txt   # line (or a JSON array, or comma-separated)
+  predict_file: predict.txt
 ```
 
 | `by` | Status | Meaning |
 |---|---|---|
 | `column` | ✅ | split on a column's values (`train_values`/`test_values`/`predict_values` + `unknown_policy`) |
-| `percentage` | ✅ | fractional split with `shuffle`/`random_state` |
-| `index` | 📋 | explicit row-index lists (schema-accepted; not materialized in the MVP) |
-| `index_file` | 📋 | row indices from a file (planned) |
+| `index` | ✅ | explicit row-index lists per partition (must be disjoint, in-range, no duplicates) |
+| `index_file` | ✅ | row-index lists read from `train_file` / `test_file` / `predict_file` (JSON array, one-per-line text, or comma-separated) |
 | `files` | ✅ (implicit) | use per-source `partition:` instead of a single combined source |
 
 > Train/test/val/predict as **separate files** is expressed by putting `partition:`
@@ -558,9 +575,9 @@ sources: [{ id: d, role: mixed, input: all.csv,
 partitions: { by: column, column: set, train_values: [cal], test_values: [val], unknown_policy: train }
 ```
 ```yaml
-# L.11 — percentage split (shuffled, reproducible)
+# L.11 — explicit row-index split (pre-computed; deterministic by construction)
 sources: [{ id: d, role: mixed, input: all.csv, columns: { features: '0:-1', targets: -1 } }]
-partitions: { by: percentage, train: '80%', shuffle: true, random_state: 0 }
+partitions: { by: index, train: [0, 1, 2, 3, 4, 5, 6], test: [7, 8, 9] }
 ```
 ```yaml
 # L.12 — predefined CV folds from a file
@@ -627,16 +644,17 @@ sources: [{ id: a, role: mixed, input: wide.csv, strict_columns: true,
 |---|---|---|
 | Inputs | dir, file, list, glob, dict, JSON/YAML, spec, plan, in-memory | RecordSet/SpectroDataset passthrough 🟡 |
 | Inference | structure, file roles+partitions (scored), column roles, axis, signal, task, params, **sample-id detection + per-sample y/metadata coverage audit + 1:1-vs-m:1 metadata** | scores uncalibrated (C5); abstention only on signal_type |
-| Selectors | positional, slice, names, name_range, regex, dtype, rest | `auto` 🟡 (via `infer` only) |
+| Selectors | positional, slice, names, name_range, regex, dtype, rest, **auto** (role-aware heuristic) | — |
 | Merge | concat_samples, concat_features, by_key, none | — |
 | Joins | 1:1, m:1, 1:m × complete/warn/drop/error; composite + virtual keys | — |
-| Partitions | column, percentage, per-source `partition` | index, index_file 📋 |
+| Partitions | column, **index**, **index_file**, per-source `partition` (deterministic by construction; no shuffle+cut at load time -- see §7) | — |
 | Folds | inline, file (csv/json/yaml/txt), column | — |
 | Params | delimiter/decimal/header/encoding/header_unit, NA policy (all), categorical, format | — |
 | Aggregation | repetition, aggregate (mean/median/vote/robust_mean) | — |
-| Formats | CSV/TSV/npy/npz/parquet/excel | matlab 🟡, vendor 🟡 (nirs4all-formats) |
+| Formats | CSV/TSV/npy/npz/parquet/excel; MATLAB + vendor (OPUS/JCAMP/SPC/ASD/SED/SIG/…) via `nirs4all-formats` (lazy import, `pip install nirs4all-io[formats]`) | — |
 | Weights | ✅ `role: weights` → `__sample_weight__` metadata column on the SpectroDataset | — |
 | Variations | ✅ pre-computed preprocessing variants (CSV/Parquet/...) attached to a feature source → named processings via `add_features()` | — |
+| Identity extensions for `dag-ml-data` | `sample_index.observation_id` / `group_id` are **parsed and carried in the IR** for the future Rust → `CoordinatorDataPlanEnvelope` adapter; the current `to_spectrodataset` materializer does **not** consume them (`SpectroDataset` lacks these slots -- extending it is intentionally out of scope, see [`ROADMAP.md`](ROADMAP.md)) | — |
 
 ---
 
