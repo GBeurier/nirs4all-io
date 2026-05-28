@@ -50,9 +50,9 @@ class SourceTable:
     header_unit: str
     origins: list[str] | None = None
     # Pre-loaded variation matrices for this (feature) source: rows align with
-    # df's original row order; columns will be sub-selected to the feature
-    # columns at extraction time.
-    variations: list[tuple[str, np.ndarray, list[str]]] = field(default_factory=list)
+    # df's original row order; columns are already aligned to the feature
+    # columns (either by name or positionally).
+    variations: list[tuple[str, np.ndarray]] = field(default_factory=list)
 
 
 @dataclass
@@ -206,8 +206,11 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
     # not shift positional selectors (e.g. `-1` keeps pointing at the last user
     # column, not at the row-idx sentinel). The column survives joins as any
     # other column and is used to re-align variations to the combined frame.
+    row_idx_name = _row_idx_col(source.id)
+    if row_idx_name in df.columns:
+        raise SpecError(f"source '{source.id}': reserved column name '{row_idx_name}' collides with a user-supplied column; rename it")
     df = df.copy()
-    df[_row_idx_col(source.id)] = np.arange(len(df), dtype=np.int64)
+    df[row_idx_name] = np.arange(len(df), dtype=np.int64)
     key = source.key if isinstance(source.key, list) else [source.key] if source.key else None
     partition = source.partition.value if source.partition else None
     variations = _load_variations(source, spec, base_dir, df, roles)
@@ -260,14 +263,20 @@ def _read_variation_frame(variation: VariationSpec, spec: DatasetSpec, source: S
     return pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
 
 
-def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, parent_df: pd.DataFrame, roles: dict[str, str]) -> list[tuple[str, np.ndarray, list[str]]]:
+def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, parent_df: pd.DataFrame, roles: dict[str, str]) -> list[tuple[str, np.ndarray]]:
     """Materialize a feature source's named preprocessing variants into arrays.
 
     Each variation must row-align with the parent source (post-merge) and provide
-    one column per parent *feature* column (matched by name when possible, else
-    positionally). The resulting (name, array, headers) tuples are later
-    re-indexed by ``__src_row_idx__`` so joins/partitions on the parent propagate
-    automatically to the variations.
+    one column per parent *feature* column. Two unambiguous modes are accepted:
+    (a) *full name match* -- every parent feature column is present in the
+    variation frame (vendor exports usually preserve wavelength headers); or
+    (b) *full positional* -- no parent feature header appears in the variation
+    frame and ``shape[1] == len(feature_cols)``. Anything between (partial name
+    match) raises rather than silently realigning, because a renamed/missing
+    column would otherwise be quietly swapped for an unrelated value column.
+
+    The resulting (name, array) tuples are later re-indexed by ``__src_row_idx__``
+    so joins/partitions on the parent propagate automatically to the variations.
     """
     if not source.variations:
         return []
@@ -277,7 +286,7 @@ def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, pare
     if not feature_cols:
         raise SpecError(f"source '{source.id}': has variations but no feature columns to attach them to")
     parent_n = len(parent_df)
-    out: list[tuple[str, np.ndarray, list[str]]] = []
+    out: list[tuple[str, np.ndarray]] = []
     seen: set[str] = set()
     for variation in source.variations:
         if variation.name in seen:
@@ -286,18 +295,19 @@ def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, pare
         vdf = _read_variation_frame(variation, spec, source, base_dir)
         if len(vdf) != parent_n:
             raise SpecError(f"source '{source.id}': variation '{variation.name}' has {len(vdf)} rows, expected {parent_n} (must row-align with the parent source)")
-        # prefer matching by feature column name (vendor exports often preserve
-        # wavelength headers); otherwise positionally consume the first N columns.
-        named = [c for c in feature_cols if c in vdf.columns]
-        if len(named) == len(feature_cols):
+        named = sum(1 for c in feature_cols if c in vdf.columns)
+        if named == len(feature_cols):
             arr = coerce_numeric(vdf[feature_cols])
-            headers = list(feature_cols)
+        elif named == 0 and vdf.shape[1] == len(feature_cols):
+            arr = coerce_numeric(vdf)
         else:
-            if vdf.shape[1] < len(feature_cols):
-                raise SpecError(f"source '{source.id}': variation '{variation.name}' has {vdf.shape[1]} columns, need at least {len(feature_cols)} to cover the parent's feature columns")
-            arr = coerce_numeric(vdf.iloc[:, : len(feature_cols)])
-            headers = list(feature_cols)
-        out.append((variation.name, arr, headers))
+            raise SpecError(
+                f"source '{source.id}': variation '{variation.name}' is ambiguous: "
+                f"{named}/{len(feature_cols)} parent feature columns matched by name "
+                f"and the frame has {vdf.shape[1]} columns. Either include all "
+                f"parent feature headers or supply exactly {len(feature_cols)} unnamed (positional) columns."
+            )
+        out.append((variation.name, arr))
     return out
 
 
@@ -437,7 +447,7 @@ def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: l
             if idx_col not in combined.columns:
                 raise SpecError(f"source '{ft.source_id}': row-index column '{idx_col}' lost during assembly; variations cannot be aligned")
             row_idx = combined[idx_col].to_numpy(dtype=np.int64)
-            for name, arr, _hdrs in ft.variations:
+            for name, arr in ft.variations:
                 src_processings.append((name, arr[row_idx, :]))
         block.processings.append(src_processings)
 
