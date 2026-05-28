@@ -351,9 +351,11 @@ checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 name = "nirs4all-io"
 version = "0.1.0-alpha.0"
 dependencies = [
+ "csv",
  "glob",
  "indexmap",
  "nirs4all-io-core",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
