@@ -10,6 +10,7 @@
 //! descriptions into this core (D-R4).
 
 pub mod canonical_json;
+pub mod conventions;
 pub mod pyfmt;
 pub mod spec;
 pub mod versions;
