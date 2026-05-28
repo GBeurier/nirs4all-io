@@ -108,10 +108,10 @@ def _validate_partitions(spec: DatasetSpec, errors: list[str]) -> None:
 
     if p.by == PartitionBy.COLUMN and not p.column:
         errors.append("partitions.by='column' requires 'column'")
-    if p.by == PartitionBy.PERCENTAGE and p.train is None and p.test is None:
-        errors.append("partitions.by='percentage' requires 'train' and/or 'test'")
-    if p.by == PartitionBy.INDEX_FILE and not (p.train_file or p.test_file):
-        errors.append("partitions.by='index_file' requires 'train_file' and/or 'test_file'")
+    if p.by == PartitionBy.INDEX and p.train is None and p.test is None and p.predict is None:
+        errors.append("partitions.by='index' requires at least one of 'train' / 'test' / 'predict' (list of row indices)")
+    if p.by == PartitionBy.INDEX_FILE and not (p.train_file or p.test_file or p.predict_file):
+        errors.append("partitions.by='index_file' requires at least one of 'train_file' / 'test_file' / 'predict_file'")
 
 
 def _validate_folds(spec: DatasetSpec, errors: list[str]) -> None:

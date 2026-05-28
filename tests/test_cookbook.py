@@ -23,10 +23,10 @@ CATALOGUE = {
     "merge:concat_samples", "merge:concat_features", "merge:by_key",
     "cardinality:1:1", "cardinality:m:1", "cardinality:1:m",
     "coverage:complete", "coverage:warn", "coverage:drop", "coverage:error",
-    "partition:column", "partition:percentage",
+    "partition:column", "partition:index", "partition:index_file",
     "folds:inline", "folds:file", "folds:column",
     "lookup", "composite_key",
-    "variations", "role:weights",
+    "variations", "role:weights", "selector:auto",
 }
 
 
@@ -133,10 +133,14 @@ def _cases():
     df["set"] = ["cal", "cal", "cal", "cal", "val", "val", "val", "val"]
     cases.append(("L10_column_split", {"all.csv": df}, {"sources": [{"id": "d", "role": "mixed", "input": "all.csv", "columns": [{"role": "features", "select": {"regex": r"^\d+$"}}, {"role": "targets", "select": ["y"]}, {"role": "metadata", "select": ["set"]}]}], "partitions": {"by": "column", "column": "set", "train_values": ["cal"], "test_values": ["val"]}}))
 
-    # L.11 — percentage split
+    # L.11 — explicit row-index split (deterministic by construction; no shuffle at load time)
     df = X6(10)
     df["y"] = np.arange(10.0)
-    cases.append(("L11_percentage", {"all.csv": df}, {"sources": [{"id": "d", "role": "mixed", "input": "all.csv", "columns": [{"role": "features", "select": {"regex": r"^\d+$"}}, {"role": "targets", "select": ["y"]}]}], "partitions": {"by": "percentage", "train": "70%", "shuffle": True, "random_state": 0}}))
+    cases.append(("L11_index", {"all.csv": df}, {"sources": [{"id": "d", "role": "mixed", "input": "all.csv", "columns": [{"role": "features", "select": {"regex": r"^\d+$"}}, {"role": "targets", "select": ["y"]}]}], "partitions": {"by": "index", "train": [0, 1, 2, 3, 4, 5, 6], "test": [7, 8, 9]}}))
+
+    # auto selector for targets (deterministic at load time: last numeric column)
+    df_auto = X6(6).assign(y=np.arange(6.0))
+    cases.append(("auto_targets", {"data.csv": df_auto}, {"sources": [{"id": "d", "role": "mixed", "input": "data.csv", "columns": [{"role": "targets", "select": "auto"}, {"role": "features", "select": "rest"}]}]}))
 
     # folds inline
     cases.append(("folds_inline", {"X.csv": X6(), "Y.csv": pd.DataFrame({"y": np.arange(6.0)})}, {"sources": [{"id": "x", "role": "features", "input": "X.csv"}, {"id": "y", "role": "targets", "input": "Y.csv", "join": {"to": "x", "how": "1:1"}}], "folds": {"inline": [{"train": [0, 1, 2, 3], "val": [4, 5]}]}}))
@@ -181,12 +185,26 @@ def test_folds_file_case(tmp_path):
     assert len(asm.folds) == 2
 
 
+def test_index_file_case(tmp_path):
+    # partitions:index_file needs index files written alongside
+    df = pd.DataFrame(np.random.rand(8, 6), columns=_wl())
+    df["y"] = np.arange(8.0)
+    df.to_csv(tmp_path / "all.csv", sep=";", index=False)
+    (tmp_path / "train_idx.txt").write_text("0\n1\n2\n3\n4\n", encoding="utf-8")
+    (tmp_path / "test_idx.txt").write_text("[5, 6, 7]\n", encoding="utf-8")
+    spec = {"sources": [{"id": "d", "role": "mixed", "input": "all.csv", "columns": [{"role": "features", "select": {"regex": r"^\d+$"}}, {"role": "targets", "select": ["y"]}]}], "partitions": {"by": "index_file", "train_file": "train_idx.txt", "test_file": "test_idx.txt"}}
+    asm = nio.load(spec, base_dir=tmp_path, target="assembled")
+    assert asm.blocks["train"].n_samples == 5
+    assert asm.blocks["test"].n_samples == 3
+
+
 def test_coverage_matrix_complete():
     """Every load-supported E.1/E.2 vocabulary element must be exercised (Epic 2.4 gate)."""
     covered: set[str] = set()
     for _id, _files, spec_dict in _cases():
         covered |= vocab_elements(DatasetSpec.from_dict(spec_dict))
-    # folds:file is exercised by test_folds_file_case
+    # folds:file + partition:index_file are exercised by their dedicated tests
     covered.add("folds:file")
+    covered.add("partition:index_file")
     missing = CATALOGUE - covered
     assert not missing, f"cookbook does not exercise these vocabulary elements: {sorted(missing)}"

@@ -90,12 +90,12 @@ DATASET_SPEC_SCHEMA: dict[str, Any] = {
         "partitions": {
             "type": "object",
             "properties": {
-                "by": {"enum": ["files", "column", "percentage", "index", "index_file"]},
+                "by": {"enum": ["files", "column", "index", "index_file"]},
                 "column": {"type": "string"},
                 "train_values": {"type": "array"}, "test_values": {"type": "array"}, "predict_values": {"type": "array"},
                 "unknown_policy": {"enum": ["train", "test", "drop", "error"]},
                 "train": {}, "test": {}, "predict": {},
-                "shuffle": {"type": "boolean"}, "random_state": {"type": ["integer", "null"]}, "stratify": {"type": "string"},
+                "train_file": {"type": "string"}, "test_file": {"type": "string"}, "predict_file": {"type": "string"},
             },
         },
         "folds": {"type": "object", "properties": {"inline": {"type": "array"}, "file": {"type": "string"}, "format": {"enum": ["auto", "csv", "json", "yaml", "txt"]}, "column": {"type": "string"}}},

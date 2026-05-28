@@ -338,7 +338,6 @@
           "enum": [
             "files",
             "column",
-            "percentage",
             "index",
             "index_file"
           ]
@@ -366,16 +365,13 @@
         "train": {},
         "test": {},
         "predict": {},
-        "shuffle": {
-          "type": "boolean"
+        "train_file": {
+          "type": "string"
         },
-        "random_state": {
-          "type": [
-            "integer",
-            "null"
-          ]
+        "test_file": {
+          "type": "string"
         },
-        "stratify": {
+        "predict_file": {
           "type": "string"
         }
       }

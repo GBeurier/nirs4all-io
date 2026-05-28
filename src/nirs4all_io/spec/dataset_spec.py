@@ -392,14 +392,14 @@ class PartitionsSpec:
     test_values: list[Any] = field(default_factory=list)
     predict_values: list[Any] = field(default_factory=list)
     unknown_policy: UnknownPolicy = UnknownPolicy.TRAIN
-    train: Any = None  # "80%" | index list | "0:80%"
+    # For `by: index`: row-index lists per partition (deterministic by construction).
+    train: Any = None
     test: Any = None
     predict: Any = None
+    # For `by: index_file`: paths to files containing one row-index per line (CSV/TXT/JSON).
     train_file: str | None = None
     test_file: str | None = None
-    shuffle: bool = True
-    random_state: int | None = None
-    stratify: str | None = None
+    predict_file: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict | None) -> PartitionsSpec | None:
@@ -417,9 +417,7 @@ class PartitionsSpec:
             predict=d.get("predict"),
             train_file=d.get("train_file"),
             test_file=d.get("test_file"),
-            shuffle=bool(d.get("shuffle", True)),
-            random_state=d.get("random_state"),
-            stratify=d.get("stratify"),
+            predict_file=d.get("predict_file"),
         )
 
     def to_dict(self) -> dict:
@@ -436,9 +434,7 @@ class PartitionsSpec:
                 "predict": self.predict,
                 "train_file": self.train_file,
                 "test_file": self.test_file,
-                "shuffle": None if self.shuffle else False,
-                "random_state": self.random_state,
-                "stratify": self.stratify,
+                "predict_file": self.predict_file,
             }
         )
 

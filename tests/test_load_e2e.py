@@ -92,15 +92,15 @@ def test_load_classic_folder_to_fake_spectrodataset(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Combined file + column roles + percentage split                             #
+# Combined file + column roles + explicit row-index split                     #
 # --------------------------------------------------------------------------- #
-def test_load_combined_file_with_percentage_split(tmp_path):
+def test_load_combined_file_with_index_split(tmp_path):
     df = pd.DataFrame(np.random.rand(10, 3), columns=["400", "401", "402"])
     df["y"] = np.arange(10.0)
     _csv(tmp_path / "all.csv", df)
     spec = {
         "sources": [{"id": "data", "role": "mixed", "input": "all.csv", "columns": {"features": "0:3", "targets": ["y"]}}],
-        "partitions": {"by": "percentage", "train": "70%", "shuffle": True, "random_state": 0},
+        "partitions": {"by": "index", "train": [0, 1, 2, 3, 4, 5, 6], "test": [7, 8, 9]},
     }
     asm = nio.load(spec, base_dir=tmp_path, target="assembled")
     assert asm.blocks["train"].X[0].shape == (7, 3)
@@ -212,7 +212,7 @@ def test_load_variations_become_processings(tmp_path):
 
 
 def test_load_variations_survive_partition_split(tmp_path):
-    """Variations must follow the parent's row reordering through a percentage split."""
+    """Variations must follow the parent's row reordering through an explicit index split."""
     wl = ["400", "401", "402"]
     raw = np.arange(30, dtype="float32").reshape(10, 3)
     snv = raw + 100.0  # easy-to-detect distinct values
@@ -222,13 +222,13 @@ def test_load_variations_survive_partition_split(tmp_path):
     _csv(tmp_path / "snv.csv", pd.DataFrame(snv, columns=wl))
     spec = {
         "sources": [{"id": "d", "role": "mixed", "input": "all.csv", "columns": [{"role": "features", "select": "0:3"}, {"role": "targets", "select": ["y"]}], "variations": [{"name": "snv", "input": "snv.csv"}]}],
-        "partitions": {"by": "percentage", "train": "70%", "shuffle": False},
+        "partitions": {"by": "index", "train": [0, 1, 2, 3, 4, 5, 6], "test": [7, 8, 9]},
     }
     ds = nio.load(spec, base_dir=tmp_path, target="spectrodataset", spectro_dataset_cls=FakeSpectroDataset)
     # the variation array is added once with the concatenated train+test rows in their final order
     assert len(ds.features_calls) == 1
     arr, _names, _src = ds.features_calls[0]
-    # snv values are raw+100; first row in concatenated order = train row 0 = raw[0] -> snv[0] = 100,101,102
+    # train rows 0..6 come first, then test rows 7..9; snv[0] follows row 0
     np.testing.assert_allclose(arr[0], snv[0], rtol=1e-5)
     assert arr.shape == (10, 3)
 
