@@ -19,10 +19,12 @@ deferred items live in [`ROADMAP.md`](ROADMAP.md).
 | 8 | Rust core+facade port — `resolve→infer→configure→materialize` **byte-identical** to Python (`to_spec`/`infer`/assembled goldens) | ✅ + 2 Codex |
 | 9 | C ABI `n4io_*` (status/error model, opaque context, ABI versioning) + symbol governance + `nirs4all-io-cli` | ✅ + Codex (+4 fixes) |
 | 10 | dag-ml-data emit (`AssembledDataset`→`CoordinatorDataPlanEnvelope`) in the workspace-excluded `nirs4all-io-dagml`; validated by **both** dag-ml CLIs | ✅ + Codex (+3 fixes) |
-| 11 | Bindings: pyo3 (tested), wasm (tested), R (tested), MATLAB/Octave (CI-gated). Import-boundary green | ✅ + Codex (+1 fix) — *pyo3 lazy SpectroDataset adapter remains (12.1)* |
+| 11 | Bindings: pyo3 (tested), wasm (tested), R (tested), MATLAB/Octave (CI-gated). Import-boundary green | ✅ + Codex (+1 fix) |
+| 12.1 | **Direct parity oracle**: the pyo3 binding builds a `SpectroDataset` via the lazy adapter; `tests/test_parity.py` proves Rust→SpectroDataset X/y/task/headers ≡ `nirs4all.DatasetConfigs` (allclose). CI: `parity-oracle.yml` (ecosystem-gated) | ✅ |
+| 12.2 | Cookbook coverage gate in Rust — all 28 vocabulary elements driven through `assemble()` (`crates/nirs4all-io/tests/cookbook.rs`) | ✅ |
+| 12.3 | Cross-language goldens: pyo3 binding `to_spec`/`infer` byte-identical to the contract goldens | ✅ (binding) |
 | 12.5 | Property/fuzz tests (proptest) + `float_roundtrip` (correctly-rounded JSON float parse, matches CPython) | ✅ + Codex |
-| 12.1 | Direct parity oracle: Rust→SpectroDataset ≡ `nirs4all.DatasetConfigs` (transitively covered today via byte goldens × Python `test_parity`) | 📋 remaining |
-| 12.2 / 12.3 / 12.6 / 12.7 | Rust cookbook coverage gate; cross-language goldens CI (binding workflows partial); release pipelines; docs + relegate Python MVP | 📋 remaining |
+| 12.4 / 12.6 / 12.7 | Cross-binding behavioral-parity harness (smoke today); release pipelines (cibuildwheel / R / C-ABI archive / npm); Sphinx docs + relegate the Python MVP (kept as the dev-oracle for byte goldens + `test_parity`) | 📋 remaining (packaging/docs; not validation) |
 
 ## Per-epic
 
