@@ -131,6 +131,14 @@ unsafe fn set_error(ctx: *mut n4io_context_t, msg: &str) {
     }
 }
 
+/// Reset the context error buffer (called at entry so a successful call leaves
+/// it empty, per the ABI contract — never reports a stale message on `N4IO_OK`).
+unsafe fn clear_error(ctx: *mut n4io_context_t) {
+    if !ctx.is_null() {
+        (*ctx).last_error = CString::default();
+    }
+}
+
 unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
     if ptr.is_null() {
         return None;
@@ -138,22 +146,36 @@ unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
     CStr::from_ptr(ptr).to_str().ok()
 }
 
-fn parse_conventions(json: Option<&str>) -> Result<Option<Vec<String>>, String> {
-    match json {
-        None => Ok(None),
-        Some(s) if s.trim().is_empty() => Ok(None),
-        Some(s) => {
-            let v: Value = serde_json::from_str(s).map_err(|e| format!("conventions JSON: {e}"))?;
-            match v {
-                Value::Null => Ok(None),
-                Value::Array(a) => Ok(Some(
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(str::to_string))
-                        .collect(),
-                )),
-                _ => Err("conventions must be a JSON array of strings or null".into()),
-            }
-        }
+/// Collect a JSON array of strings, rejecting any non-string element. `what`
+/// names the field for the error message.
+fn string_array(values: &[Value], what: &str) -> Result<Vec<String>, String> {
+    values
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| format!("{what} must contain only strings"))
+        })
+        .collect()
+}
+
+/// Parse the `conventions_json` argument directly from its pointer so that a
+/// non-null but non-UTF-8 buffer is rejected (distinct from an omitted pointer).
+unsafe fn parse_conventions(ptr: *const c_char) -> Result<Option<Vec<String>>, String> {
+    if ptr.is_null() {
+        return Ok(None);
+    }
+    let s = CStr::from_ptr(ptr)
+        .to_str()
+        .map_err(|_| "conventions_json is not UTF-8".to_string())?;
+    if s.trim().is_empty() {
+        return Ok(None);
+    }
+    let v: Value = serde_json::from_str(s).map_err(|e| format!("conventions JSON: {e}"))?;
+    match v {
+        Value::Null => Ok(None),
+        Value::Array(a) => Ok(Some(string_array(&a, "conventions")?)),
+        _ => Err("conventions must be a JSON array of strings or null".into()),
     }
 }
 
@@ -161,11 +183,7 @@ fn input_from_json(input_json: &str) -> Result<Input, String> {
     let v: Value = serde_json::from_str(input_json).map_err(|e| format!("input JSON: {e}"))?;
     match v {
         Value::String(s) => Ok(Input::Path(s)),
-        Value::Array(a) => Ok(Input::Paths(
-            a.iter()
-                .filter_map(|x| x.as_str().map(str::to_string))
-                .collect(),
-        )),
+        Value::Array(a) => Ok(Input::Paths(string_array(&a, "input file list")?)),
         Value::Object(_) => Ok(Input::Spec(v)),
         _ => Err("input must be a JSON object (spec), string (path), or array (file list)".into()),
     }
@@ -199,7 +217,9 @@ pub unsafe extern "C" fn n4io_to_spec(
     conventions_json: *const c_char,
     out: *mut *mut c_char,
 ) -> n4io_status_t {
+    clear_error(ctx);
     if out.is_null() {
+        set_error(ctx, "out pointer is null");
         return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
     }
     *out = std::ptr::null_mut();
@@ -207,7 +227,7 @@ pub unsafe extern "C" fn n4io_to_spec(
         set_error(ctx, "input_json is null or not UTF-8");
         return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
     };
-    let conv = match parse_conventions(cstr_to_str(conventions_json)) {
+    let conv = match parse_conventions(conventions_json) {
         Ok(c) => c,
         Err(e) => {
             set_error(ctx, &e);
@@ -248,7 +268,9 @@ pub unsafe extern "C" fn n4io_infer(
     conventions_json: *const c_char,
     out: *mut *mut c_char,
 ) -> n4io_status_t {
+    clear_error(ctx);
     if out.is_null() {
+        set_error(ctx, "out pointer is null");
         return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
     }
     *out = std::ptr::null_mut();
@@ -256,7 +278,7 @@ pub unsafe extern "C" fn n4io_infer(
         set_error(ctx, "input_json is null or not UTF-8");
         return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
     };
-    let conv = match parse_conventions(cstr_to_str(conventions_json)) {
+    let conv = match parse_conventions(conventions_json) {
         Ok(c) => c,
         Err(e) => {
             set_error(ctx, &e);
@@ -303,6 +325,7 @@ pub unsafe extern "C" fn n4io_validate(
     ctx: *mut n4io_context_t,
     spec_json: *const c_char,
 ) -> n4io_status_t {
+    clear_error(ctx);
     let Some(spec_json) = cstr_to_str(spec_json) else {
         set_error(ctx, "spec_json is null or not UTF-8");
         return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;

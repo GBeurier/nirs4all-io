@@ -194,3 +194,71 @@ fn null_and_malformed_arguments_are_rejected() {
         n4io_context_destroy(ctx);
     }
 }
+
+#[test]
+fn file_list_rejects_non_string_entries() {
+    unsafe {
+        let mut ctx: *mut n4io_context_t = std::ptr::null_mut();
+        n4io_context_create(&mut ctx);
+        let (st, out) = call2(n4io_to_spec, ctx, r#"["X.csv", 42]"#);
+        assert_eq!(st, n4io_status_t::N4IO_ERR_INVALID_ARGUMENT);
+        assert!(out.is_none());
+        assert!(last_error(ctx).contains("input file list"));
+        n4io_context_destroy(ctx);
+    }
+}
+
+#[test]
+fn non_utf8_conventions_are_rejected() {
+    unsafe {
+        let mut ctx: *mut n4io_context_t = std::ptr::null_mut();
+        n4io_context_create(&mut ctx);
+        let input = CString::new("\"x\"").unwrap();
+        // a non-null but non-UTF-8 conventions buffer must NOT be treated as omitted
+        let bad_conv = CString::new(vec![0xff_u8, 0xfe_u8]).unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let st = n4io_to_spec(ctx, input.as_ptr(), bad_conv.as_ptr(), &mut out);
+        assert_eq!(st, n4io_status_t::N4IO_ERR_INVALID_ARGUMENT);
+        assert!(out.is_null());
+        assert!(last_error(ctx).contains("not UTF-8"));
+        n4io_context_destroy(ctx);
+    }
+}
+
+#[test]
+fn null_out_pointer_populates_error() {
+    unsafe {
+        let mut ctx: *mut n4io_context_t = std::ptr::null_mut();
+        n4io_context_create(&mut ctx);
+        let input = CString::new("\"x\"").unwrap();
+        let st = n4io_to_spec(ctx, input.as_ptr(), std::ptr::null(), std::ptr::null_mut());
+        assert_eq!(st, n4io_status_t::N4IO_ERR_INVALID_ARGUMENT);
+        assert!(last_error(ctx).contains("out pointer is null"));
+        n4io_context_destroy(ctx);
+    }
+}
+
+#[test]
+fn success_clears_stale_error() {
+    unsafe {
+        let mut ctx: *mut n4io_context_t = std::ptr::null_mut();
+        n4io_context_create(&mut ctx);
+        // first a failure populates the buffer
+        let bad = CString::new(r#"{"partitions": {"by": "random"}}"#).unwrap();
+        assert_eq!(
+            n4io_validate(ctx, bad.as_ptr()),
+            n4io_status_t::N4IO_ERR_SPEC
+        );
+        assert!(!last_error(ctx).is_empty());
+        // a subsequent successful call must clear it (never report a stale message on OK)
+        let path_json = serde_json::to_string(&corpus_case("train_test")).unwrap();
+        let (st, _) = call2(n4io_to_spec, ctx, &path_json);
+        assert_eq!(st, n4io_status_t::N4IO_OK, "err: {}", last_error(ctx));
+        assert_eq!(
+            last_error(ctx),
+            "",
+            "OK path must leave an empty error buffer"
+        );
+        n4io_context_destroy(ctx);
+    }
+}
