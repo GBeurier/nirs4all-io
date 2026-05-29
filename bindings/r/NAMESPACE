@@ -1,0 +1,5 @@
+useDynLib(nirs4allio, .registration = TRUE)
+export(n4io_to_spec)
+export(n4io_infer)
+export(n4io_validate)
+export(n4io_abi_version)

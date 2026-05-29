@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+name: Octave binding
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Octave
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends octave liboctave-dev
+      - name: Build mex + smoke
+        run: bash bindings/matlab/build_and_test.sh

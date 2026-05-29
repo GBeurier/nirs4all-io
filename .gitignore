@@ -25,6 +25,12 @@ docs/_build/
 **/*.rs.bk
 Cargo.lock.orig
 
+# Native binding build artifacts (R MEX/.Call compiles in src/; wasm pkg self-ignores)
+bindings/r/src/*.o
+bindings/r/src/*.so
+bindings/matlab/*.mex
+bindings/matlab/*.o
+
 # OS
 .DS_Store
 Thumbs.db
