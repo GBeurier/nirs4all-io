@@ -39,7 +39,12 @@ nirs4all-io = { path = "crates/nirs4all-io" }
 # JSON therefore sorts object keys EXPLICITLY (see canonical_json.rs) rather than
 # relying on the map type.
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order"] }
+# preserve_order: input map order mirrors Python dicts (canonical_json sorts keys
+# explicitly). float_roundtrip: serde_json's default float parser is only
+# 1-ULP-correct, so re-parsing canonical JSON could diverge from CPython's json
+# (and std parse) on float-bearing values; this makes parsing correctly-rounded,
+# matching Python for cross-language parity (emit/ryu is unaffected).
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
 thiserror = "2.0"
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
