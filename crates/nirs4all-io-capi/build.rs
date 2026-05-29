@@ -19,6 +19,19 @@ fn main() {
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed={}", config_path.display());
 
+    // On Linux, restrict the cdylib's exported symbols to the public `n4io_*`
+    // surface via a GNU ld version script (belt-and-suspenders: Rust already
+    // exports only `#[no_mangle]` symbols). macOS/Windows rely on that default,
+    // asserted by the ABI-check CI. cdylib-link-arg applies only to cdylibs.
+    let version_script = crate_dir.join("abi").join("version_script.map");
+    println!("cargo:rerun-if-changed={}", version_script.display());
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!(
+            "cargo:rustc-cdylib-link-arg=-Wl,--version-script={}",
+            version_script.display()
+        );
+    }
+
     if !config_path.exists() {
         eprintln!(
             "warning: cbindgen.toml not found at {}; skipping header regeneration",

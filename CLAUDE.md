@@ -129,8 +129,10 @@ adapter is testable with no nirs4all installed (see `test_load_e2e.py`).
 
 ## Gotchas
 
-- **There is no CLI.** `pyproject.toml` declares a `nirs4all-io = "nirs4all_io.cli:main"`
-  console-script, but `cli.py` does not exist — the entry point is dead. The API is Python-only.
+- **The Python package has no CLI; the CLI is the Rust binary.** The Phase-2 Rust workspace
+  (`crates/nirs4all-io-cli`) ships the `nirs4all-io` binary (`infer` / `to-spec` / `validate` /
+  `load` / `emit-dag-ml-data`); the dead `nirs4all_io.cli:main` console-script entry was removed
+  from `pyproject.toml`. The Python surface is library-only (`nio.infer` / `nio.load` / `nio.to_spec`).
 - **YAML round-trips lists, not tuples** — specs are dict/JSON/YAML-authorable and stay `str`-enum
   clean precisely so they survive serialization; don't put tuples in a spec.
 - The repo is a clean tree: **no dead/deprecated code, no backward-compat shims.** Remove rather than

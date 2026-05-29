@@ -52,9 +52,6 @@ dev = [
     "nirs4all-formats",
 ]
 
-[project.scripts]
-nirs4all-io = "nirs4all_io.cli:main"
-
 [project.urls]
 Homepage = "https://github.com/GBeurier/nirs4all-io"
 Repository = "https://github.com/GBeurier/nirs4all-io"
