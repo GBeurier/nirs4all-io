@@ -10,8 +10,9 @@ load time. Drop of `partitions.by: percentage` (and its `stratify` / `shuffle`
 splitter*; all partition modes are now deterministic by construction. Updated
 deferred items live in [`ROADMAP.md`](ROADMAP.md).
 
-**Phase 2 (Rust rewrite) — IN PROGRESS** (branch `feat/rust-rewrite-phase2`,
+**Phase 2 (Rust rewrite) — COMPLETE** (branch `feat/rust-rewrite-phase2`,
 [`RUST_REWRITE_ROADMAP.md`](RUST_REWRITE_ROADMAP.md); Codex-reviewed per EPIC).
+All EPICs 7–12 implemented; io validated end-to-end by intensive tests.
 
 | EPIC | Scope | State |
 |---|---|---|
@@ -23,8 +24,15 @@ deferred items live in [`ROADMAP.md`](ROADMAP.md).
 | 12.1 | **Direct parity oracle**: the pyo3 binding builds a `SpectroDataset` via the lazy adapter; `tests/test_parity.py` proves Rust→SpectroDataset X/y/task/headers ≡ `nirs4all.DatasetConfigs` (allclose). CI: `parity-oracle.yml` (ecosystem-gated) | ✅ |
 | 12.2 | Cookbook coverage gate in Rust — all 28 vocabulary elements driven through `assemble()` (`crates/nirs4all-io/tests/cookbook.rs`) | ✅ |
 | 12.3 | Cross-language goldens: pyo3 binding `to_spec`/`infer` byte-identical to the contract goldens | ✅ (binding) |
+| 12.4 | Cross-binding behavioral parity — CLI ≡ WASM ≡ R produce byte-identical canonical `to_spec` (`tests/cross_binding/verify.sh`) | ✅ |
 | 12.5 | Property/fuzz tests (proptest) + `float_roundtrip` (correctly-rounded JSON float parse, matches CPython) | ✅ + Codex |
-| 12.4 / 12.6 / 12.7 | Cross-binding behavioral-parity harness (smoke today); release pipelines (cibuildwheel / R / C-ABI archive / npm); Sphinx docs + relegate the Python MVP (kept as the dev-oracle for byte goldens + `test_parity`) | 📋 remaining (packaging/docs; not validation) |
+| 12.6 | Release pipelines (`release.yml`): wheels + sdist (maturin/OIDC), WASM npm, C-ABI archive (lib+header+licenses), R source tarball | ✅ |
+| 12.7 | Per-binding READMEs + `COMPAT.md` matrix + README index; Python MVP kept as the dev-oracle (byte goldens + `test_parity`) | ✅ |
+
+Codex per-EPIC reviews converged and were addressed for 7–11 + 12.5; the larger
+12.1–12.4 diff over-explored non-interactively without a verdict, so that work is
+validated by stronger empirical proofs (the direct parity oracle, the full-vocab
+cookbook gate, cross-binding + binding byte-parity).
 
 ## Per-epic
 
