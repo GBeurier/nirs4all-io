@@ -55,6 +55,33 @@ fn sanitize(raw: &str, fallback: &str) -> String {
     s
 }
 
+/// Map a raw repetition value to a stable, unique dag-ml-data sample identifier.
+/// The same raw always maps to the same id; distinct raw values that sanitize to
+/// the same id are disambiguated with a numeric suffix rather than silently
+/// merged (e.g. `A/B` and `A_B`, or two long ids sharing the first 128 bytes).
+fn unique_sample_id(
+    raw: &str,
+    assigned: &mut BTreeMap<String, String>,
+    taken: &mut BTreeSet<String>,
+) -> String {
+    if let Some(id) = assigned.get(raw) {
+        return id.clone();
+    }
+    let base = sanitize(raw, "sample");
+    let mut candidate = base.clone();
+    let mut n = 1;
+    while taken.contains(&candidate) {
+        n += 1;
+        let suffix = format!("_{n}");
+        let mut head = base.clone();
+        head.truncate(128usize.saturating_sub(suffix.len()));
+        candidate = format!("{head}{suffix}");
+    }
+    taken.insert(candidate.clone());
+    assigned.insert(raw.to_string(), candidate.clone());
+    candidate
+}
+
 fn signal_kind(signal: &str) -> SignalKind {
     match signal.to_ascii_lowercase().as_str() {
         "absorbance" => SignalKind::Absorbance,
@@ -109,11 +136,16 @@ pub fn to_dag_ml_data(
             "cannot emit dag-ml-data: dataset has no partitions",
         ));
     };
-    if assembled.n_sources == 0 || b0.x.is_empty() {
+    if b0.x.is_empty() {
         return Err(SpecError::new(
             "cannot emit dag-ml-data: dataset has no feature source",
         ));
     }
+    // Logical feature sources = X matrices per partition block, NOT
+    // `assembled.n_sources` (which counts partition source-tables — a train/test
+    // split is ONE logical source spread across blocks, and using the table count
+    // would emit a phantom 0-feature source + a bogus join).
+    let n_sources = b0.x.len();
 
     // --- sample / observation identity across all partitions ---
     // Use the repetition key (a leakage unit) iff it is present and aligned in
@@ -131,6 +163,9 @@ pub fn to_dag_ml_data(
     let mut sample_ids: Vec<SampleId> = Vec::new();
     let mut sample_seen: BTreeSet<String> = BTreeSet::new();
     let mut obs_per_sample: BTreeMap<String, usize> = BTreeMap::new();
+    // raw repetition value -> assigned (collision-disambiguated) sample id.
+    let mut sample_id_for_raw: BTreeMap<String, String> = BTreeMap::new();
+    let mut taken_sample_ids: BTreeSet<String> = BTreeSet::new();
     let mut rows: Vec<SampleRelation> = Vec::new();
     let mut global = 0usize;
     for b in assembled.blocks.values() {
@@ -146,7 +181,7 @@ pub fn to_dag_ml_data(
         };
         for r in 0..b.n_samples {
             let (observation, sample, group, repetition) = if let Some(rv) = &rep_vals {
-                let key = sanitize(&rv[r], "sample");
+                let key = unique_sample_id(&rv[r], &mut sample_id_for_raw, &mut taken_sample_ids);
                 let n = obs_per_sample.entry(key.clone()).or_insert(0);
                 let observation = format!("{key}.obs{n}");
                 let repetition = format!("rep.{n}");
@@ -181,9 +216,9 @@ pub fn to_dag_ml_data(
     let n_samples = sample_ids.len();
 
     // --- sources (each X source → a rank-2 [sample, feature] representation) ---
-    let mut sources = Vec::with_capacity(assembled.n_sources);
-    for k in 0..assembled.n_sources {
-        let n_features = b0.x.get(k).map(|m| m.n_cols).unwrap_or(0);
+    let mut sources = Vec::with_capacity(n_sources);
+    for k in 0..n_sources {
+        let n_features = b0.x[k].n_cols;
         let headers = b0.feature_headers.get(k).cloned().unwrap_or_default();
         let unit = b0.header_units.get(k).cloned().unwrap_or_default();
         let signal = b0.signal_types.get(k).and_then(Clone::clone);
@@ -332,4 +367,24 @@ pub fn to_dag_ml_data(
         Some(SampleRelationTable { rows })
     };
     CoordinatorDataPlanEnvelope::from_parts(&schema, plan, relations.as_ref()).map_err(err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_sample_id_disambiguates_sanitization_collisions() {
+        let mut assigned = BTreeMap::new();
+        let mut taken = BTreeSet::new();
+        // `A/B` sanitizes to `A_B`, which equals the sanitization of `A_B`.
+        let a = unique_sample_id("A/B", &mut assigned, &mut taken);
+        let b = unique_sample_id("A_B", &mut assigned, &mut taken);
+        assert_ne!(
+            a, b,
+            "distinct raw values must not merge into one sample id"
+        );
+        // the same raw value is stable across calls
+        assert_eq!(a, unique_sample_id("A/B", &mut assigned, &mut taken));
+    }
 }

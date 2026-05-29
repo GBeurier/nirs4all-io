@@ -56,6 +56,19 @@ fn emits_valid_envelopes_for_corpus() {
 }
 
 #[test]
+fn partitioned_dataset_is_one_logical_source() {
+    // train/test is ONE logical X source spread across partition blocks — not
+    // two — so the plan has a single materialize step and no phantom join.
+    let envelope = emit("train_test");
+    assert_eq!(
+        envelope.plan.steps.len(),
+        1,
+        "one source => one materialize step"
+    );
+    assert_eq!(envelope.plan.output_representation.as_str(), "src_0_native");
+}
+
+#[test]
 fn emit_is_deterministic() {
     // Same input → identical envelope (fingerprints are content-derived).
     assert_eq!(
