@@ -44,7 +44,7 @@ pub struct PartitionBlock {
     pub processings: Vec<Vec<(String, Matrix)>>,
     pub y: Option<Matrix>,
     pub y_headers: Vec<String>,
-    pub y_categorical: IndexMap<String, Vec<String>>,
+    pub y_categorical: IndexMap<String, Value>,
     pub metadata: Option<Frame>,
     pub weights: Option<Vec<f32>>,
     pub weights_header: Option<String>,
@@ -707,7 +707,13 @@ fn join_onto(
     row_align(combined, t, &primary.source_id)
 }
 
-/// column -> (role, owning_source_id), mirroring `_collect_roles`.
+/// column -> (role, owning_source_id), mirroring `_collect_roles` verbatim.
+///
+/// Edge case (reproduced from Python for parity): if a non-primary source's role
+/// column name collides with a bare (unassigned/key) column already in
+/// `combined`, the bare name is recorded even though the join suffixed the
+/// source's column to `name__<source>`. This can mis-own the column — but it is
+/// the Python behavior, so it stays for byte/parity fidelity; do not "fix" here.
 fn collect_roles(
     combined: &Frame,
     tables: &IndexMap<&String, &SourceTable>,
@@ -823,7 +829,7 @@ fn assemble_block(
             .map(|c| c.value().to_string())
             .unwrap_or_else(|| "auto".into());
         let mut y_cols: Vec<Vec<f64>> = Vec::new();
-        let mut cats: IndexMap<String, Vec<String>> = IndexMap::new();
+        let mut cats: IndexMap<String, Value> = IndexMap::new();
         for c in &target_cols {
             let (enc, mapping) = encode_categorical(combined.column(c).unwrap(), &mode);
             y_cols.push(enc);
@@ -879,8 +885,9 @@ fn assemble_block(
 }
 
 /// `encode_categorical`: factorize an object target when `auto` + more NaNs under
-/// numeric coercion; else numeric coercion (f64).
-fn encode_categorical(col: &Column, mode: &str) -> (Vec<f64>, Option<Vec<String>>) {
+/// numeric coercion; else numeric coercion (f64). The mapping (when categorical)
+/// is `{"categories": [...]}`, matching the Python IR.
+fn encode_categorical(col: &Column, mode: &str) -> (Vec<f64>, Option<Value>) {
     let numeric: Vec<f64> = col.values.iter().map(Cell::to_numeric).collect();
     let is_objectish = !col.is_numeric_dtype();
     let numeric_na = numeric.iter().filter(|v| v.is_nan()).count();
@@ -905,7 +912,7 @@ fn encode_categorical(col: &Column, mode: &str) -> (Vec<f64>, Option<Vec<String>
             };
             codes.push(code as f64);
         }
-        (codes, Some(categories))
+        (codes, Some(serde_json::json!({ "categories": categories })))
     } else {
         (numeric, None)
     }
@@ -1099,7 +1106,19 @@ fn mask_from_index_lists(
                 "{source}: '{part}' must be a list of row indices"
             )));
         };
-        let idx_list: Vec<i64> = arr.iter().filter_map(|v| v.as_i64()).collect();
+        // Python `[int(v) for v in raw]`: coerce ints/floats/int-strings, raise
+        // on anything else (don't silently drop, which would omit requested rows).
+        let idx_list: Vec<i64> = arr
+            .iter()
+            .map(|v| {
+                nirs4all_io_core::pyfmt::py_int(v).ok_or_else(|| {
+                    SpecError::new(format!(
+                        "{source}: '{part}' contains a non-integer index {}",
+                        nirs4all_io_core::pyfmt::py_repr(v)
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?;
         if idx_list.iter().any(|&i| i < 0 || i >= n as i64) {
             return Err(SpecError::new(format!(
                 "{source}: '{part}' contains out-of-range indices (n={n})"
@@ -1236,4 +1255,50 @@ fn attach_folds(
         assembled.folds = parse_fold_file(&base_dir.join(file), folds.format.value())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::materialize::frame::{Cell, Column};
+    use serde_json::json;
+
+    #[test]
+    fn categorical_mapping_is_categories_dict() {
+        // string target auto-encoded -> mapping is {"categories": [...]} (Python IR shape).
+        let col = Column::from_cells(
+            "class",
+            vec![
+                Cell::Str("a".into()),
+                Cell::Str("b".into()),
+                Cell::Str("a".into()),
+            ],
+        );
+        let (codes, mapping) = encode_categorical(&col, "auto");
+        assert_eq!(codes, vec![0.0, 1.0, 0.0]);
+        assert_eq!(mapping, Some(json!({"categories": ["a", "b"]})));
+    }
+
+    #[test]
+    fn float_target_has_no_mapping() {
+        let col = Column::from_cells("y", vec![Cell::Float(12.5), Cell::Float(8.3)]);
+        let (vals, mapping) = encode_categorical(&col, "auto");
+        assert_eq!(vals, vec![12.5, 8.3]);
+        assert_eq!(mapping, None);
+    }
+
+    #[test]
+    fn index_partition_coerces_and_rejects() {
+        // Python int(): "2" and 3.0 coerce; "3.5" raises.
+        let train = json!([0, 1, "2"]);
+        let test = json!([3.0, 4]);
+        let by = [("train", &train), ("test", &test)];
+        let masks = mask_from_index_lists(&by, 5, "partitions").unwrap();
+        assert_eq!(masks["train"], vec![true, true, true, false, false]);
+        assert_eq!(masks["test"], vec![false, false, false, true, true]);
+
+        let bad_v = json!(["3.5"]);
+        let bad = [("train", &bad_v)];
+        assert!(mask_from_index_lists(&bad, 5, "partitions").is_err());
+    }
 }
