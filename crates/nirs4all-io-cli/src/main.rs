@@ -66,10 +66,17 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Emit a dag-ml-data CoordinatorDataPlanEnvelope (Phase 2 gated).
+    /// Emit a dag-ml-data CoordinatorDataPlanEnvelope (needs `--features dag-ml-data`).
     EmitDagMlData {
+        /// Data path(s) to resolve via conventions.
         #[arg(required = true)]
         inputs: Vec<String>,
+        /// Convention profile to match (repeatable). Default: nirs4all-classic.
+        #[arg(long = "convention", short = 'c')]
+        conventions: Vec<String>,
+        /// Override the dataset name.
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 
@@ -153,10 +160,15 @@ fn main() -> Result<()> {
             .map_err(|e| anyhow!(e.message))?;
             emit(&assembled.to_summary_value())
         }
-        Command::EmitDagMlData { .. } => {
-            bail!(
-                "emit-dag-ml-data is Phase 2 gated (see docs/PHASE2_GATE.md); not yet implemented"
-            )
-        }
+        // The emit depends on the dag-ml-data sibling crate, which cannot be an
+        // optional dependency of a workspace member without breaking standalone
+        // resolution (an absent path dep fails `cargo build` even when the
+        // feature is off). It therefore lives in the workspace-excluded ecosystem
+        // crate `crates/nirs4all-io-dagml` (its own `emit-dagml` binary).
+        Command::EmitDagMlData { .. } => bail!(
+            "emit-dag-ml-data lives in the ecosystem crate `nirs4all-io-dagml` (it depends on the \
+             dag-ml-data sibling). Run it from the ecosystem tree: \
+             `cargo run --manifest-path crates/nirs4all-io-dagml/Cargo.toml --bin emit-dagml -- <input>`"
+        ),
     }
 }

@@ -9,9 +9,13 @@ members = [
 ]
 # Language bindings build with their own toolchains (maturin / cargo-ndk /
 # wasm-pack) and are intentionally excluded from the cargo workspace.
+# nirs4all-io-dagml is the dag-ml-data emit bridge: it path-depends on the
+# dag-ml-data sibling, so it is excluded to keep standalone workspace resolution
+# (and CI) working without the ecosystem tree present (EPIC 10).
 exclude = [
     "bindings/python",
     "bindings/wasm",
+    "crates/nirs4all-io-dagml",
 ]
 
 [workspace.package]

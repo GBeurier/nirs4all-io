@@ -20,6 +20,8 @@ docs/_build/
 
 # Rust
 /target/
+# Nested cargo target dirs (e.g. the workspace-excluded crates/nirs4all-io-dagml).
+**/target/
 **/*.rs.bk
 Cargo.lock.orig
 

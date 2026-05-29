@@ -10,12 +10,6 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 
-[features]
-default = []
-# The dag-ml-data emit target (EPIC 10) is behind an optional feature so the
-# facade does not depend on dag-ml-data unless a caller asks for it.
-dag-ml-data = []
-
 [dependencies]
 nirs4all-io-core.workspace = true
 serde.workspace = true
