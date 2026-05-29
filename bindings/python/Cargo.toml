@@ -10,7 +10,7 @@ repository = "https://github.com/GBeurier/nirs4all-io"
 publish = false
 
 [lib]
-name = "nirs4all_io"
+name = "nirs4all_io_native"
 crate-type = ["cdylib"]
 
 [dependencies]

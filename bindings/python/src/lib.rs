@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
-//! pyo3 Python binding for `nirs4all-io` (EPIC 11.1).
+//! Native core of the pyo3 Python binding (EPIC 11.1). Compiled as
+//! `nirs4all_io._native`; the user-facing `nirs4all_io` package
+//! (`bindings/python/python/nirs4all_io`) wraps it and adds the lazy
+//! SpectroDataset adapter.
 //!
-//! Exposes the JSON surface idiomatically — `infer` / `to_spec` / `validate`
-//! return native Python objects (dicts) via `pythonize`, and `load` materializes
-//! to the target-agnostic assembled summary. The `spectrodataset` target is the
-//! sole nirs4all touch-point and is imported lazily there; importing this module
-//! must never import `nirs4all` (enforced by `tests/test_import_boundary.py`).
+//! The JSON surface (`infer` / `to_spec` / `validate`) and the materialized
+//! exports (`load_summary` = rounded structural summary, `assembled_full` =
+//! full-precision arrays for the SpectroDataset adapter) return native Python
+//! objects via `pythonize`. Nothing here imports `nirs4all`.
 
 use nirs4all_io_facade::api::{load_assembled, to_spec as facade_to_spec, Input};
 use nirs4all_io_facade::core::spec::{validate_spec, DatasetSpec};
 use nirs4all_io_facade::infer::{infer_path, infer_paths};
-use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
@@ -92,38 +94,43 @@ fn validate(spec: &Bound<'_, PyAny>) -> PyResult<()> {
     Ok(())
 }
 
-/// Materialize an input. `target="assembled"` returns the structural summary
-/// dict; `target="spectrodataset"` is the lazy nirs4all adapter (EPIC 11 follow-up).
+/// Materialize an input and return the rounded structural summary dict
+/// (target="assembled").
 #[pyfunction]
-#[pyo3(signature = (input, target="assembled", conventions=None, name=None))]
-fn load(
+#[pyo3(signature = (input, conventions=None, name=None))]
+fn load_summary(
     py: Python<'_>,
     input: &Bound<'_, PyAny>,
-    target: &str,
     conventions: Option<Vec<String>>,
     name: Option<String>,
 ) -> PyResult<PyObject> {
-    match target {
-        "assembled" => {
-            let assembled = load_assembled(&to_input(input)?, conventions.as_deref(), name.as_deref())
-                .map_err(|e| PyValueError::new_err(e.message))?;
-            to_py(py, &assembled.to_summary_value())
-        }
-        "spectrodataset" => Err(PyNotImplementedError::new_err(
-            "the SpectroDataset target (lazy nirs4all adapter) lands with the array export (EPIC 11 follow-up)",
-        )),
-        other => Err(PyValueError::new_err(format!(
-            "unknown target {other:?}; expected 'assembled' | 'spectrodataset'"
-        ))),
-    }
+    let assembled = load_assembled(&to_input(input)?, conventions.as_deref(), name.as_deref())
+        .map_err(|e| PyValueError::new_err(e.message))?;
+    to_py(py, &assembled.to_summary_value())
+}
+
+/// Materialize an input and return the full-precision arrays dict consumed by the
+/// Python SpectroDataset adapter (X/y/processing matrices, metadata, weights, folds).
+#[pyfunction]
+#[pyo3(signature = (input, conventions=None, name=None))]
+fn assembled_full(
+    py: Python<'_>,
+    input: &Bound<'_, PyAny>,
+    conventions: Option<Vec<String>>,
+    name: Option<String>,
+) -> PyResult<PyObject> {
+    let assembled = load_assembled(&to_input(input)?, conventions.as_deref(), name.as_deref())
+        .map_err(|e| PyValueError::new_err(e.message))?;
+    to_py(py, &assembled.to_full_value())
 }
 
 #[pymodule]
-fn nirs4all_io(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(infer, m)?)?;
     m.add_function(wrap_pyfunction!(to_spec, m)?)?;
     m.add_function(wrap_pyfunction!(validate, m)?)?;
-    m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(load_summary, m)?)?;
+    m.add_function(wrap_pyfunction!(assembled_full, m)?)?;
     Ok(())
 }

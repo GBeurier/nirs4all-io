@@ -124,6 +124,81 @@ impl AssembledDataset {
             "aggregate": aggregate,
         })
     }
+
+    /// Full-precision export for the binding-side SpectroDataset adapter. Unlike
+    /// `to_summary_value` (a rounded structural fingerprint), this carries the
+    /// complete X/y/processing matrices (flat f64 + shape), metadata column
+    /// values, weights, and folds — everything `to_spectrodataset` needs to
+    /// rebuild a `SpectroDataset` from the materialized data.
+    pub fn to_full_value(&self) -> Value {
+        let mut blocks = Map::new();
+        for (part, b) in &self.blocks {
+            blocks.insert(
+                part.clone(),
+                serde_json::json!({
+                    "n_samples": b.n_samples,
+                    "x": b.x.iter().map(matrix_full).collect::<Vec<_>>(),
+                    "feature_headers": b.feature_headers,
+                    "header_units": b.header_units,
+                    "signal_types": b.signal_types,
+                    "y": b.y.as_ref().map(matrix_full),
+                    "y_headers": b.y_headers,
+                    "metadata": b.metadata.as_ref().map(frame_full),
+                    "weights": b.weights,
+                    "weights_header": b.weights_header,
+                    "processings": b.processings.iter().map(|src| {
+                        src.iter()
+                            .map(|(name, m)| serde_json::json!({"name": name, "matrix": matrix_full(m)}))
+                            .collect::<Vec<_>>()
+                    }).collect::<Vec<_>>(),
+                }),
+            );
+        }
+        let aggregate = self.aggregate.as_ref().map(|a| {
+            serde_json::json!({
+                "by": a.by,
+                "method": a.method.value(),
+                "exclude_outliers": a.exclude_outliers,
+                "outlier_threshold": a.outlier_threshold,
+            })
+        });
+        serde_json::json!({
+            "name": self.name,
+            "task_type": self.task_type,
+            "signal_type": self.signal_type,
+            "n_sources": self.n_sources,
+            "blocks": Value::Object(blocks),
+            "folds": self.folds.iter().map(|(tr, vl)| vec![tr.clone(), vl.clone()]).collect::<Vec<_>>(),
+            "repetition": self.repetition,
+            "aggregate": aggregate,
+        })
+    }
+}
+
+fn matrix_full(m: &Matrix) -> Value {
+    serde_json::json!({
+        "data": m.data.iter().map(|&v| v as f64).collect::<Vec<f64>>(),
+        "n_rows": m.n_rows,
+        "n_cols": m.n_cols,
+    })
+}
+
+fn cell_value(c: &Cell) -> Value {
+    match c {
+        Cell::Int(i) => Value::from(*i),
+        Cell::Float(f) => Value::from(*f),
+        Cell::Str(s) => Value::from(s.clone()),
+        Cell::Na => Value::Null,
+    }
+}
+
+fn frame_full(f: &Frame) -> Value {
+    let columns: Vec<Value> = f
+        .columns
+        .iter()
+        .map(|c| serde_json::json!({"name": c.name, "values": c.values.iter().map(cell_value).collect::<Vec<_>>()}))
+        .collect();
+    serde_json::json!({ "n_rows": f.n_rows, "columns": columns })
 }
 
 struct SourceTable {
