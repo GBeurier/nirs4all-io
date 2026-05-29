@@ -9,9 +9,10 @@
 use std::path::{Path, PathBuf};
 
 use nirs4all_io_core::conventions::{assignments_to_spec_dict, match_items, resolve_profiles};
-use nirs4all_io_core::spec::{normalize_to_spec_dict, DatasetSpec, SpecError};
+use nirs4all_io_core::spec::{normalize_to_spec_dict, validate_spec, DatasetSpec, SpecError};
 use serde_json::{json, Value};
 
+use crate::materialize::{assemble, AssembledDataset};
 use crate::resolve::resolve_path;
 
 const CONFIG_SUFFIXES: &[&str] = &["json", "yaml", "yml"];
@@ -58,6 +59,19 @@ pub fn to_spec(
         Input::Path(p) => to_spec_path(p, conventions, name),
         Input::Paths(ps) => to_spec_paths(ps, conventions, name),
     }
+}
+
+/// Materialize `input` into a target-agnostic [`AssembledDataset`]
+/// (`load(..., target="assembled")`). The `SpectroDataset` target is a
+/// binding-only adapter and lands with the bindings.
+pub fn load_assembled(
+    input: &Input,
+    conventions: Option<&[String]>,
+    name: Option<&str>,
+) -> Result<AssembledDataset, SpecError> {
+    let (spec, base) = to_spec(input, conventions, name)?;
+    validate_spec(&spec)?;
+    assemble(&spec, &base)
 }
 
 fn to_spec_path(

@@ -15,13 +15,56 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use nirs4all_io_core::infer::table::{ColDtype, NumericKind};
-use nirs4all_io_core::spec::dataset_spec::LoadingParams;
+use nirs4all_io_core::spec::dataset_spec::{FormatParams, LoadingParams, NaConfig};
+use nirs4all_io_core::spec::enums::NaPolicy;
 use nirs4all_io_core::spec::SpecError;
 
 use super::frame::{Cell, Column, Frame};
 
 /// Back-compat alias for the inference path.
 pub type LoadedTable = Frame;
+
+fn merge_na(base: &NaConfig, over: &NaConfig) -> NaConfig {
+    if over.policy == NaPolicy::Auto && over.fill_method.is_none() {
+        return base.clone();
+    }
+    NaConfig {
+        policy: if over.policy != NaPolicy::Auto {
+            over.policy
+        } else {
+            base.policy
+        },
+        fill_method: over.fill_method.or(base.fill_method),
+        fill_value: if !over.fill_value.is_null() {
+            over.fill_value.clone()
+        } else {
+            base.fill_value.clone()
+        },
+        fill_per_column: over.fill_per_column,
+    }
+}
+
+/// Merge global + source loading params (source wins on explicitly-set fields).
+pub fn effective_params(global: &LoadingParams, source: &LoadingParams) -> LoadingParams {
+    let or_str = |o: &Option<String>, b: &Option<String>| {
+        o.clone().filter(|s| !s.is_empty()).or_else(|| b.clone())
+    };
+    let mut fmt = global.format.values.clone();
+    for (k, v) in &source.format.values {
+        fmt.insert(k.clone(), v.clone());
+    }
+    LoadingParams {
+        delimiter: or_str(&source.delimiter, &global.delimiter),
+        decimal_separator: or_str(&source.decimal_separator, &global.decimal_separator),
+        has_header: source.has_header.or(global.has_header),
+        header_unit: source.header_unit.or(global.header_unit),
+        signal_type: source.signal_type.or(global.signal_type),
+        encoding: or_str(&source.encoding, &global.encoding),
+        na: merge_na(&global.na, &source.na),
+        categorical: source.categorical.or(global.categorical),
+        format: FormatParams { values: fmt },
+    }
+}
 
 /// pandas `keep_default_na=True` default set ∪ io's `_NA_VALUES`.
 static NA_TOKENS: LazyLock<std::collections::HashSet<&'static str>> = LazyLock::new(|| {
