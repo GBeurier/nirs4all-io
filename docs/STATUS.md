@@ -10,6 +10,20 @@ load time. Drop of `partitions.by: percentage` (and its `stratify` / `shuffle`
 splitter*; all partition modes are now deterministic by construction. Updated
 deferred items live in [`ROADMAP.md`](ROADMAP.md).
 
+**Phase 2 (Rust rewrite) — IN PROGRESS** (branch `feat/rust-rewrite-phase2`,
+[`RUST_REWRITE_ROADMAP.md`](RUST_REWRITE_ROADMAP.md); Codex-reviewed per EPIC).
+
+| EPIC | Scope | State |
+|---|---|---|
+| 7 | Workspace (4 crates) + contract anchor + canonical-JSON parity (the #1 risk) | ✅ + Codex |
+| 8 | Rust core+facade port — `resolve→infer→configure→materialize` **byte-identical** to Python (`to_spec`/`infer`/assembled goldens) | ✅ + 2 Codex |
+| 9 | C ABI `n4io_*` (status/error model, opaque context, ABI versioning) + symbol governance + `nirs4all-io-cli` | ✅ + Codex (+4 fixes) |
+| 10 | dag-ml-data emit (`AssembledDataset`→`CoordinatorDataPlanEnvelope`) in the workspace-excluded `nirs4all-io-dagml`; validated by **both** dag-ml CLIs | ✅ + Codex (+3 fixes) |
+| 11 | Bindings: pyo3 (tested), wasm (tested), R (tested), MATLAB/Octave (CI-gated). Import-boundary green | ✅ + Codex (+1 fix) — *pyo3 lazy SpectroDataset adapter remains (12.1)* |
+| 12.5 | Property/fuzz tests (proptest) + `float_roundtrip` (correctly-rounded JSON float parse, matches CPython) | ✅ + Codex |
+| 12.1 | Direct parity oracle: Rust→SpectroDataset ≡ `nirs4all.DatasetConfigs` (transitively covered today via byte goldens × Python `test_parity`) | 📋 remaining |
+| 12.2 / 12.3 / 12.6 / 12.7 | Rust cookbook coverage gate; cross-language goldens CI (binding workflows partial); release pipelines; docs + relegate Python MVP | 📋 remaining |
+
 ## Per-epic
 
 | Epic | Story | Module / artifact | State |
