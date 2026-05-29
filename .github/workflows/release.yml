@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+# EPIC 12.6 — release pipelines. On a version tag, build the distributable
+# artifacts for every surface and attach them to the GitHub release:
+#   - Python abi3 wheels (maturin)            → PyPI (trusted publishing / OIDC)
+#   - WASM npm package (wasm-pack)            → npm
+#   - C-ABI archive (lib + header + LICENSES) → release asset (for C/R/MATLAB hosts)
+#   - R source tarball (R CMD build)          → release asset
+# Publish steps are gated on the relevant tokens/OIDC; the build steps run on
+# every tag so artifacts are always produced and verifiable.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # attach release assets
+  id-token: write   # PyPI trusted publishing (OIDC)
+
+jobs:
+  python-wheels:
+    name: Python wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release -m bindings/python/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl
+
+  python-sdist:
+    name: Python sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: -m bindings/python/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish-pypi:
+    name: Publish to PyPI (OIDC)
+    needs: [python-wheels, python-sdist]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --non-interactive --skip-existing dist/*
+
+  wasm-npm:
+    name: WASM npm package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Build npm package
+        run: wasm-pack build bindings/wasm --target bundler --out-dir pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg
+          path: bindings/wasm/pkg
+      - name: Publish to npm
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: wasm-pack publish bindings/wasm --target bundler || true
+
+  c-abi-archive:
+    name: C-ABI archive (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p nirs4all-io-capi --release
+      - name: Assemble archive
+        shell: bash
+        run: |
+          stage="nirs4all-io-capi"
+          mkdir -p "${stage}/lib" "${stage}/include" "${stage}/licenses"
+          cp crates/nirs4all-io-capi/include/nirs4all_io.h "${stage}/include/"
+          cp LICENSE LICENSES/AGPL-3.0-or-later.txt LICENSES/CeCILL-2.1.txt "${stage}/licenses/"
+          # Copy whatever shared/static libs this platform produced.
+          find target/release -maxdepth 1 \
+            \( -name 'libnirs4all_io_capi.*' -o -name 'nirs4all_io_capi.dll' -o -name 'nirs4all_io_capi.lib' \) \
+            ! -name '*.d' ! -name '*.rlib' -exec cp {} "${stage}/lib/" \;
+          tar -czf "nirs4all-io-capi-${{ matrix.os }}.tar.gz" "${stage}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c-abi-${{ matrix.os }}
+          path: nirs4all-io-capi-*.tar.gz
+
+  r-source:
+    name: R source tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+      - name: Build R source package
+        run: R CMD build bindings/r
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r-source
+          path: nirs4allio_*.tar.gz
+
+  github-release:
+    name: Attach assets to the GitHub release
+    needs: [python-wheels, python-sdist, wasm-npm, c-abi-archive, r-source]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            assets/*.whl
+            assets/*.tar.gz
