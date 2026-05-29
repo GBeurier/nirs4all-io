@@ -51,6 +51,17 @@ reference: **every** input form, `DatasetSpec` field, column selector, merge mod
 relational join, partition, fold and loading parameter — with a use-case cookbook
 and an honest ✅/🟡/📋 implementation status on each option.
 
+## Language bindings
+
+One Rust core, thin wrappers per language (all over the same canonical-JSON
+contract). See [`COMPAT.md`](COMPAT.md) for the full operation matrix.
+
+- **CLI** — `nirs4all-io` (`infer` / `to-spec` / `validate` / `load` / `emit-dag-ml-data`).
+- **Python** (pyo3/maturin) — [`bindings/python`](bindings/python/README.md); the only surface that builds a real `SpectroDataset`.
+- **R** (`.Call` over the C ABI) — [`bindings/r`](bindings/r/README.md).
+- **MATLAB / Octave** (MEX over the C ABI) — [`bindings/matlab`](bindings/matlab/README.md).
+- **WASM / JS** (wasm-bindgen, fs-free) — [`bindings/wasm`](bindings/wasm/README.md).
+
 ## Design principles
 
 - **Self-contained**: no runtime dependency on `nirs4all`. The only touch-point
