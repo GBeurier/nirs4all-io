@@ -9,6 +9,7 @@ pub mod column_roles;
 pub mod describe;
 pub mod detectors;
 pub mod identity;
+pub mod memory;
 pub mod plan;
 pub mod table;
 

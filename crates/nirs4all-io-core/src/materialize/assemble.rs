@@ -164,6 +164,7 @@ impl AssembledDataset {
                     "signal_types": b.signal_types,
                     "y": b.y.as_ref().map(matrix_full),
                     "y_headers": b.y_headers,
+                    "y_categorical": b.y_categorical,
                     "metadata": b.metadata.as_ref().map(frame_full),
                     "weights": b.weights,
                     "weights_header": b.weights_header,

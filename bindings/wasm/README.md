@@ -2,9 +2,9 @@
 # WASM binding (EPIC 11.4)
 
 `wasm-bindgen` binding built with `wasm-pack`, backed directly by
-`nirs4all-io-core` (the pure core, **not** the facade). WASM has no filesystem
-(D-R7), so this binding exposes only the fs-free JSON surface; path-based
-`infer`/`load` need file IO and stay in the native facade.
+`nirs4all-io-core` (the pure core, **not** the native filesystem facade). WASM
+has no filesystem (D-R7), so this binding exposes the fs-free JSON surface and a
+browser-oriented in-memory inference entry point.
 
 A thin wrapper: every function just translates strings to/from the single Rust
 core, identical to the other bindings.
@@ -14,12 +14,19 @@ core, identical to the other bindings.
 ```js
 to_spec(spec_json)   // String -> canonical DatasetSpec JSON string
 validate(spec_json)  // String -> undefined; throws when the spec is invalid
+inferFiles(files, options) // [{name, bytes: Uint8Array}], {conventions?} -> DatasetPlan object
+inferRecords(recordSets)   // decoded nirs4all-formats records -> DatasetPlan object
+inferDataset(files, recordSets, options) // browser raw files + decoded records -> DatasetPlan object
 version()            // () -> crate version string (semver)
 ```
 
 `to_spec` normalizes a spec/config JSON string into the canonical `DatasetSpec`
 JSON. `validate` parses a `DatasetSpec` JSON string and throws on an invalid
-spec. Strings cross as canonical JSON, identical to every other binding.
+spec. `inferFiles` runs the same convention / column-role / signal / task
+inference over named byte buffers and returns a `DatasetPlan` with an editable
+`resolved_spec`. `inferRecords` infers from the decoded spectral record shape
+emitted by `nirs4all-formats`. `inferDataset` is the browser entry point: it
+combines raw files and decoded records in Rust, keeping the page as a thin UI.
 
 ## Build & install
 
@@ -45,6 +52,22 @@ const specJson = wasm.to_spec(JSON.stringify({
 }));
 
 wasm.validate(specJson);   // ok; throws on an invalid spec
+const plan = wasm.inferFiles([
+  { name: "dataset.csv", bytes: new TextEncoder().encode("id;1000;1005;y\ns1;0.1;0.2;1\n") },
+], {});
+const browserPlan = wasm.inferDataset(
+  [{ name: "scan.asd", bytes: new Uint8Array([0, 1, 2, 3]) }],
+  [{
+    source: "scan.asd",
+    format: "asd-fieldspec",
+    records: [{
+      signals: { absorbance: { values: [0.1, 0.2], axis: { values: [1000, 1005], unit: "nm" } } },
+      targets: { protein: 12.4 },
+      metadata: { sample_id: "s1" },
+    }],
+  }],
+  {}
+);
 console.log(wasm.version());
 ```
 
