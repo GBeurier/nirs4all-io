@@ -235,12 +235,15 @@ pub fn infer_decoded_records(record_sets: &[DecodedRecordSet]) -> Result<Dataset
                 "format": format_params,
             }),
         );
-        spec_sources.push(Value::Object(source));
 
         let mut signal_keys = BTreeSet::new();
         let mut feature_keys = BTreeSet::new();
         let mut target_keys = BTreeSet::new();
         let mut metadata_keys = BTreeSet::new();
+        // The metadata key that carries the per-sample identity (`sample_id`
+        // preferred, else `id`); it becomes the source `key` so it is treated as
+        // identity, never as a feature or metadata column (D-R7 / Codex #3).
+        let mut identity_key: Option<String> = None;
 
         for record in &set.records {
             if let Some(metadata) = record.get("metadata").and_then(Value::as_object) {
@@ -248,6 +251,13 @@ pub fn infer_decoded_records(record_sets: &[DecodedRecordSet]) -> Result<Dataset
                     metadata_keys.insert(key.clone());
                     if let Some(value) = value_string(value) {
                         metadata_values.entry(key.clone()).or_default().push(value);
+                    }
+                }
+                if identity_key.is_none() {
+                    if metadata.contains_key("sample_id") {
+                        identity_key = Some("sample_id".to_string());
+                    } else if metadata.contains_key("id") {
+                        identity_key = Some("id".to_string());
                     }
                 }
                 if let Some(sample_id) = metadata
@@ -305,6 +315,41 @@ pub fn infer_decoded_records(record_sets: &[DecodedRecordSet]) -> Result<Dataset
                 signal_matrix.extend(values);
             }
         }
+
+        // Emit explicit `columns` that match `records_to_frame`'s output exactly so
+        // the resolved spec is directly assembleable (Codex #3): the assembler builds
+        // a frame of [axis-label features..., target keys..., metadata keys...]; we
+        // select targets and metadata by key and let `rest` pick up the (variable,
+        // axis-labelled) feature columns — that keeps feature selection in lock-step
+        // with `records_to_frame` regardless of axis labelling. The identity key is
+        // excluded from metadata and carried as the source `key` (treated as identity).
+        let metadata_select: Vec<String> = metadata_keys
+            .iter()
+            .filter(|k| Some(k.as_str()) != identity_key.as_deref())
+            .cloned()
+            .collect();
+        let mut source_columns: Vec<Value> = Vec::new();
+        if !target_keys.is_empty() {
+            source_columns.push(json!({
+                "role": "targets",
+                "select": target_keys.iter().cloned().collect::<Vec<_>>(),
+            }));
+        }
+        if !metadata_select.is_empty() {
+            source_columns.push(json!({"role": "metadata", "select": metadata_select}));
+        }
+        source_columns.push(json!({"role": "features", "select": "rest"}));
+        // A source that declares per-column roles spanning more than `features`
+        // (targets or metadata present) must carry role `mixed` (spec validation);
+        // a pure features+rest source stays `features`.
+        if source_columns.len() > 1 {
+            source.insert("role".into(), json!("mixed"));
+        }
+        source.insert("columns".into(), Value::Array(source_columns));
+        if let Some(id_key) = &identity_key {
+            source.insert("key".into(), json!(id_key));
+        }
+        spec_sources.push(Value::Object(source));
 
         columns.push(json!({
             "ref": set.source,

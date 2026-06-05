@@ -18,7 +18,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use nirs4all_io_core::canonical_json;
-use nirs4all_io_core::infer::memory::{infer_named_bytes, NamedBytes};
+use nirs4all_io_core::infer::memory::{
+    infer_decoded_records, infer_named_bytes, DecodedRecordSet, NamedBytes,
+};
 use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
 use nirs4all_io_core::spec::{validate_spec, DatasetSpec};
 use serde_json::{json, Value};
@@ -111,6 +113,131 @@ fn fnum(vals: &[f64]) -> Vec<String> {
 
 fn strs(vals: &[&str]) -> Vec<String> {
     vals.iter().map(|s| s.to_string()).collect()
+}
+
+/// A wide synthetic spectral record: `width` signal values + `metadata`, plus an
+/// optional `protein` target. Shaped like a decoded galactic `nir.spc`
+/// (700 signal values, no/with targets, sample_id + extra metadata keys).
+fn wide_record(width: usize, sample_id: &str, protein: Option<f64>, extra_meta: bool) -> Value {
+    let values: Vec<f64> = (0..width).map(|i| i as f64 * 0.001).collect();
+    let axis: Vec<f64> = (0..width).map(|i| 1000.0 + i as f64).collect();
+    let mut record = json!({
+        "signals": {"signal": {"values": values, "axis": {"values": axis, "unit": "nm"}}},
+        "metadata": {"sample_id": sample_id},
+    });
+    if extra_meta {
+        let meta = record["metadata"].as_object_mut().unwrap();
+        meta.insert("galactic_spc".into(), json!(true));
+        meta.insert("galactic_spc_log".into(), json!("decoded ok"));
+        meta.insert("galactic_spc_subfile".into(), json!(0));
+    }
+    if let Some(p) = protein {
+        record
+            .as_object_mut()
+            .unwrap()
+            .insert("targets".into(), json!({"protein": p}));
+    }
+    record
+}
+
+/// Codex #3: a `nir.spc`-shaped feature-only records source — 700 signal values +
+/// metadata {sample_id, galactic_spc*} and NO targets — inferred via
+/// `infer_decoded_records` and assembled through `assemble_in_memory` must yield
+/// features == signal width (no metadata/id leak into X) and a populated metadata
+/// frame, with sample_id treated as identity (excluded from X and metadata).
+#[test]
+fn decoded_features_only_records_assemble_to_signal_width() {
+    let width = 700;
+    let sets = vec![DecodedRecordSet {
+        source: "nir.spc".into(),
+        format: Some("galactic-spc".into()),
+        records: vec![
+            wide_record(width, "s1", None, true),
+            wide_record(width, "s2", None, true),
+            wide_record(width, "s3", None, true),
+        ],
+    }];
+    let plan = infer_decoded_records(&sets).expect("infer_decoded_records");
+    let spec = plan.resolved_spec.expect("resolved_spec");
+    validate_spec(&spec).expect("valid spec");
+    // The inferred source carries explicit columns + identity key. It has
+    // metadata (galactic_spc*) but no targets, so it is `mixed` (per-column roles
+    // span features+metadata) yet produces no y.
+    assert_eq!(spec.to_value()["sources"][0]["role"], json!("mixed"));
+    assert_eq!(spec.to_value()["sources"][0]["key"], json!("sample_id"));
+
+    let sources = vec![InMemorySource {
+        name: "nir.spc".into(),
+        payload: SourcePayload::Records(sets[0].records.clone()),
+    }];
+    let assembled =
+        assemble_in_memory(&spec, &sources, &HashMap::new(), None).expect("assemble features-only");
+    let block = &assembled.blocks["train"];
+    assert_eq!(block.n_samples, 3);
+    // X is exactly the 700 signal columns — no sample_id / galactic_spc* leak.
+    assert_eq!(block.x.len(), 1, "single feature source");
+    assert_eq!(block.x[0].n_cols, width, "X width == signal width");
+    assert_eq!(block.feature_headers[0].len(), width);
+    // metadata frame populated with the non-identity metadata keys only.
+    let meta_cols = block
+        .metadata
+        .as_ref()
+        .map(|f| f.column_names())
+        .unwrap_or_default();
+    assert!(
+        meta_cols.contains(&"galactic_spc".to_string()),
+        "metadata frame carries galactic_spc, got {meta_cols:?}"
+    );
+    assert!(
+        !meta_cols.contains(&"sample_id".to_string()),
+        "sample_id is identity, not metadata: {meta_cols:?}"
+    );
+    // and sample_id never leaks into the feature axis.
+    assert!(!block.feature_headers[0].contains(&"sample_id".to_string()));
+    assert!(block.y.is_none(), "no targets => no y");
+}
+
+/// Codex #3 (mixed variant): the same wide records WITH a `protein` target must
+/// assemble (the old code hit the "unassigned columns" error path), with X ==
+/// signal width, y captured, metadata populated, sample_id as identity.
+#[test]
+fn decoded_mixed_records_assemble_with_targets_and_clean_x() {
+    let width = 700;
+    let sets = vec![DecodedRecordSet {
+        source: "nir.spc".into(),
+        format: Some("galactic-spc".into()),
+        records: vec![
+            wide_record(width, "s1", Some(12.5), true),
+            wide_record(width, "s2", Some(8.3), true),
+            wide_record(width, "s3", Some(15.1), true),
+        ],
+    }];
+    let plan = infer_decoded_records(&sets).expect("infer_decoded_records");
+    let spec = plan.resolved_spec.expect("resolved_spec");
+    validate_spec(&spec).expect("valid spec");
+    assert_eq!(spec.to_value()["sources"][0]["role"], json!("mixed"));
+
+    let sources = vec![InMemorySource {
+        name: "nir.spc".into(),
+        payload: SourcePayload::Records(sets[0].records.clone()),
+    }];
+    let assembled =
+        assemble_in_memory(&spec, &sources, &HashMap::new(), None).expect("assemble mixed");
+    let block = &assembled.blocks["train"];
+    assert_eq!(block.n_samples, 3);
+    assert_eq!(block.x[0].n_cols, width, "X width == signal width");
+    let y = block.y.as_ref().expect("targets => y present");
+    assert_eq!((y.n_rows, y.n_cols), (3, 1));
+    assert_eq!(block.y_headers, vec!["protein"]);
+    let meta_cols = block
+        .metadata
+        .as_ref()
+        .map(|f| f.column_names())
+        .unwrap_or_default();
+    assert!(meta_cols.contains(&"galactic_spc".to_string()));
+    assert!(!meta_cols.contains(&"sample_id".to_string()));
+    assert!(!block.feature_headers[0].contains(&"protein".to_string()));
+    assert!(!block.feature_headers[0].contains(&"sample_id".to_string()));
 }
 
 /// One decoded record: an absorbance signal over `axis` (nm), a `protein`

@@ -346,34 +346,85 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 }
 
 /// Resolve `input` against the named in-memory sources (replaces `resolve_inputs`).
+///
 /// Match each `source.input` entry by exact name, then file-stem, then — for a
-/// glob entry — by glob over the source basenames (sorted for stable order).
-fn resolve_inputs_mem<'a>(input: &Value, sources: &'a [InMemorySource]) -> Vec<&'a InMemorySource> {
+/// glob entry — by glob match (Codex #2 / #4):
+/// - A glob whose pattern contains a path separator matches against the full
+///   source name; a separator-free glob matches against the source basename. This
+///   mirrors the native `glob(base_dir.join(text))` path-scoping, so a feature
+///   `spectra/*.csv` no longer also matches a sibling `meta.csv`. Glob matches are
+///   deduped by resolved name (path), and sorted for stable order.
+/// - Exact-name and file-stem fallbacks error on ambiguous duplicates instead of
+///   silently picking the first source supplied.
+fn resolve_inputs_mem<'a>(
+    input: &Value,
+    sources: &'a [InMemorySource],
+) -> Result<Vec<&'a InMemorySource>, SpecError> {
     let items: Vec<&Value> = match input {
         Value::Array(a) => a.iter().collect(),
         other => vec![other],
     };
     let mut out: Vec<&InMemorySource> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
     for item in items {
         let Some(text) = item.as_str() else { continue };
         if is_glob(text) {
-            let pat = basename(text);
+            let path_scoped = text.contains(['/', '\\']);
             let mut matched: Vec<&InMemorySource> = sources
                 .iter()
-                .filter(|s| glob_match(pat, basename(&s.name)))
+                .filter(|s| {
+                    if path_scoped {
+                        glob_match(text, &s.name)
+                    } else {
+                        glob_match(text, basename(&s.name))
+                    }
+                })
                 .collect();
             matched.sort_by(|a, b| a.name.cmp(&b.name));
-            out.extend(matched);
-        } else if let Some(s) = sources.iter().find(|s| s.name == text) {
-            out.push(s);
-        } else if let Some(s) = sources
-            .iter()
-            .find(|s| get_stem(basename(&s.name)) == get_stem(basename(text)))
-        {
-            out.push(s);
+            for s in matched {
+                if seen.insert(s.name.as_str()) {
+                    out.push(s);
+                }
+            }
+        } else if let Some(s) = unique_match(text, sources, |s| s.name == text, "exact name")? {
+            if seen.insert(s.name.as_str()) {
+                out.push(s);
+            }
+        } else if let Some(s) = unique_match(
+            text,
+            sources,
+            |s| get_stem(basename(&s.name)) == get_stem(basename(text)),
+            "file-stem",
+        )? {
+            if seen.insert(s.name.as_str()) {
+                out.push(s);
+            }
         }
     }
-    out
+    Ok(out)
+}
+
+/// Find the single source satisfying `pred`; error if more than one matches so an
+/// ambiguous `input` (e.g. `scan` matching both `scan.csv` and `scan.asd`) is a
+/// hard error rather than silent first-wins (Codex #4).
+fn unique_match<'a>(
+    text: &str,
+    sources: &'a [InMemorySource],
+    pred: impl Fn(&&'a InMemorySource) -> bool,
+    how: &str,
+) -> Result<Option<&'a InMemorySource>, SpecError> {
+    let mut matched = sources.iter().filter(|s| pred(s));
+    let Some(first) = matched.next() else {
+        return Ok(None);
+    };
+    if let Some(second) = matched.next() {
+        let mut names = vec![first.name.clone(), second.name.clone()];
+        names.extend(matched.map(|s| s.name.clone()));
+        return Err(SpecError::new(format!(
+            "input '{text}' is ambiguous: matches {how} of multiple sources {names:?}"
+        )));
+    }
+    Ok(Some(first))
 }
 
 /// Decode one in-memory source into a [`Frame`].
@@ -391,7 +442,7 @@ fn load_source_frame_mem(
     audits: &mut Vec<Value>,
 ) -> Result<LoadedSource, SpecError> {
     let params = effective_params(&spec.params, &source.params);
-    let matched = resolve_inputs_mem(&source.input, sources);
+    let matched = resolve_inputs_mem(&source.input, sources)?;
     if matched.is_empty() {
         return Err(SpecError::new(format!(
             "source '{}': no input files resolved from {}",
@@ -504,13 +555,22 @@ fn records_to_frame(records: &[Value], params: &LoadingParams) -> Result<Frame, 
     let mut meta_order: Vec<String> = Vec::new();
     let mut meta_cells: HashMap<String, Vec<Option<String>>> = HashMap::new();
 
-    for record in records {
+    for (row_idx, record) in records.iter().enumerate() {
         // features
         let row: Vec<f64> = record
             .get("signals")
             .and_then(Value::as_object)
             .and_then(|signals| pick_signal(signals, &signal_name).map(|(_, s)| signal_values(s)))
             .unwrap_or_default();
+        // A record that carries a signal must match the established feature axis
+        // exactly; silently truncating/padding a variable-length signal would corrupt
+        // X (Codex #5). An absent signal (empty row) is left as a NaN feature row.
+        if !row.is_empty() && row.len() != n_features {
+            return Err(SpecError::new(format!(
+                "decoded record {row_idx}: signal has {} value(s) but the feature axis is {n_features} wide",
+                row.len()
+            )));
+        }
         for (j, cell) in feature_cells.iter_mut().enumerate() {
             let v = row.get(j).copied().unwrap_or(f64::NAN);
             cell.push(Cell::Float(v));
@@ -885,7 +945,7 @@ fn read_variation_frame_mem(
     if !variation.params.is_empty_value() {
         params = effective_params(&params, &variation.params);
     }
-    let matched = resolve_inputs_mem(&variation.input, sources);
+    let matched = resolve_inputs_mem(&variation.input, sources)?;
     if matched.is_empty() {
         return Err(SpecError::new(format!(
             "source '{}': variation '{}': no input files resolved",

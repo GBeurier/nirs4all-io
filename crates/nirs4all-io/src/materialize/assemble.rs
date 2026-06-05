@@ -30,7 +30,10 @@ fn is_glob(text: &str) -> bool {
 
 /// Resolve one `source.input` value against `base_dir` into `(match_name, path)`
 /// pairs. `match_name` is what the in-memory resolver re-matches against: the
-/// original entry for plain inputs, the basename for glob-expanded entries.
+/// original entry for plain inputs, and — for glob-expanded entries — the path
+/// *relative to `base_dir`* (with separators normalized to `/`) so the in-memory
+/// glob re-match stays path-scoped and a `spectra/*.csv` source does not also
+/// match a sibling `meta.csv` (Codex #2).
 fn resolve_named(input: &Value, base_dir: &Path) -> Vec<(String, PathBuf)> {
     let items: Vec<&Value> = match input {
         Value::Array(a) => a.iter().collect(),
@@ -41,20 +44,36 @@ fn resolve_named(input: &Value, base_dir: &Path) -> Vec<(String, PathBuf)> {
         let Some(text) = item.as_str() else { continue };
         if is_glob(text) {
             let pat = base_dir.join(text);
-            let mut g: Vec<PathBuf> = glob::glob(&pat.to_string_lossy())
-                .map(|p| p.filter_map(Result::ok).collect())
-                .unwrap_or_default();
-            if g.is_empty() {
-                g = glob::glob(text)
+            let (mut g, scoped): (Vec<PathBuf>, bool) = {
+                let scoped: Vec<PathBuf> = glob::glob(&pat.to_string_lossy())
                     .map(|p| p.filter_map(Result::ok).collect())
                     .unwrap_or_default();
-            }
+                if scoped.is_empty() {
+                    (
+                        glob::glob(text)
+                            .map(|p| p.filter_map(Result::ok).collect())
+                            .unwrap_or_default(),
+                        false,
+                    )
+                } else {
+                    (scoped, true)
+                }
+            };
             g.sort();
             for p in g {
-                let name = p
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| text.to_string());
+                // Re-match name = path relative to base_dir for base_dir-scoped
+                // matches, else the path as globbed; normalize to `/`.
+                let rel = if scoped {
+                    p.strip_prefix(base_dir).unwrap_or(&p)
+                } else {
+                    p.as_path()
+                };
+                let name = rel.to_string_lossy().replace('\\', "/");
+                let name = if name.is_empty() {
+                    text.to_string()
+                } else {
+                    name
+                };
                 out.push((name, p));
             }
         } else {

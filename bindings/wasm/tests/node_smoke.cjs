@@ -57,4 +57,55 @@ const browserPlan = wasm.inferDataset(
 assert.strictEqual(browserPlan.input.selected_inference, "decoded_records");
 assert.strictEqual(browserPlan.resolved_spec.sources[0].role, "mixed");
 
+// assembleDataset: feed inferDataset(...).resolved_spec straight back into the
+// fs-free assembler. A 700-wide galactic nir.spc record (signal + metadata, no
+// targets) must materialize to X whose width == the signal width (no sample_id /
+// metadata leak into the features). Codex #3 regression guard.
+const SIGNAL_WIDTH = 700;
+const wideRecord = (sampleId) => ({
+  signals: {
+    signal: {
+      values: Array.from({ length: SIGNAL_WIDTH }, (_, i) => i * 0.001),
+      axis: {
+        values: Array.from({ length: SIGNAL_WIDTH }, (_, i) => 1000 + i),
+        unit: "nm",
+      },
+    },
+  },
+  metadata: { sample_id: sampleId, galactic_spc: true, galactic_spc_log: "ok" },
+});
+const spcRecords = [wideRecord("s1"), wideRecord("s2"), wideRecord("s3")];
+const spcPlan = wasm.inferDataset(
+  [{ name: "nir.spc", bytes: new Uint8Array([0, 1, 2, 3]) }],
+  [{ source: "nir.spc", format: "galactic-spc", records: spcRecords }],
+  {}
+);
+const assembled = wasm.assembleDataset(
+  [],
+  [{ source: "nir.spc", records: spcRecords }],
+  JSON.stringify(spcPlan.resolved_spec)
+);
+// assembleDataset returns the full-value shape: blocks[part].x = [{data, n_rows,
+// n_cols}], metadata = {n_rows, columns: [{name, values}]}.
+const block = assembled.blocks.train;
+assert.strictEqual(block.n_samples, 3, "three assembled samples");
+assert.strictEqual(
+  block.x[0].n_cols,
+  SIGNAL_WIDTH,
+  "feature count equals the signal width (no metadata/id leak)"
+);
+assert.strictEqual(
+  block.feature_headers[0].length,
+  SIGNAL_WIDTH,
+  "feature headers count equals the signal width"
+);
+assert.ok(
+  !block.feature_headers[0].includes("sample_id"),
+  "sample_id is identity, never a feature"
+);
+const metaCols = (block.metadata ? block.metadata.columns : []).map((c) => c.name);
+assert.ok(metaCols.includes("galactic_spc"), "metadata frame is populated");
+assert.ok(!metaCols.includes("sample_id"), "sample_id is identity, not metadata");
+assert.ok(!block.y, "no targets => no y");
+
 console.log("wasm node smoke OK");
