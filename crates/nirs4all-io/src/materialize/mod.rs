@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
-//! Materialization: file IO that turns a spec into data (ports `nirs4all_io.materialize`).
+//! Materialization — the facade's filesystem entry.
 //!
-//! Tabular loaders today; the relational join, assembler, folds, and the
-//! SpectroDataset adapter land with the load path.
+//! The assembly core (frame, join, fold parser, the pure CSV decoder, and the
+//! assembler itself) moved into `nirs4all-io-core::materialize` so the WASM
+//! binding can reach it. This module keeps the file IO: `read_table` (read +
+//! gzip/zip + delegate to the core decoder), `parse_fold_file`, and the
+//! `assemble(spec, base_dir)` wrapper that gathers inputs from disk then calls
+//! the shared fs-free core. The moved types are re-exported here so downstream
+//! (`nirs4all-io-dagml`, capi, cli, python binding) compiles unchanged.
 
 pub mod assemble;
 pub mod folds;
