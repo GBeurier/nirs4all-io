@@ -502,9 +502,11 @@ fn load_source_frame_mem(
 /// - `targets{k:v}` → numeric or categorical columns named `k` (left as raw
 ///   cells so the assembler's `encode_categorical` applies the same rules as the
 ///   CSV path).
-/// - `metadata{sample_id, partition, id, row_index, ...}` → string/key columns,
-///   so the existing partition (`PartitionBy::Column`) and identity/join logic
-///   runs unchanged.
+/// - `metadata{sample_id, partition, id, ...}` → string/key columns, so the
+///   existing partition (`PartitionBy::Column`) and identity/join logic runs
+///   unchanged. The formats-layer `row_index` provenance counter is dropped: it
+///   carries no dataset meaning and its numeric "0","1",… cells would otherwise
+///   be picked up as a phantom feature by the `auto` features selector.
 fn records_to_frame(records: &[Value], params: &LoadingParams) -> Result<Frame, SpecError> {
     if records.is_empty() {
         return Ok(Frame {
@@ -587,6 +589,13 @@ fn records_to_frame(records: &[Value], params: &LoadingParams) -> Result<Frame, 
         // metadata
         if let Some(metadata) = record.get("metadata").and_then(Value::as_object) {
             for key in metadata.keys() {
+                // `row_index` is a formats-layer per-row provenance counter (0..n), not
+                // a dataset column. Emitting it would let the `auto` features selector
+                // (which takes every unassigned *numeric* column) coerce its "0","1",…
+                // cells into a phantom feature, widening X by one and shifting the axis.
+                if key == "row_index" {
+                    continue;
+                }
                 if !meta_order.contains(key) {
                     meta_order.push(key.clone());
                     meta_cells.insert(key.clone(), Vec::new());
@@ -1743,6 +1752,33 @@ mod tests {
         let (vals, mapping) = encode_categorical(&col, "auto");
         assert_eq!(vals, vec![12.5, 8.3]);
         assert_eq!(mapping, None);
+    }
+
+    #[test]
+    fn records_to_frame_drops_row_index_provenance() {
+        // formats tags every decoded CSV row with metadata.row_index (0..n). It must
+        // NOT survive into the assembled frame: the `auto` features selector takes
+        // every unassigned numeric column, so a "0","1",… row_index column would be
+        // coerced into a phantom feature, widening X by one and shifting the axis.
+        let mk = |vals: [f64; 3], idx: i64| {
+            json!({
+                "signals": { "signal": {
+                    "axis": { "values": [400.0, 402.0, 404.0], "unit": "nm" },
+                    "values": vals,
+                } },
+                "metadata": { "row_index": idx, "sample_id": format!("s{idx}") }
+            })
+        };
+        let records = vec![mk([0.40, 0.41, 0.42], 0), mk([0.50, 0.51, 0.52], 1)];
+        let frame = records_to_frame(&records, &LoadingParams::default()).unwrap();
+        let names = frame.column_names();
+        assert!(
+            !names.iter().any(|c| c == "row_index"),
+            "row_index must be dropped, got {names:?}"
+        );
+        // exactly the three signal-axis features + the real sample_id metadata key.
+        assert_eq!(names, vec!["400", "402", "404", "sample_id"]);
+        assert_eq!(frame.n_rows, 2);
     }
 
     #[test]
