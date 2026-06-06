@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>nirs4all-lite · WASM dataset builder</title>
+  <meta name="description" content="Build a NIRS dataset in the browser with nirs4all-formats and nirs4all-io compiled to WebAssembly." />
+  <meta name="theme-color" content="#0d9488" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a class="brand" href="#">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0d9488"/><path d="M4 20 Q9 8 13 16 T20 15 T28 11" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+        </span>
+        <span>nirs4all-lite <small>single-page WASM</small></span>
+      </a>
+      <span class="nav-note">Local NIRS dataset builder</span>
+      <span class="runtime" id="runtime">loading wasm</span>
+    </div>
+  </nav>
+
+  <main>
+    <section class="workbench">
+      <div class="container workbench-grid">
+        <section class="drop-zone" id="drop" tabindex="0">
+          <input id="fileInput" type="file" multiple hidden />
+          <input id="folderInput" type="file" multiple webkitdirectory directory hidden />
+          <p class="eyebrow drop-step">Step 1 / Import</p>
+          <div class="drop-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <h1>Dataset builder</h1>
+          <p>Drop several files at once or add them one after another. Parsing and inference run locally.</p>
+          <div class="drop-actions">
+            <button class="primary" id="pick" type="button">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              Add files
+            </button>
+            <button class="secondary" id="pickFolder" type="button">
+              <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+              Add folder
+            </button>
+            <button class="secondary" id="loadSample" type="button">Load sample dataset</button>
+          </div>
+        </section>
+
+        <section class="summary-band" aria-live="polite">
+          <div class="summary-head">
+            <div>
+              <p class="eyebrow">Browser dataset state</p>
+              <h2 id="datasetName">No dataset loaded</h2>
+            </div>
+            <button class="ghost" id="reset" type="button">
+              <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Reset
+            </button>
+          </div>
+          <div class="kpis" id="kpis"></div>
+          <div class="dataset-map" id="datasetMap"></div>
+          <div class="dataset-alerts" id="datasetAlerts"></div>
+          <div class="status-line" id="status">Waiting for files.</div>
+        </section>
+      </div>
+    </section>
+
+    <section class="container main-grid" id="mainGrid">
+      <aside class="left-rail">
+        <section class="panel">
+          <div class="panel-head">
+            <span class="step" aria-hidden="true">2</span>
+            <h3>Files &amp; sidecars</h3>
+            <span id="fileCount" class="pill">0</span>
+          </div>
+          <div class="file-list" id="fileList"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <span class="step" aria-hidden="true">3</span>
+            <h3>Inference</h3>
+            <span id="scoreBadge" class="pill">-</span>
+          </div>
+          <div class="decision-list" id="decisionList"></div>
+        </section>
+      </aside>
+
+      <section class="viz-stack">
+        <section class="panel viz-panel">
+          <div class="panel-head viz-head">
+            <span class="step" aria-hidden="true">4</span>
+            <h3>Dataviz</h3>
+            <div class="tabs" id="vizTabs">
+              <button class="tab active" type="button" data-viz="spectra">Spectra</button>
+              <button class="tab" type="button" data-viz="heatmap">Heatmap</button>
+              <button class="tab" type="button" data-viz="scatter">Scatter</button>
+              <button class="tab" type="button" data-viz="targets">Y histogram</button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <label>Signal <select id="signalSelect"></select></label>
+            <label>Target <select id="targetSelect"></select></label>
+            <label>Color <select id="colorSelect"><option value="target">target</option><option value="partition">partition</option><option value="index">index</option></select></label>
+            <label class="range-label">Samples <input id="sampleLimit" type="range" min="20" max="500" step="20" value="180" /></label>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="vizCanvas" width="1200" height="520"></canvas>
+            <div class="readout" id="readout"></div>
+          </div>
+          <div class="legend" id="legend"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head spec-head">
+            <span class="step" aria-hidden="true">5</span>
+            <h3>Dataset properties</h3>
+            <div class="spec-actions">
+              <button class="icon-btn" id="resetSpec" type="button" title="Reset to inferred spec" aria-label="Reset to inferred spec">
+                <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="icon-btn" id="copySpec" type="button" title="Copy canonical JSON" aria-label="Copy canonical JSON">
+                <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </button>
+              <button class="icon-btn" id="downloadSpec" type="button" title="Download canonical JSON" aria-label="Download canonical JSON">
+                <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <span id="validationBadge" class="pill">not validated</span>
+          </div>
+          <form class="spec-form" id="specForm"></form>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <template id="emptyFileList">
+    <div class="empty">No files in this browser dataset yet.</div>
+  </template>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
