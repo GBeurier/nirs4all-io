@@ -16,26 +16,56 @@ any input ──► RESOLVE ──► INFER ──► CONFIGURE ──► MATERI
               (InputSet)  (DatasetPlan, scored)   (DatasetSpec)    (or target-agnostic AssembledDataset)
 ```
 
-Phase 1 (Python MVP) is complete and parity-verified. Phase 2 (Rust core + a `dag-ml-data` target)
-is externally gated — see `docs/PHASE2_GATE.md`. `src/` layout (`src/nirs4all_io/`), Python ≥3.11,
-dual-licensed `CeCILL-2.1 OR AGPL-3.0-or-later`.
+**Both phases are complete.** Phase 1 is the Python MVP (`src/nirs4all_io/`); Phase 2 is a full Rust
+port (`crates/`) with a C ABI, a CLI, four language bindings (`bindings/`), and the `dag-ml-data`
+emit. The Rust core reproduces the Python pipeline **byte-for-byte** (canonical-JSON goldens), and
+the Python MVP is **kept as the dev/parity oracle** the Rust goldens are checked against — do not
+delete it. Dual-licensed `CeCILL-2.1 OR AGPL-3.0-or-later`; Python ≥3.11, Rust 2021.
+
+There are now **two parallel implementations of the same architecture** — the Python MVP and the Rust
+workspace mirror each other module-for-module. A change to load-bearing logic (spec, normalize,
+conventions, infer, assemble) must usually be made in **both**, or the byte-parity goldens fail.
 
 ## Commands
 
-The package is installed editable; it is **not** importable until you do so, and there is no `.venv`
-in this repo. Use the ecosystem venv if one exists, else install into the active interpreter:
+### Rust workspace (the production implementation) — green gate
+
+Run all four before reporting Rust work complete (mirrors `.github/workflows/ci.yml`):
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace --no-default-features
+
+# Targeted
+cargo test -p nirs4all-io-core            # pure-logic crate
+cargo test -p nirs4all-io contract_goldens   # one integration test target in the facade crate
+cargo run -p nirs4all-io-cli -- to-spec <dir>   # exercise the CLI binary
+```
+
+The workspace has **4 members** (`crates/nirs4all-io-core`, `-io`, `-io-capi`, `-io-cli`). Three things
+are **deliberately workspace-EXCLUDED** and build with their own toolchain — `cargo test --workspace`
+will NOT touch them:
+- `crates/nirs4all-io-dagml` — the dag-ml-data emit; path-depends on the `dag-ml-data` sibling, so it
+  is excluded to keep standalone build/CI working without the ecosystem tree present.
+- `bindings/python` (maturin/pyo3) and `bindings/wasm` (wasm-pack) — see below.
+
+### Python MVP / oracle — green gate
+
+The package is installed editable. Use the ecosystem venv if one exists, else install into the active
+interpreter:
 
 ```bash
 pip install -e ".[dev]"      # ruff, mypy, pytest + pyarrow/openpyxl/scipy + nirs4all & nirs4all-formats (dev oracles)
 
-# Green gate (run all three before reporting work complete)
 ruff check .                 # lint: E,F,I,W,UP,B; line-length 220; E501 ignored
-mypy .                       # type check (py311, ignore_missing_imports)
+mypy .                       # type check (py311, ignore_missing_imports); excludes ^bindings/
 pytest                       # all tests; parity tests auto-skip if nirs4all is absent
 
-# Targeted test runs
-pytest tests/test_spec.py                      # one file
-pytest tests/test_cookbook.py::test_coverage_matrix_complete   # one test
+# Targeted
+pytest tests/test_spec.py
+pytest tests/test_cookbook.py::test_coverage_matrix_complete
 pytest -m parity             # ONLY the parity-oracle tests (needs nirs4all installed)
 pytest -m "not parity"       # everything except the parity oracle
 ```
@@ -43,7 +73,20 @@ pytest -m "not parity"       # everything except the parity oracle
 Two registered pytest markers (see `pyproject.toml`): **`parity`** (imports `nirs4all` read-only as
 an oracle) and **`formats`** (needs the `nirs4all-formats` reader library).
 
+### Bindings
+
+```bash
+cd bindings/python && maturin develop && pytest tests   # pyo3; the ONLY surface that builds a real SpectroDataset
+cd bindings/wasm   && wasm-pack build --target nodejs    # fs-free core only (to_spec/validate/version/assembleDataset)
+cd bindings/r      && ./build_and_test.sh                # .Call over the C ABI
+# MATLAB/Octave (bindings/matlab) is CI-gated; needs octave/MEX locally.
+```
+
 ## Architecture: the four stages
+
+The same four-stage pipeline exists twice, module-for-module — once in Python (`src/nirs4all_io/`,
+the table below) and once in Rust (`crates/`, mapped at the end of this section). Read the Python
+description first; the Rust crates own the same concepts.
 
 Each `src/nirs4all_io/` subpackage owns one stage of the pipeline. `api.py` is the public glue.
 
@@ -67,8 +110,29 @@ aliases). Column selection is a small DSL in `spec/selectors.py` (positional / s
 `assemble(spec)` produces an `AssembledDataset` (per-partition `PartitionBlock`s: multi-source `X`,
 `y`, `metadata`, headers, units, weights, named processings). `to_spectrodataset(assembled)`
 (`materialize/spectrodataset.py`) adapts it to nirs4all today; `to_dag_ml_data(assembled)` slots in
-beside it when Phase 2 unblocks. Keep assembly logic target-agnostic so it stays testable without
-nirs4all — `target="assembled"` is the test seam.
+beside it. Keep assembly logic target-agnostic so it stays testable without nirs4all —
+`target="assembled"` is the test seam.
+
+### The Rust workspace mirrors the Python stages, split core ↔ facade
+
+The Rust port deliberately splits along a **pure-logic / file-IO** seam (rule below):
+
+| Crate | Role |
+|---|---|
+| `nirs4all-io-core` | **Pure logic, no file IO.** Owns the `DatasetSpec` IR (`spec/`), selectors, conventions, normalize, inference over a *neutral* `FileDescription`/`TableProfile` it does **not** populate, validation, `canonical_json`, `pyfmt` (Python-`repr`-faithful float formatting), and the fs-free `materialize` (`assemble`). |
+| `nirs4all-io` (the **facade**) | **All file IO.** Resolution, tabular loaders, the join engine, the `nirs4all-formats` vendor reads, and producing the neutral descriptions fed to `-core`. Wires `resolve → infer → configure → materialize`. Re-exports `-core` as `core`. |
+| `nirs4all-io-capi` | C ABI (`n4io_to_spec` / `infer` / `validate`, JSON in/out; opaque context + per-context error buffer; ABI versioning). Symbol surface is drift-guarded (`abi/version_script.map`, `expected_symbols_*.txt`, `tests/abi_surface.rs`). |
+| `nirs4all-io-cli` | The `nirs4all-io` binary (`infer` / `to-spec` / `validate` / `load` / `emit-dag-ml-data`). |
+| `nirs4all-io-dagml` *(excluded)* | `to_dag_ml_data(&AssembledDataset)` → `CoordinatorDataPlanEnvelope`. Path-deps the `dag-ml-data` sibling; built/CI'd on its own. |
+
+**Canonical JSON is the cross-language contract** (`canonical_json.rs` ≡ `canonical_json.py`,
+byte-identical). The frozen goldens in `tests/goldens/contract/` are shared: the Python tests, the
+Rust `contract_goldens.rs`/`assembled_goldens.rs`, and the binding parity tests all assert against
+them. `serde_json` runs with `preserve_order` (input map order mirrors Python dict order) **and**
+`float_roundtrip` (correctly-rounded float parse matching CPython); canonical JSON sorts keys
+explicitly rather than relying on the map type.
+
+The convention TOMLs are **copied** into `-core` and kept in sync by `tests/test_convention_toml_sync.py`.
 
 ## Load-bearing rules (do not break these)
 
@@ -97,8 +161,21 @@ These are the architectural invariants. PRs that violate them are rejected.
    equal `nirs4all.DatasetConfigs(...)` (`tests/test_parity.py`). The build flow in
    `spectrodataset.py` deliberately mirrors `DatasetConfigs._load_dataset`.
 
-6. **Phase 2 is gated.** `load(..., target="dag-ml-data")` raises `NotImplementedError` on purpose.
-   Do not implement the dag-ml-data target until `docs/PHASE2_GATE.md` flips green.
+6. **`nirs4all-io-core` is pure logic — no file IO.** It performs inference over *neutral*
+   `FileDescription`/`TableProfile` structs it does not populate; the **facade** (`nirs4all-io`) owns
+   all filesystem access, vendor reads, and producing those descriptions. Don't pull `std::fs` or
+   `nirs4all-formats` into `-core`.
+
+7. **Byte-parity is the cross-language bar.** The Rust core must reproduce the Python MVP's
+   canonical-JSON output exactly (shared goldens in `tests/goldens/contract/`). Several Python-faithful
+   behaviours are reproduced **on purpose** and must not be "fixed": duplicate-basename file lists,
+   non-recursive profile resolution, Python-`repr` float formatting (`pyfmt`). Touching load-bearing
+   logic means updating Python + Rust together and re-freezing goldens only when the change is intended.
+
+8. **The `dag-ml-data` emit lives in the excluded `nirs4all-io-dagml` crate.** It is intentionally
+   outside the cargo workspace because it path-depends on the `dag-ml-data` sibling; the standalone
+   build/CI must stay ecosystem-free. The Phase-2 gate is GREEN (`docs/PHASE2_GATE.md`), so this is
+   implemented — don't reintroduce a `NotImplementedError` stub.
 
 ## Public API (`api.py`, re-exported from `__init__.py`)
 
@@ -129,10 +206,17 @@ adapter is testable with no nirs4all installed (see `test_load_e2e.py`).
 
 ## Gotchas
 
-- **The Python package has no CLI; the CLI is the Rust binary.** The Phase-2 Rust workspace
-  (`crates/nirs4all-io-cli`) ships the `nirs4all-io` binary (`infer` / `to-spec` / `validate` /
-  `load` / `emit-dag-ml-data`); the dead `nirs4all_io.cli:main` console-script entry was removed
-  from `pyproject.toml`. The Python surface is library-only (`nio.infer` / `nio.load` / `nio.to_spec`).
+- **The Python package has no CLI; the CLI is the Rust binary.** `crates/nirs4all-io-cli` ships the
+  `nirs4all-io` binary (`infer` / `to-spec` / `validate` / `load` / `emit-dag-ml-data`); the dead
+  `nirs4all_io.cli:main` console-script entry was removed from `pyproject.toml`. The Python MVP surface
+  is library-only (`nio.infer` / `nio.load` / `nio.to_spec`).
+- **Two `nirs4all_io` Python packages exist.** The MVP (`src/nirs4all_io/`) and the pyo3 binding's
+  mixed-maturin package (`bindings/python/python/nirs4all_io`, wrapping the native `_native` module).
+  The root `mypy` run excludes `^bindings/` so they don't collide; don't remove that exclude.
+- **`cargo test --workspace` does not cover the bindings or the dagml crate** — they're workspace-
+  excluded. Run their own toolchains (maturin / wasm-pack / R script) to test them.
+- **`rtk` can mask a command's exit code.** When verifying a green gate, capture the status explicitly
+  (`cmd > log 2>&1; echo $?`) rather than relying on `&&` chains.
 - **YAML round-trips lists, not tuples** — specs are dict/JSON/YAML-authorable and stay `str`-enum
   clean precisely so they survive serialization; don't put tuples in a spec.
 - The repo is a clean tree: **no dead/deprecated code, no backward-compat shims.** Remove rather than
@@ -144,7 +228,13 @@ adapter is testable with no nirs4all installed (see `test_load_e2e.py`).
   field, selector, merge mode, join, partition, fold, loading param, supported/out-of-scope layout,
   and a use-case cookbook with honest ✅/🟡/📋 status per option. Read this before adding spec vocab.
 - `docs/API.md` — the stable integration seam and how a host adopts it.
-- `docs/STATUS.md` / `docs/ROADMAP.md` — per-epic state and the intentionally-deferred list.
+- `docs/STATUS.md` / `docs/ROADMAP.md` — per-epic state (incl. the Phase-2 EPIC 7–12 table) and the
+  intentionally-deferred list.
+- `docs/RUST_REWRITE_ROADMAP.md` — the Phase-2 plan: crate split rationale, EPIC breakdown, the
+  canonical-JSON parity strategy. `docs/PHASE2_GATE.md` — why the `dag-ml-data` target is now GREEN.
 - `docs/REPLUG.md` — host-adoption sequence and the io-vs-host ownership split.
+- `docs/VERSIONING.md` — the three versioned contracts (schema / convention-profile / canonical-JSON).
+- `COMPAT.md` — the per-binding operation matrix (which of infer/to-spec/validate/load each supports).
+- `bindings/SPEC.md` + each `bindings/*/README.md` — the binding contract and per-language build/test.
 - `COPY_PROVENANCE.md` — what was copied from `nirs4all` and how (license-compatibility record).
 - `../nirs4all/CLAUDE.md` — ecosystem map and the cross-repo boundary rules.
