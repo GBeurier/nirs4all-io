@@ -5,7 +5,7 @@ const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, "..");
 const workspace = path.resolve(root, "..", "..");
 const formatsSamples = path.join(workspace, "nirs4all-formats", "samples");
-const standalone = pathToFileURL(path.join(root, "dist", "nirs4all-lite-standalone.html")).href;
+const standalone = pathToFileURL(path.join(root, "dist", "nirs4all-io-standalone.html")).href;
 const chromeExecutable = process.env.CHROME_BIN || "/usr/bin/google-chrome";
 
 async function loadPlaywright() {

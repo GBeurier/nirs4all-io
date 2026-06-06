@@ -63,7 +63,7 @@ async function boot() {
   } catch (err) {
     $("#runtime").textContent = "wasm bundle missing";
     $("#runtime").className = "runtime err";
-    setStatus(`WASM could not be loaded: ${err.message || err}. Run ./build-wasm.sh in single-page-WASM.`);
+    setStatus(`WASM could not be loaded: ${err.message || err}. Run ./build-wasm.sh in web/.`);
   }
 }
 

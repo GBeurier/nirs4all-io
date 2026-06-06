@@ -1,4 +1,4 @@
-# nirs4all-lite single-page WASM
+# nirs4all-io web — browser dataset builder
 
 Browser-only dataset builder using:
 
@@ -48,13 +48,13 @@ standalone HTML file:
 node make-standalone.mjs
 ```
 
-The output is `dist/nirs4all-lite-standalone.html`. It inlines the CSS, the
+The output is `dist/nirs4all-io-standalone.html`. It inlines the CSS, the
 application code, both WASM modules, and the sample files, so it can be opened
 directly with `file://` or copied elsewhere without a local HTTP server.
 
 ## Standalone smoke test
 
-After generating `dist/nirs4all-lite-standalone.html`, run the browser smoke test
+After generating `dist/nirs4all-io-standalone.html`, run the browser smoke test
 with Playwright:
 
 ```bash
