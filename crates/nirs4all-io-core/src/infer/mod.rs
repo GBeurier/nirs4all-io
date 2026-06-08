@@ -11,9 +11,11 @@ pub mod detectors;
 pub mod identity;
 pub mod memory;
 pub mod plan;
+pub mod propose;
 pub mod table;
 
 pub use describe::{describe_text, FileDescription};
 pub use detectors::{detect_signal_type, detect_task_type};
 pub use plan::{DatasetPlan, Decision};
+pub use propose::{propose_browser_dataset, ConfirmedLock, Proposal, ProposalResult};
 pub use table::{ColDtype, ColumnProfile, NumericKind, TableProfile};

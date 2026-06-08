@@ -12,10 +12,11 @@ directly, so it (and only it) can hand back native Python objects and a real
 
 | Operation | Rust CLI | Python (pyo3) | R | MATLAB / Octave | WASM / JS |
 |---|---|---|---|---|---|
-| `infer` | ✅ `infer` | ✅ `infer` | ✅ `n4io_infer` | ✅ `nirs4all_io.infer` | ❌ (needs fs) |
+| `infer` | ✅ `infer` | ✅ `infer` | ✅ `n4io_infer` | ✅ `nirs4all_io.infer` | ✅ fs-free: `inferFiles` / `inferDataset` / `inferRecords` (from bytes/decoded records) |
+| `propose` (iterative) | ❌ | ❌ | ❌ | ❌ | ✅ `proposeDataset(files, records, {confirmed})` → `{plan, proposals, spec, valid, validation_errors}` |
 | `to_spec` | ✅ `to-spec` | ✅ `to_spec` | ✅ `n4io_to_spec` | ✅ `nirs4all_io.to_spec` | 🟡 `to_spec` (spec-dict only, fs-free) |
 | `validate` | ✅ `validate` | ✅ `validate` | ✅ `n4io_validate` | ✅ `nirs4all_io.validate` | ✅ `validate` |
-| `load` → assembled | ✅ `load` | ✅ `load(target="assembled")` / `load_summary` | ❌ | ❌ | ❌ |
+| `load` → assembled | ✅ `load` | ✅ `load(target="assembled")` / `load_summary` | ❌ | ❌ | ✅ fs-free `assembleDataset(files, records, specJson)` |
 | `load` → SpectroDataset | ❌ | ✅ `load(target="spectrodataset")` (lazy adapter) | ❌ | ❌ | ❌ |
 | `emit-dag-ml-data` | 🟡 stub → ecosystem crate | ❌ | ❌ | ❌ | ❌ |
 | ABI / version | — | `__version__` | `n4io_abi_version` | `nirs4all_io.abi_version` | `version` |
@@ -30,7 +31,7 @@ Legend: ✅ supported · 🟡 partial / out-of-process · ❌ out of scope in v0
 | Python (pyo3) | native: `str` path, `list[str]` file list, or `dict` spec | native Python objects (dicts); `target="spectrodataset"` → nirs4all `SpectroDataset` |
 | R | JSON strings (`'"/data/run"'`, `'["a.csv","b.csv"]'`, spec object) | canonical JSON string |
 | MATLAB / Octave | JSON strings (quoted path / JSON array / JSON object) | canonical JSON string |
-| WASM / JS | JSON string (spec/config dict only) | canonical JSON string |
+| WASM / JS | `to_spec`/`validate`: JSON string; `inferFiles`/`inferDataset`/`inferRecords`/`proposeDataset`/`assembleDataset`: `{name, bytes:Uint8Array}[]` + decoded record sets (+ `{confirmed}` locks) | `to_spec`: canonical JSON string; the browser ops return plain JS objects (`DatasetPlan` / `{plan, proposals, spec}` / `AssembledDataset`) |
 
 Notes:
 - **`emit-dag-ml-data`** is not built into the in-tree CLI: the subcommand exists
@@ -41,7 +42,11 @@ Notes:
   (`infer` / `to_spec` / `validate` + the version probe); they have no array
   `load`.
 - **WASM/JS** is fs-free: `to_spec` here only **normalizes a spec/config dict**
-  (it cannot resolve paths), and there is no `infer`/`load`.
+  (it cannot resolve paths). Inference / iterative proposals / materialization run
+  on **in-memory** named byte buffers and decoded `nirs4all-formats` records, not
+  paths: `inferFiles` / `inferDataset` / `inferRecords`, the iterative
+  `proposeDataset` (provisional sources, confirmable role/partition/identity/
+  pairing/signal/task decisions + `confirmed` locks), and `assembleDataset`.
 - **SpectroDataset** materialization is **pyo3-only**, via the lazy `_adapter`
   that imports `nirs4all` at call time — importing `nirs4all_io` never imports
   `nirs4all`.
@@ -65,7 +70,10 @@ Notes:
   `validate(spec_json)`, `abi_version()` — one `n4io` MEX dispatches on a command
   string.
 - **WASM / JS** (`bindings/wasm/src/lib.rs`): `to_spec(spec_json)`,
-  `validate(spec_json)`, `version()`.
+  `validate(spec_json)`, `inferFiles(files, options)`,
+  `inferDataset(files, recordSets, options)`, `inferRecords(recordSets)`,
+  `proposeDataset(files, recordSets, {conventions?, confirmed?})`,
+  `assembleDataset(files, recordSets, specJson)`, `version()`.
 
 ## Build & install
 

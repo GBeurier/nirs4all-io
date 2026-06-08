@@ -616,12 +616,12 @@ fn infer_single_file(file: &NamedBytes, plan: &mut DatasetPlan) -> Result<Value,
     Ok(Value::Object(spec))
 }
 
-fn describe_bytes(file: &NamedBytes) -> FileDescription {
+pub(crate) fn describe_bytes(file: &NamedBytes) -> FileDescription {
     let text = String::from_utf8_lossy(&file.bytes);
     describe_text(&text, 50)
 }
 
-fn source_first_input(src: &Value) -> Option<String> {
+pub(crate) fn source_first_input(src: &Value) -> Option<String> {
     match src.get("input") {
         Some(Value::Array(a)) => a.first().and_then(|v| v.as_str()).map(str::to_string),
         Some(Value::String(s)) => Some(s.clone()),
@@ -629,7 +629,7 @@ fn source_first_input(src: &Value) -> Option<String> {
     }
 }
 
-fn file_stem(name: &str) -> String {
+pub(crate) fn file_stem(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     match base.rfind('.') {
         Some(idx) if idx > 0 => base[..idx].to_string(),
@@ -637,7 +637,7 @@ fn file_stem(name: &str) -> String {
     }
 }
 
-fn unique_source_id(source: &str, idx: usize) -> String {
+pub(crate) fn unique_source_id(source: &str, idx: usize) -> String {
     let stem = file_stem(source);
     let mut id = String::new();
     for ch in stem.chars() {
@@ -655,7 +655,7 @@ fn unique_source_id(source: &str, idx: usize) -> String {
     }
 }
 
-fn infer_partition_from_name(name: &str) -> Option<&'static str> {
+pub(crate) fn infer_partition_from_name(name: &str) -> Option<&'static str> {
     let low = file_stem(name).to_ascii_lowercase();
     let tokens = low
         .split(|ch: char| !ch.is_ascii_alphanumeric())
@@ -1348,7 +1348,7 @@ fn normalized_key(key: &str) -> String {
         .collect()
 }
 
-fn params_from(src: &Value) -> LoadingParams {
+pub(crate) fn params_from(src: &Value) -> LoadingParams {
     LoadingParams::from_value(src.get("params")).unwrap_or_default()
 }
 
@@ -1691,9 +1691,9 @@ struct MemColumn {
 }
 
 #[derive(Debug, Clone)]
-struct MemTable {
+pub(crate) struct MemTable {
     columns: Vec<MemColumn>,
-    n_rows: usize,
+    pub(crate) n_rows: usize,
 }
 
 impl MemTable {
@@ -1716,7 +1716,7 @@ impl MemTable {
         self.column(name).is_some()
     }
 
-    fn to_table_profile(&self) -> TableProfile {
+    pub(crate) fn to_table_profile(&self) -> TableProfile {
         TableProfile {
             n_rows: self.n_rows,
             columns: self
@@ -1764,7 +1764,7 @@ impl MemTable {
     }
 }
 
-fn read_table_bytes(bytes: &[u8], params: &LoadingParams) -> Option<MemTable> {
+pub(crate) fn read_table_bytes(bytes: &[u8], params: &LoadingParams) -> Option<MemTable> {
     let delimiter = params
         .delimiter
         .as_deref()
@@ -1958,7 +1958,7 @@ fn parse_float(s: &str) -> Option<f64> {
     t.parse::<f64>().ok()
 }
 
-fn looks_tabular(name: &str) -> bool {
+pub(crate) fn looks_tabular(name: &str) -> bool {
     let low = name.to_ascii_lowercase();
     matches!(
         low.rsplit('.').next(),
@@ -1966,7 +1966,7 @@ fn looks_tabular(name: &str) -> bool {
     )
 }
 
-fn looks_axis_column(name: &str) -> bool {
+pub(crate) fn looks_axis_column(name: &str) -> bool {
     parse_axis_header(name).is_some()
 }
 

@@ -1,6 +1,34 @@
 /* @ts-self-types="./nirs4all_io_wasm.d.ts" */
 
 /**
+ * Assemble a `DatasetSpec` into a materialized, target-agnostic dataset, fs-free.
+ *
+ * `files` = array of `{name, bytes}` — CSV/tabular bytes the formats layer won't
+ * decode (y / metadata tables). `recordSets` = array of `{source, format?,
+ * records}` — pre-decoded `nirs4all-formats` records (signals → X, targets,
+ * metadata). `spec` = a `DatasetSpec` JSON string (typically `plan.resolved_spec`);
+ * its source `input` strings must match the `name`/`source` of the supplied
+ * sources (exact, then file-stem, then glob). Returns `AssembledDataset` as a
+ * plain JS object (per-partition `blocks` with `x`/`y`/headers/metadata + `folds`).
+ *
+ * `index_file`/`folds.file` partitions are not browser-reachable here (no fs) and
+ * raise an error — column/inline partitions and folds work.
+ * @param {any} files
+ * @param {any} record_sets
+ * @param {string} spec
+ * @returns {any}
+ */
+export function assembleDataset(files, record_sets, spec) {
+    const ptr0 = passStringToWasm0(spec, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.assembleDataset(files, record_sets, ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
  * Infer a browser dataset plan from raw files and decoded spectral records.
  *
  * `files` must be an array of `{name, bytes}`. `recordSets` must be an array
@@ -46,6 +74,27 @@ export function inferFiles(files, options) {
  */
 export function inferRecords(record_sets) {
     const ret = wasm.inferRecords(record_sets);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Iterative, user-validatable dataset inference.
+ *
+ * Inputs mirror [`infer_dataset`] plus `options.confirmed` — an array of
+ * `{kind, target, value, status?}` locks the user has accepted/overridden,
+ * fed back so re-inference honours them. Returns a plain JS object
+ * `{plan, proposals, spec, valid, validation_errors}` where `proposals` is the
+ * list of still-open (and echoed confirmed) decisions to validate.
+ * @param {any} files
+ * @param {any} record_sets
+ * @param {any} options
+ * @returns {any}
+ */
+export function proposeDataset(files, record_sets, options) {
+    const ret = wasm.proposeDataset(files, record_sets, options);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }

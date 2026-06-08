@@ -20,7 +20,10 @@
         </span>
         <span>nirs4all-io <small>browser dataset builder</small></span>
       </a>
-      <span class="nav-note">Local NIRS dataset builder</span>
+      <div class="mode-toggle" id="modeToggle" role="tablist" aria-label="Builder mode">
+        <button type="button" class="active" data-mode="oneshot">One-shot</button>
+        <button type="button" data-mode="builder">Iterative builder</button>
+      </div>
       <span class="runtime" id="runtime">loading wasm</span>
     </div>
   </nav>
@@ -80,7 +83,22 @@
           <div class="file-list" id="fileList"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel builder-only">
+          <div class="panel-head">
+            <span class="step" aria-hidden="true">3</span>
+            <h3>Steps</h3>
+          </div>
+          <div class="step-list" id="stepList"></div>
+        </section>
+
+        <section class="panel builder-only">
+          <div class="panel-head">
+            <h3>Dataset so far</h3>
+          </div>
+          <div class="sofar" id="datasetSoFar"></div>
+        </section>
+
+        <section class="panel oneshot-only">
           <div class="panel-head">
             <span class="step" aria-hidden="true">3</span>
             <h3>Inference</h3>
@@ -91,6 +109,16 @@
       </aside>
 
       <section class="viz-stack">
+        <section class="panel builder-only builder-panel" id="builderPanel">
+          <div class="panel-head">
+            <span class="step" aria-hidden="true">3</span>
+            <h3>Validate the dataset</h3>
+            <span id="builderScore" class="pill">-</span>
+            <button class="secondary compact" id="acceptAll" type="button">Confirm all</button>
+          </div>
+          <div class="proposal-groups" id="proposalGroups"></div>
+        </section>
+
         <section class="panel viz-panel">
           <div class="panel-head viz-head">
             <span class="step" aria-hidden="true">4</span>
@@ -134,6 +162,14 @@
           </div>
           <form class="spec-form" id="specForm"></form>
         </section>
+
+        <section class="panel builder-only">
+          <div class="panel-head">
+            <span class="step" aria-hidden="true">6</span>
+            <h3>Materialized preview</h3>
+          </div>
+          <div class="preview" id="materializePreview"></div>
+        </section>
       </section>
     </section>
   </main>
@@ -143,5 +179,6 @@
   </template>
 
   <script type="module" src="./app.js"></script>
+  <script type="module" src="./builder.js"></script>
 </body>
 </html>

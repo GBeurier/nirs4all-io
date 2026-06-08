@@ -14,6 +14,7 @@ const scriptSafe = (value) => value.replace(/<\/(script)/gi, "<\\/$1");
 const html = readText("index.html");
 const css = readText("styles.css");
 const appJs = readText("app.js");
+const builderJs = readText("builder.js");
 
 const wasmBundles = {
   formats: {
@@ -101,9 +102,9 @@ standalone = replaceOne(
 );
 standalone = replaceOne(
   standalone,
-  /\s*<script type="module" src="\.\/app\.js"><\/script>\n/,
-  `\n  <script type="module">\n${scriptSafe(standaloneBootstrap)}\n  </script>\n  <script type="module">\n${scriptSafe(appJs)}\n  </script>\n`,
-  "app script"
+  /\s*<script type="module" src="\.\/app\.js"><\/script>\n\s*<script type="module" src="\.\/builder\.js"><\/script>\n/,
+  `\n  <script type="module">\n${scriptSafe(standaloneBootstrap)}\n  </script>\n  <script type="module">\n${scriptSafe(appJs)}\n  </script>\n  <script type="module">\n${scriptSafe(builderJs)}\n  </script>\n`,
+  "app + builder scripts"
 );
 standalone = standalone.replace(
   /<title>nirs4all-io · WASM dataset builder<\/title>/,

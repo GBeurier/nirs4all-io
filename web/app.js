@@ -13,6 +13,17 @@ const state = {
   sampleLimit: 180,
   validation: null,
   userVizSelected: false,
+  // The one-shot view (mode === "oneshot") is the landing experience, unchanged;
+  // the iterative builder (mode === "builder") is the prominent toggle.
+  mode: "oneshot",
+  confirmed: [],
+  proposals: [],
+  confirmedEchoes: [],
+  steps: [],
+  workingSpec: null,
+  assembled: null,
+  assembleError: null,
+  builderError: null,
 };
 
 const PALETTE = ["#0d9488", "#06b6d4", "#4f46e5", "#d97706", "#10b981", "#e11d48", "#7c3aed", "#0891b2"];
@@ -49,8 +60,51 @@ const extOf = (name) => {
 
 boot();
 
+// Shared seam consumed by builder.js (the iterative-builder module). app.js stays
+// the decode/inference/viz/spec-form engine; builder.js drives the propose cycle
+// and the builder-only panels through this surface.
+function exposeApp() {
+  window.NIRS4ALL_APP = {
+    state,
+    getIo: () => io,
+    usableFilesForIo,
+    recordSetsForIo,
+    renderAll,
+    drawViz,
+    datasetView,
+    chooseDefaultSignal,
+    chooseDefaultTarget,
+    defaultSpec,
+    setStatus,
+    esc,
+    fmtInt,
+    fmtNum,
+    vocab: { SOURCE_ROLES, PARTITIONS, SIGNAL_TYPES, TASK_TYPES: ["auto", "regression", "binary", "multiclass"] },
+  };
+}
+
+function setMode(mode) {
+  if (mode !== "builder" && mode !== "oneshot") return;
+  state.mode = mode;
+  document.body.classList.toggle("mode-builder", mode === "builder");
+  document.body.classList.toggle("mode-oneshot", mode === "oneshot");
+  $$("#modeToggle [data-mode]").forEach((btn) => btn.classList.toggle("active", btn.dataset.mode === mode));
+  if (state.files.length) recompute();
+  else renderAll();
+}
+
+function usableFilesForIo() {
+  const usableFiles = state.files.filter((file) => !isInferenceExcluded(file));
+  return {
+    files: usableFiles.map((f) => ({ name: f.name, bytes: f.bytes })),
+    recordSets: recordSetsForIo(),
+  };
+}
+
 async function boot() {
+  exposeApp();
   wireUi();
+  document.body.classList.add(state.mode === "builder" ? "mode-builder" : "mode-oneshot");
   renderAll();
   try {
     const [fmtMod, ioMod] = await loadWasmModules();
@@ -124,6 +178,10 @@ function wireUi() {
   });
   $("#loadSample").addEventListener("click", loadSampleDataset);
   $("#reset").addEventListener("click", reset);
+  $("#modeToggle")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-mode]");
+    if (btn) setMode(btn.dataset.mode);
+  });
   $("#resetSpec").addEventListener("click", resetSpecToInferred);
   $("#copySpec").addEventListener("click", copySpecJson);
   $("#downloadSpec").addEventListener("click", downloadSpecJson);
@@ -333,6 +391,10 @@ async function recompute() {
   annotateProbes();
   annotateSidecars();
   await decodeFiles();
+  if (state.mode === "builder" && window.NIRS4ALL_BUILDER) {
+    await window.NIRS4ALL_BUILDER.runProposeCycle();
+    return;
+  }
   await inferDataset();
   state.spec = state.plan?.blocked ? null : state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : defaultSpec();
   chooseDefaultSignal();
@@ -464,9 +526,18 @@ function reset() {
   state.activeViz = "spectra";
   state.userVizSelected = false;
   state.validation = null;
+  state.confirmed = [];
+  state.proposals = [];
+  state.confirmedEchoes = [];
+  state.steps = [];
+  state.workingSpec = null;
+  state.assembled = null;
+  state.assembleError = null;
+  state.builderError = null;
   $("#fileInput").value = "";
   setStatus("Waiting for files.");
   renderAll();
+  window.NIRS4ALL_BUILDER?.reset();
 }
 
 function defaultSpec() {
@@ -494,6 +565,7 @@ function renderAll() {
   renderTargetSelect();
   renderSpecForm();
   drawViz();
+  window.NIRS4ALL_BUILDER?.render();
 }
 
 function renderShellState() {

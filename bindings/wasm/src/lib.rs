@@ -12,11 +12,12 @@ use nirs4all_io_core::canonical_json;
 use nirs4all_io_core::infer::memory::{
     infer_browser_dataset, infer_decoded_records, infer_named_bytes, DecodedRecordSet, NamedBytes,
 };
+use nirs4all_io_core::infer::propose::{propose_browser_dataset, ConfirmedLock};
 use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
 use nirs4all_io_core::spec::{normalize_to_spec_dict, validate_spec, DatasetSpec};
 use serde::{Deserialize, Serialize};
-use serde_wasm_bindgen::Serializer;
 use serde_json::Value;
+use serde_wasm_bindgen::Serializer;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
@@ -39,6 +40,24 @@ struct WasmRecordSet {
 struct InferOptions {
     #[serde(default)]
     conventions: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct WasmConfirmedLock {
+    kind: String,
+    target: String,
+    #[serde(default)]
+    value: Value,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct ProposeOptions {
+    #[serde(default)]
+    conventions: Vec<String>,
+    #[serde(default)]
+    confirmed: Vec<WasmConfirmedLock>,
 }
 
 fn js_serializer() -> Serializer {
@@ -98,7 +117,11 @@ pub fn infer_files(files: JsValue, options: JsValue) -> Result<JsValue, JsError>
 /// `files` must be an array of `{name, bytes}`. `recordSets` must be an array
 /// of `{source, format?, records}` where records follow `nirs4all-formats`.
 #[wasm_bindgen(js_name = inferDataset)]
-pub fn infer_dataset(files: JsValue, record_sets: JsValue, options: JsValue) -> Result<JsValue, JsError> {
+pub fn infer_dataset(
+    files: JsValue,
+    record_sets: JsValue,
+    options: JsValue,
+) -> Result<JsValue, JsError> {
     let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
         .map_err(|e| JsError::new(&format!("files must be an array of {{name, bytes}}: {e}")))?;
     let record_sets: Vec<WasmRecordSet> = serde_wasm_bindgen::from_value(record_sets)
@@ -124,9 +147,70 @@ pub fn infer_dataset(files: JsValue, record_sets: JsValue, options: JsValue) -> 
     } else {
         Some(options.conventions.as_slice())
     };
-    let plan = infer_browser_dataset(&named, &sets, conventions)
-        .map_err(|e| JsError::new(&e.message))?;
+    let plan =
+        infer_browser_dataset(&named, &sets, conventions).map_err(|e| JsError::new(&e.message))?;
     plan.to_value()
+        .serialize(&js_serializer())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Iterative, user-validatable dataset inference.
+///
+/// Inputs mirror [`infer_dataset`] plus `options.confirmed` — an array of
+/// `{kind, target, value, status?}` locks the user has accepted/overridden,
+/// fed back so re-inference honours them. Returns a plain JS object
+/// `{plan, proposals, spec, valid, validation_errors}` where `proposals` is the
+/// list of still-open (and echoed confirmed) decisions to validate.
+#[wasm_bindgen(js_name = proposeDataset)]
+pub fn propose_dataset(
+    files: JsValue,
+    record_sets: JsValue,
+    options: JsValue,
+) -> Result<JsValue, JsError> {
+    let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
+        .map_err(|e| JsError::new(&format!("files must be an array of {{name, bytes}}: {e}")))?;
+    let record_sets: Vec<WasmRecordSet> = serde_wasm_bindgen::from_value(record_sets)
+        .map_err(|e| JsError::new(&format!("recordSets must be an array: {e}")))?;
+    let opts: ProposeOptions = if options.is_null() || options.is_undefined() {
+        ProposeOptions::default()
+    } else {
+        serde_wasm_bindgen::from_value(options)
+            .map_err(|e| JsError::new(&format!("invalid propose options: {e}")))?
+    };
+    let named = files
+        .into_iter()
+        .map(|f| NamedBytes {
+            name: f.name,
+            bytes: f.bytes,
+        })
+        .collect::<Vec<_>>();
+    let sets = record_sets
+        .into_iter()
+        .map(|set| DecodedRecordSet {
+            source: set.source,
+            format: set.format,
+            records: set.records,
+        })
+        .collect::<Vec<_>>();
+    let confirmed = opts
+        .confirmed
+        .into_iter()
+        .map(|l| ConfirmedLock {
+            kind: l.kind,
+            target: l.target,
+            value: l.value,
+            status: l.status,
+        })
+        .collect::<Vec<_>>();
+    let conventions = if opts.conventions.is_empty() {
+        None
+    } else {
+        Some(opts.conventions.as_slice())
+    };
+    let result = propose_browser_dataset(&named, &sets, &confirmed, conventions)
+        .map_err(|e| JsError::new(&e.message))?;
+    result
+        .to_value()
         .serialize(&js_serializer())
         .map_err(|e| JsError::new(&e.to_string()))
 }

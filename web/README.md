@@ -3,7 +3,20 @@
 Browser-only dataset builder using:
 
 - `nirs4all-formats` WASM for spectroscopy/proprietary file decoding and format-owned sidecar declarations. The default bundle is built with HDF5/NetCDF, MATLAB/RData, and Parquet reader families enabled.
-- `nirs4all-io` WASM for in-memory browser dataset inference (`inferDataset`) and `DatasetSpec` validation.
+- `nirs4all-io` WASM for in-memory browser dataset inference (`inferDataset`), iterative proposals (`proposeDataset`), materialization (`assembleDataset`), and `DatasetSpec` validation.
+
+## Two modes (nav toggle)
+
+- **One-shot** (default): drop everything at once → `inferDataset` proposes a full
+  `DatasetSpec` you can edit. This is the original flow, unchanged.
+- **Iterative builder**: add files one at a time and **validate each inferred
+  decision** before moving on. Each `proposeDataset` call surfaces the still-open
+  decisions (structure, per-file role, partition, identity, **X↔Y pairing** by id
+  or row count, signal/task type) as confirmable cards with alternatives and
+  evidence. Confirming a decision feeds it back as a *lock* so the next inference
+  honours it; a step timeline narrates the build, a "dataset so far" panel shows
+  the working `DatasetSpec`, and a materialized preview (`assembleDataset`) shows
+  the per-partition X/y shapes as you go.
 
 Build the local WASM bundles:
 

@@ -108,4 +108,36 @@ assert.ok(metaCols.includes("galactic_spc"), "metadata frame is populated");
 assert.ok(!metaCols.includes("sample_id"), "sample_id is identity, not metadata");
 assert.ok(!block.y, "no targets => no y");
 
+// proposeDataset: iterative builder surface. An X/y pair sharing sample_id ->
+// the proposal layer surfaces a pairing decision; confirming it as a join writes
+// a SourceSpec.join and suppresses the open proposal.
+const xCsv = {
+  name: "Xcal.csv",
+  bytes: new TextEncoder().encode(
+    "sample_id;1000;1005;1010\ns1;0.1;0.2;0.3\ns2;0.2;0.3;0.4\ns3;0.3;0.4;0.5\n"
+  ),
+};
+const yCsv = {
+  name: "Ycal.csv",
+  bytes: new TextEncoder().encode("sample_id;protein\ns1;11\ns2;12\ns3;13\n"),
+};
+const proposed = wasm.proposeDataset([xCsv, yCsv], [], {});
+assert.ok(Array.isArray(proposed.proposals), "proposals is an array");
+assert.ok(proposed.spec.sources.length >= 2, "X and y are both sourced");
+const pairing = proposed.proposals.find((p) => p.kind === "pairing");
+assert.ok(pairing, "a pairing decision is proposed");
+assert.strictEqual(pairing.value.mode, "join_id", "shared sample_id => join_id");
+
+// Confirm the pairing -> the joined source carries a join, and the open pairing
+// proposal is gone (it returns as a status:'confirmed' echo instead).
+const confirmed = wasm.proposeDataset([xCsv, yCsv], [], {
+  confirmed: [{ kind: "pairing", target: pairing.target, value: { mode: "join_id", on: "sample_id" } }],
+});
+const hasJoin = confirmed.spec.sources.some((s) => s.join);
+assert.ok(hasJoin, "join_id lock writes a SourceSpec.join");
+const stillOpen = confirmed.proposals.some(
+  (p) => p.kind === "pairing" && p.target === pairing.target && p.status === "proposed"
+);
+assert.ok(!stillOpen, "the confirmed pairing proposal is suppressed");
+
 console.log("wasm node smoke OK");

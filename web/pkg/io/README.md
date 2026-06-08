@@ -17,6 +17,8 @@ validate(spec_json)  // String -> undefined; throws when the spec is invalid
 inferFiles(files, options) // [{name, bytes: Uint8Array}], {conventions?} -> DatasetPlan object
 inferRecords(recordSets)   // decoded nirs4all-formats records -> DatasetPlan object
 inferDataset(files, recordSets, options) // browser raw files + decoded records -> DatasetPlan object
+proposeDataset(files, recordSets, options) // iterative builder: -> {plan, proposals, spec, valid, validation_errors}
+assembleDataset(files, recordSets, specJson) // materialize a DatasetSpec -> AssembledDataset object
 version()            // () -> crate version string (semver)
 ```
 
@@ -25,8 +27,21 @@ JSON. `validate` parses a `DatasetSpec` JSON string and throws on an invalid
 spec. `inferFiles` runs the same convention / column-role / signal / task
 inference over named byte buffers and returns a `DatasetPlan` with an editable
 `resolved_spec`. `inferRecords` infers from the decoded spectral record shape
-emitted by `nirs4all-formats`. `inferDataset` is the browser entry point: it
-combines raw files and decoded records in Rust, keeping the page as a thin UI.
+emitted by `nirs4all-formats`. `inferDataset` is the one-shot browser entry
+point: it combines raw files and decoded records in Rust, keeping the page as a
+thin UI.
+
+`proposeDataset` is the **iterative** builder entry point. It post-processes
+`inferDataset`: it synthesises a *provisional* source for each un-sourced tabular
+file, applies the user's `options.confirmed` decisions (an array of
+`{kind, target, value, status?}` *locks* over
+structure/role/partition/identity/pairing/signal_type/task_type/folds — rewriting
+the spec fields the assembler reads; `structure` is advisory), and returns the
+still-open decisions as confirmable
+`proposals` (each with `alternatives`, `evidence`, `score`, `ambiguous`),
+including a pairing-by-row-count heuristic. Feed an accepted proposal back as a
+`confirmed` lock and call it again to refine. `assembleDataset` materializes the
+resulting `spec` into per-partition X/y/metadata blocks for a preview.
 
 ## Build & install
 
