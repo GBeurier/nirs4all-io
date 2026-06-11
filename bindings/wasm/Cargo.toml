@@ -5,7 +5,7 @@ description = "wasm-bindgen binding for nirs4all-io: the fs-free JSON surface (t
 version = "0.1.0-alpha.0"
 edition = "2021"
 license = "CeCILL-2.1 OR AGPL-3.0-or-later"
-authors = ["Gregory Beurier <beurier@cirad.fr>"]
+authors = ["Gregory Beurier <gregory.beurier@cirad.fr>"]
 repository = "https://github.com/GBeurier/nirs4all-io"
 publish = false
 

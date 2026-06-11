@@ -24,7 +24,7 @@ edition = "2021"
 # Rust crates are dual-licensed because they port nirs4all-derived logic
 # (D-R5); see COPY_PROVENANCE.md.
 license = "CeCILL-2.1 OR AGPL-3.0-or-later"
-authors = ["Gregory Beurier <beurier@cirad.fr>"]
+authors = ["Gregory Beurier <gregory.beurier@cirad.fr>"]
 repository = "https://github.com/GBeurier/nirs4all-io"
 homepage = "https://github.com/GBeurier/nirs4all-io"
 readme = "README.md"

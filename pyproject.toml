@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 license = "CeCILL-2.1 OR AGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSES/*.txt"]
 authors = [
-    { name = "Gregory Beurier", email = "beurier@cirad.fr" },
+    { name = "Gregory Beurier", email = "gregory.beurier@cirad.fr" },
 ]
 keywords = ["nirs", "spectroscopy", "dataset", "loader", "inference", "chemometrics", "machine-learning"]
 classifiers = [

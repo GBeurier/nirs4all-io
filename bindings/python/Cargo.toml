@@ -5,7 +5,7 @@ description = "pyo3/maturin Python binding for nirs4all-io (infer / to_spec / va
 version = "0.1.0-alpha.0"
 edition = "2021"
 license = "CeCILL-2.1 OR AGPL-3.0-or-later"
-authors = ["Gregory Beurier <beurier@cirad.fr>"]
+authors = ["Gregory Beurier <gregory.beurier@cirad.fr>"]
 repository = "https://github.com/GBeurier/nirs4all-io"
 publish = false
 
