@@ -271,3 +271,28 @@ web UI / `cargo yank --version X.Y.Z <crate>`) so it is unavailable to new
 installs without breaking existing pins. For npm, `npm deprecate`. For the
 GitHub Release, `gh release delete vX.Y.Z` and re-run `release-source.yml` for a
 corrected tag.
+
+## Operational notes (lessons from the 0.1.0 first release)
+
+- **crates.io requires a valid SPDX license id.** `CeCILL-2.1` is rejected with
+  `400 — unknown or invalid license expression`; the correct identifier is
+  **`CECILL-2.1`** (all caps). Set it in `[workspace.package].license`.
+- **crates.io rate-limits NEW crates** (burst ~5, then throttled). Publishing many
+  new crate names at once fails with `429 — too many new crates`; wait for the
+  stated reset and re-run `release-crates` (already-uploaded crates skip via the
+  tolerance; only the pending leaf re-publishes).
+- **Verify crates.io with a `User-Agent` header** — the API returns nothing without
+  one, so a *successful* publish can look "absent". The `cargo publish` log line
+  `Published <crate> at registry crates-io` is the source of truth.
+- **Pre-release versions don't auto-publish.** `0.1.0-alpha.0` (a `-` tag) is gated
+  out of every publish job — bump to a plain `vX.Y.Z` (`bump_version.sh --bump
+  0.1.0`, then refresh `Cargo.lock`) to release.
+- **Rust staticlib in the R package on Windows** needs the **GNU ABI**: build the
+  capi with `--target x86_64-pc-windows-gnu` (the MSVC host toolchain produces an
+  MSVC `.lib` Rtools' mingw `ld` can't link — MSVC-mangled `type_info`,
+  CRT-mismatched `__imp_WSAGetLastError`). Build **staticlib-only** (Rtools45 ships
+  no `libgcc_eh.a`, so a cdylib emit fails on `-lgcc_eh`) and link
+  `-lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lgcc` (the `--print
+  native-static-libs` set; `-lgcc` carries EH/unwind/`__chkstk`).
+- **npm**: same Automation-token + `@nirs4all` org-write requirement as the other
+  repos; the `release-npm` dispatch `publish` input defaults to a dry run.
