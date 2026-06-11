@@ -1,17 +1,32 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 # EPIC 12.6 — release pipelines. On a version tag, build the distributable
-# artifacts for every surface and attach them to the GitHub release:
-#   - Python abi3 wheels (maturin)            → PyPI (trusted publishing / OIDC)
-#   - WASM npm package (wasm-pack)            → npm
+# artifacts for the Python + C-ABI surfaces and attach them to the GitHub
+# Release:
+#   - Python abi3 wheels (maturin, all 3 OS)  → PyPI (Trusted Publishing / OIDC)
+#   - Python sdist (maturin)                  → PyPI
 #   - C-ABI archive (lib + header + LICENSES) → release asset (for C/R/MATLAB hosts)
-#   - R source tarball (R CMD build)          → release asset
-# Publish steps are gated on the relevant tokens/OIDC; the build steps run on
-# every tag so artifacts are always produced and verifiable.
+#
+# The other surfaces live in their own workflows:
+#   - JS/WASM npm package  → .github/workflows/release-npm.yml (@nirs4all/io-wasm)
+#   - R source tarball     → .github/workflows/release-r.yml   (R-universe / Release asset)
+#   - MATLAB/Octave zip    → .github/workflows/release-matlab.yml
+#   - Rust crates          → .github/workflows/release-crates.yml (crates.io)
+#   - Source + SBOM bundle → .github/workflows/release-source.yml
+#
+# Publish steps gate on a non-pre-release tag (no '-' in the tag) and on a real
+# tag push (never workflow_dispatch). io's Rust build is PURE RUST (no system
+# HDF5/C lib), so macOS binary wheels ship alongside Linux + Windows — there is
+# NO macOS deferral here.
 name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build artifacts without publishing"
+        required: false
+        default: "true"
 
 permissions:
   contents: write   # attach release assets
@@ -24,6 +39,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # io's Rust core is pure-Rust (glob/flate2/zip/csv/regex/serde/sha2),
+        # so macOS wheels build cleanly — ship all three OSes.
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +52,7 @@ jobs:
         with:
           name: wheels-${{ matrix.os }}
           path: dist/*.whl
+          if-no-files-found: error
 
   python-sdist:
     name: Python sdist
@@ -49,47 +67,7 @@ jobs:
         with:
           name: sdist
           path: dist/*.tar.gz
-
-  publish-pypi:
-    name: Publish to PyPI (OIDC)
-    needs: [python-wheels, python-sdist]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    environment: pypi
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: upload
-          args: --non-interactive --skip-existing dist/*
-
-  wasm-npm:
-    name: WASM npm package
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: jetli/wasm-pack-action@v0.4.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
-      - name: Build npm package
-        run: wasm-pack build bindings/wasm --target bundler --out-dir pkg
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wasm-pkg
-          path: bindings/wasm/pkg
-      - name: Publish to npm
-        if: ${{ env.NODE_AUTH_TOKEN != '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: wasm-pack publish bindings/wasm --target bundler || true
+          if-no-files-found: error
 
   c-abi-archive:
     name: C-ABI archive (${{ matrix.os }})
@@ -118,25 +96,92 @@ jobs:
         with:
           name: c-abi-${{ matrix.os }}
           path: nirs4all-io-capi-*.tar.gz
+          if-no-files-found: error
 
-  r-source:
-    name: R source tarball
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [python-wheels, python-sdist]
     runs-on: ubuntu-latest
+    # Gate to production tags only. Pre-release tags (anything containing '-',
+    # e.g. v0.1.0-alpha.1) are excluded so they never reach PyPI; and never on
+    # a workflow_dispatch dry run — only a real tag push publishes. Mirrors the
+    # nirs4all-formats / nirs4all-methods convention.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && github.event_name != 'workflow_dispatch' }}
+    # Use the `pypi` GitHub environment so the OIDC token carries an
+    # `environment: pypi` claim — matching the Trusted Publisher configured on
+    # pypi.org with Environment = `pypi`. This is the SAME convention as
+    # nirs4all-formats / nirs4all-methods, so every publisher across the
+    # ecosystem is created identically: owner=GBeurier, repo=<this repo>,
+    # workflow=release.yml, Environment=`pypi`.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/nirs4all-io
+    permissions:
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: r-lib/actions/setup-r@v2
-      - name: Build R source package
-        run: R CMD build bindings/r
-      - uses: actions/upload-artifact@v4
+      # Pull ONLY the Python wheels + sdist into dist/. A bare download-artifact
+      # with no `pattern:`/`name:` grabs EVERY run artifact, which would drag the
+      # C-ABI archives (nirs4all-io-capi-*.tar.gz) into dist/; the publish
+      # action's twine pre-flight then rejects them ("InvalidDistribution: No
+      # PKG-INFO in archive") and aborts before any upload. Wheels live under
+      # wheels-*, the sdist under the `sdist` artifact.
+      - name: Download Python wheels
+        uses: actions/download-artifact@v4
         with:
-          name: r-source
-          path: nirs4allio_*.tar.gz
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+      - name: Download Python sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Validate tag matches the built wheel/sdist version
+        run: |
+          set -euo pipefail
+          # The tag minus the leading 'v' must equal the PEP 440 package version
+          # baked into the wheels + sdist. PEP 440 alpha/beta/rc spellings
+          # (0.1.0a1, 0.1.0b2, 0.1.0rc1) are allowed alongside a plain X.Y.Z;
+          # SemVer pre-release tags (with '-') are already gated out above.
+          # scripts/bump_version.sh keeps the package version in sync with the
+          # Cargo workspace SoT.
+          tag_version="${GITHUB_REF_NAME#v}"
+          # maturin normalizes to nirs4all_io-<version>-... for wheels and
+          # nirs4all_io-<version>.tar.gz for the sdist.
+          dist_file=$(ls dist/nirs4all_io-*.whl dist/nirs4all_io-*.tar.gz 2>/dev/null | head -n1 || true)
+          if [[ -z "${dist_file}" ]]; then
+            echo "::error::no nirs4all_io wheel/sdist found in dist/ to validate" >&2
+            ls -la dist/ >&2 || true
+            exit 1
+          fi
+          base=$(basename "${dist_file}")
+          rest="${base#nirs4all_io-}"
+          dist_version="${rest%%-*}"               # wheel:  0.1.0a1-cp311-... -> 0.1.0a1
+          dist_version="${dist_version%.tar.gz}"   # sdist:  0.1.0a1.tar.gz    -> 0.1.0a1
+          # Auto-publish to the real PyPI index is PRODUCTION-ONLY: the tag must
+          # be a plain vX.Y.Z. This is stricter than the job-level !contains('-')
+          # gate (which lets a PEP 440 prerelease spelling like v0.1.0a1 slip
+          # through, since it has no '-'); pre-releases are published manually.
+          if [[ ! "${tag_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} is not a production release version (vX.Y.Z); pre-releases are not auto-published to PyPI" >&2
+            exit 1
+          fi
+          if [[ "${tag_version}" != "${dist_version}" ]]; then
+            echo "::error::Tag version (${tag_version}) != built package version (${dist_version})" >&2
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches built package version ${dist_version}."
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
 
   github-release:
     name: Attach assets to the GitHub release
-    needs: [python-wheels, python-sdist, wasm-npm, c-abi-archive, r-source]
+    needs: [python-wheels, python-sdist, c-abi-archive]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Same gate as publish-pypi: production tags only, pre-release tags ('-')
+    # excluded so a pre-release never cuts a public GitHub Release.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && github.event_name != 'workflow_dispatch' }}
     steps:
       - uses: actions/download-artifact@v4
         with:

@@ -1,0 +1,8 @@
+^build_and_test\.sh$
+^cran-comments\.md$
+^\.Rbuildignore$
+^src/.*\.o$
+^src/.*\.so$
+^src/.*\.dll$
+^.*\.Rproj$
+^\.Rproj\.user$
