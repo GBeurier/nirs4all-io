@@ -58,7 +58,10 @@ contract). See [`COMPAT.md`](COMPAT.md) for the full operation matrix.
 
 - **CLI** — `nirs4all-io` (`infer` / `to-spec` / `validate` / `load` / `emit-dag-ml-data`).
 - **Python** (pyo3/maturin) — [`bindings/python`](bindings/python/README.md); the only surface that builds a real `SpectroDataset`.
-- **R** (`.Call` over the C ABI) — [`bindings/r`](bindings/r/README.md).
+- **R** (`.Call` over the C ABI) — [`bindings/r`](bindings/r/README.md). Install the prebuilt binary from R-universe:
+  ```r
+  install.packages("nirs4allio", repos = c("https://gbeurier.r-universe.dev", getOption("repos")))
+  ```
 - **MATLAB / Octave** (MEX over the C ABI) — [`bindings/matlab`](bindings/matlab/README.md).
 - **WASM / JS** (wasm-bindgen, fs-free) — [`bindings/wasm`](bindings/wasm/README.md).
 
