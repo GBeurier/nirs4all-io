@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io"
-version = "0.1.0-alpha.0"
+version = "0.1.0"
 dependencies = [
  "csv",
  "flate2",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-core"
-version = "0.1.0-alpha.0"
+version = "0.1.0"
 dependencies = [
  "csv",
  "indexmap",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-py"
-version = "0.1.0-alpha.0"
+version = "0.1.0"
 dependencies = [
  "nirs4all-io",
  "pyo3",

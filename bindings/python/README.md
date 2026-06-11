@@ -31,14 +31,34 @@ All functions are re-exported from `nirs4all_io`.
 
 | Function | Signature | Returns |
 |---|---|---|
-| `infer` | `infer(input, conventions=None)` | scored `DatasetPlan` dict (data input only) |
-| `to_spec` | `to_spec(input, conventions=None, name=None)` | canonical `DatasetSpec` dict |
+| `infer` | `infer(input, conventions=None)` | a `DatasetPlan` (data input only) |
+| `to_spec` | `to_spec(input, conventions=None, name=None)` | a `DatasetSpec` |
 | `validate` | `validate(spec)` | `None`; raises `ValueError` if invalid |
 | `load` | `load(input, *, target="assembled", conventions=None, name=None, spectro_dataset_cls=None)` | summary dict, or a `SpectroDataset` |
 | `to_spectrodataset` | `to_spectrodataset(full, *, spectro_dataset_cls=None)` | a `SpectroDataset` |
 
-**Inputs** (`input`) accept a `str` path, a sequence of `str` (file list), or a
-`dict` (a spec). `validate` additionally accepts a JSON string.
+**Inputs** (`input`) accept a `str` path, a `pathlib.Path`, a sequence of either
+(file list), or a `dict` (a spec). `validate` additionally accepts a JSON string.
+
+**Typed results.** `infer` returns a `DatasetPlan` and `to_spec` a `DatasetSpec`.
+Both subclass `dict` — they stay subscriptable, JSON-serializable, and valid
+inputs to `validate` / `load` — and add a readable `repr` plus convenience
+accessors:
+
+- `DatasetSpec`: `.name`, `.schema_version`, `.sources`.
+- `DatasetPlan`: `.overall_score`, `.resolved_spec` (a `DatasetSpec`),
+  `.recommendations`, `.warnings`, and `.decisions()` (the scored
+  structure/signal_type/task_type decisions, keyed by kind).
+
+```python
+>>> plan = nio.infer("/data/run")
+>>> plan
+DatasetPlan(overall_score=0.883, structure='x_y_separate'(0.85), ...)
+>>> plan.decisions().keys()
+dict_keys(['structure', 'signal_type', 'task_type'])
+>>> plan.resolved_spec
+DatasetSpec(name='data', schema_version=1, sources=[data:mixed])
+```
 
 **`load` targets:**
 - `target="assembled"` → the rounded structural summary dict (no `nirs4all`).
@@ -51,11 +71,15 @@ All functions are re-exported from `nirs4all_io`.
 ## Usage
 
 ```python
+from pathlib import Path
 import nirs4all_io as nio
 
-plan = nio.infer("/data/run")                  # scored DatasetPlan dict
-spec = nio.to_spec("/data/run")                # canonical DatasetSpec dict
+plan = nio.infer(Path("/data/run"))            # DatasetPlan (typed dict)
+spec = nio.to_spec("/data/run")                # DatasetSpec (typed dict)
 nio.validate(spec)                             # raises ValueError if invalid
+
+print(spec.schema_version, len(spec.sources))  # convenience accessors
+print(plan.decisions())                        # scored inference decisions
 
 summary = nio.load("/data/run")                # target="assembled" (default)
 ds = nio.load("/data/run", target="spectrodataset")   # nirs4all SpectroDataset

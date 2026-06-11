@@ -30,6 +30,9 @@ bindings/r/src/*.o
 bindings/r/src/*.so
 bindings/matlab/*.mex
 bindings/matlab/*.o
+# Python pyo3 extension built in-place by `maturin develop` (editable install).
+bindings/python/python/nirs4all_io/_native*.so
+bindings/python/python/nirs4all_io/_native*.pyd
 
 # OS
 .DS_Store
