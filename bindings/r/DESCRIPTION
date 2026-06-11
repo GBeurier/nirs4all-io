@@ -1,6 +1,6 @@
 Package: nirs4allio
 Title: Dataset-Assembly Bridge for the nirs4all Ecosystem
-Version: 0.1.0.9000
+Version: 0.1.0
 Authors@R: person("Gregory", "Beurier", email = "gregory.beurier@cirad.fr", role = c("aut", "cre"))
 Description: R binding over the nirs4all-io C ABI (n4io_*): normalize inputs into a
     canonical DatasetSpec, infer a DatasetPlan, and validate a DatasetSpec. The
