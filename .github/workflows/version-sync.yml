@@ -5,9 +5,12 @@
 #                                         (internal dep version, for crates.io)
 #   - bindings/python/Cargo.toml          (Cargo SemVer)
 #   - bindings/wasm/Cargo.toml            (Cargo SemVer)
-#   - bindings/wasm/pkg/package.json      (Cargo SemVer; npm accepts it verbatim)
 #   - src/nirs4all_io/_version.py         (PEP 440)
 #   - bindings/r/DESCRIPTION              (R version spelling)
+#
+# The npm package.json (bindings/wasm/pkg/) is a gitignored wasm-pack build
+# artifact, NOT a sync target — release-npm.yml injects the SoT version into the
+# generated pkg-node/package.json at build time.
 #
 # bindings/python/pyproject.toml is dynamic-from-Cargo (maturin reads
 # bindings/python/Cargo.toml) so it is NOT a sync target.

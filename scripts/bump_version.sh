@@ -20,9 +20,10 @@
 #               Used by the root Cargo.toml [workspace.dependencies]
 #               nirs4all-io-core / nirs4all-io internal-dep `version` (required
 #               so the published crates resolve each other from crates.io),
-#               bindings/python/Cargo.toml, bindings/wasm/Cargo.toml, and
-#               bindings/wasm/pkg/package.json (npm accepts the Cargo SemVer
-#               spelling verbatim).
+#               bindings/python/Cargo.toml, and bindings/wasm/Cargo.toml.
+#               The npm package.json (bindings/wasm/pkg/) is a gitignored
+#               wasm-pack build artifact, NOT a sync target — release-npm.yml
+#               injects the SoT version into it at build time.
 #   * PEP 440 : `0.1.0a1` for `0.1.0-alpha.1`; `0.1.0b2` / `0.1.0rc1` for
 #               beta / rc; plain `X.Y.Z` maps to itself.
 #               Used by src/nirs4all_io/_version.py (the root Python package).
@@ -253,13 +254,12 @@ update_with_sed \
     "^version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
     "s/^(version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
 
-# WASM npm package manifest (bindings/wasm/pkg/package.json: "version": "X.Y.Z[-pre]").
-# npm/SemVer accepts the Cargo spelling (e.g. 0.1.0-alpha.1) verbatim.
-update_with_sed \
-    "bindings/wasm/pkg/package.json" \
-    "${CARGO_VERSION}" \
-    "\"version\"[[:space:]]*:[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
-    "s/(\"version\"[[:space:]]*:[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
+# NOTE: bindings/wasm/pkg/package.json is a wasm-pack BUILD ARTIFACT — the whole
+# pkg/ directory is gitignored (bindings/wasm/pkg/.gitignore is `*`), so it is
+# NOT in version control and is absent on a fresh checkout. release-npm.yml
+# injects the canonical SoT version into the generated pkg-node/package.json at
+# build time (the "Pin package.json name + version" step reads the Cargo SoT),
+# so there is nothing to sync here.
 
 # --- PEP 440 target --------------------------------------------------------
 

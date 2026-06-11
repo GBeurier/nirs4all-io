@@ -26,7 +26,7 @@ the spelling each ecosystem requires:
 
 | Spelling | Example (`0.1.0-alpha.1`) | Manifests |
 |---|---|---|
-| Cargo SemVer (verbatim) | `0.1.0-alpha.1` | `bindings/python/Cargo.toml`, `bindings/wasm/Cargo.toml`, `bindings/wasm/pkg/package.json` (npm accepts the Cargo spelling verbatim) |
+| Cargo SemVer (verbatim) | `0.1.0-alpha.1` | root `Cargo.toml` `[workspace.dependencies]` internal-crate `version`, `bindings/python/Cargo.toml`, `bindings/wasm/Cargo.toml` |
 | PEP 440 | `0.1.0a1` (`alpha.N→aN`, `beta.N→bN`, `rc.N→rcN`; plain `X.Y.Z`→itself) | `src/nirs4all_io/_version.py` |
 | R | `0.1.0.9000` (plain `X.Y.Z` for a final; `X.Y.Z.9000` "in development toward X.Y.Z" for ANY pre-release, since CRAN rejects SemVer pre-release suffixes) | `bindings/r/DESCRIPTION` |
 
@@ -34,7 +34,11 @@ the spelling each ecosystem requires:
 > (`dynamic = ["version"]`; maturin reads the version from
 > `bindings/python/Cargo.toml` `[package] version`), so it is **not** a sync
 > target. The root `pyproject.toml` reads its version from
-> `src/nirs4all_io/_version.py` (hatchling), which **is** a sync target.
+> `src/nirs4all_io/_version.py` (hatchling), which **is** a sync target. The npm
+> `bindings/wasm/pkg/package.json` is a **gitignored wasm-pack build artifact**
+> (not in version control), so it is **not** a sync target either —
+> `release-npm.yml` injects the SoT version into the generated
+> `pkg-node/package.json` at build time.
 
 ```bash
 scripts/bump_version.sh --check          # exit 1 on any drift (CI gate)
@@ -78,11 +82,11 @@ Run these before tagging or publishing anything:
 
 1. **Version sync** — `scripts/bump_version.sh --check`. The canonical version
    lives in the root `Cargo.toml` `[workspace.package] version`; the script
-   syncs it into every binding manifest (the root `[workspace.dependencies]`
-   internal-crate versions used for crates.io resolution, the two binding Cargo
-   manifests, the npm `package.json`, the PEP 440 `_version.py`, and the R
-   `DESCRIPTION`). **Bump with** `bump_version.sh --bump X.Y.Z[-pre]`. Enforced
-   in CI by `version-sync.yml`.
+   syncs it into every tracked binding manifest (the root
+   `[workspace.dependencies]` internal-crate versions used for crates.io
+   resolution, the two binding Cargo manifests, the PEP 440 `_version.py`, and
+   the R `DESCRIPTION`). **Bump with** `bump_version.sh --bump X.Y.Z[-pre]`.
+   Enforced in CI by `version-sync.yml`.
 2. **Green gate** — `cargo fmt --check`, `cargo clippy -D warnings`,
    `cargo test --workspace`, plus the Python / R / WASM / MATLAB binding smokes.
 3. **C ABI sanity** — the committed `crates/nirs4all-io-capi/include/nirs4all_io.h`
