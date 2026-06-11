@@ -9,13 +9,39 @@ strings are copied into R and freed with `n4io_string_free`.
 ```r
 library(nirs4allio)
 
+# Idiomatic layer: native R inputs in, typed S3 objects out.
+spec <- nio_to_spec("/data/run")     # n4io_spec (parsed canonical DatasetSpec)
+plan <- nio_infer("/data/run")       # n4io_plan (parsed scored DatasetPlan)
+nio_validate(spec)                   # invisible TRUE; informative error otherwise
+print(plan)                          # readable summary of scored decisions
+as.data.frame(plan)                  # one row per scored decision (value/score/...)
+nio_resolved_spec(plan)              # the editable n4io_spec inside the plan
+
+# Low-level JSON surface (the stable C ABI contract) is still exported:
 n4io_to_spec('"/data/run"')          # canonical DatasetSpec (JSON string)
 n4io_infer('"/data/run"')            # scored DatasetPlan (JSON string)
 n4io_validate(specJson)              # errors if invalid; returns invisible(NULL)
 n4io_abi_version()                   # C ABI version string
 ```
 
-## Functions
+## Idiomatic functions (`nio_*`)
+
+Native R inputs (a path, a vector of files, or a config `list`) are JSON-encoded
+internally with `jsonlite` and the result is parsed back into a typed S3 object.
+
+| Function | Signature | Returns |
+|---|---|---|
+| `nio_to_spec` | `nio_to_spec(input, conventions = NULL)` | an `n4io_spec` (parsed canonical `DatasetSpec`) |
+| `nio_infer` | `nio_infer(input, conventions = NULL)` | an `n4io_plan` (parsed scored `DatasetPlan`) |
+| `nio_validate` | `nio_validate(spec)` | invisibly `TRUE`; informative error if invalid. Accepts an `n4io_spec`, a `list`, or a JSON string |
+| `nio_resolved_spec` | `nio_resolved_spec(plan)` | the editable `n4io_spec` carried in `plan$resolved_spec` |
+
+S3 methods: `print` / `format` for `n4io_plan` and `n4io_spec`,
+`as.data.frame(plan)` (scored decisions: `decision`, `value`, `score`,
+`ambiguous`, `n_alternatives`), and `as.list` for both classes. `conventions` is
+a character vector of convention names.
+
+## Low-level functions (`n4io_*`)
 
 | Function | Signature | Returns |
 |---|---|---|
@@ -26,12 +52,13 @@ n4io_abi_version()                   # C ABI version string
 
 `conventions_json`, when supplied, is a JSON array of convention names.
 
-## Inputs cross as JSON values
+## Low-level inputs cross as JSON values
 
 Identical to the C ABI / other bindings: a path is a quoted string
 (e.g. `'"/data/run"'`), a file list is a JSON array
 (e.g. `'["a.csv","b.csv"]'`), and a spec is a JSON object. Results are canonical
-JSON strings; the JSON⇄list layer (e.g. `jsonlite`) is the user's.
+JSON strings; the JSON⇄list layer (e.g. `jsonlite`) is the user's. The idiomatic
+`nio_*` layer does this marshalling for you.
 
 ## Build & install
 

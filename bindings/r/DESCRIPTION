@@ -4,7 +4,13 @@ Version: 0.1.0
 Authors@R: person("Gregory", "Beurier", email = "gregory.beurier@cirad.fr", role = c("aut", "cre"))
 Description: R binding over the nirs4all-io C ABI (n4io_*): normalize inputs into a
     canonical DatasetSpec, infer a DatasetPlan, and validate a DatasetSpec. The
-    JSON surface crosses the stable C ABI; results are canonical JSON strings.
+    JSON surface crosses the stable C ABI; the low-level 'n4io_*' functions take
+    and return canonical JSON strings, while the idiomatic 'nio_*' layer accepts
+    native R inputs (a path, a vector of files, or a config list) and returns
+    typed S3 objects with print and as.data.frame methods.
 License: CeCILL-2.1 | AGPL-3
 Encoding: UTF-8
+Imports:
+    jsonlite
 NeedsCompilation: yes
+RoxygenNote: 7.3.2
