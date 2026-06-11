@@ -10,19 +10,20 @@
 # 1. R's gcc driver — not rustc — drives the link, so it does NOT auto-append the
 #    Rust-std native system libs. Add the exact `rustc --print native-static-libs`
 #    set for x86_64-pc-windows-gnu (kernel32 ntdll userenv ws2_32 dbghelp) plus
-#    -lgcc_eh for the panic_unwind EH/personality refs (std is precompiled with
-#    panic=unwind; panic="abort" cannot drop it on stable Rust without
-#    nightly -Z build-std). The mingw CRT tail (-lmsvcrt/-lmingwex/-lmingw32/-lgcc)
+#    -lgcc for the panic_unwind EH/personality + __chkstk refs. NOTE: Rtools45's
+#    mingw ships NO separate libgcc_eh.a — the unwinder (_Unwind_*),
+#    __gcc_personality_seh0, and __chkstk are all merged into libgcc.a, so -lgcc
+#    (not -lgcc_eh) is the one that resolves them here. (std is precompiled with
+#    panic=unwind; panic="abort" cannot drop it on stable Rust without nightly
+#    -Z build-std.) The rest of the mingw CRT tail (-lmsvcrt/-lmingwex/-lmingw32)
 #    is supplied by Rtools' gcc driver itself — do NOT duplicate it here (Rtools45
 #    is UCRT; forcing -lmsvcrt would mismatch the CRT).
 #    System libs MUST come AFTER the archive (mingw ld is order-sensitive).
 #
-# 2. Reference the staticlib by EXACT PATH, not `-lnirs4all_io_capi`. Cargo emits
-#    both libnirs4all_io_capi.a (staticlib) and libnirs4all_io_capi.dll.a (cdylib
-#    import lib) in N4IO_CAPI_DIR; with -l, mingw ld would prefer the import lib
-#    and turn this into a runtime dependency on the Rust DLL. The explicit .a path
-#    forces the static link, so all symbols land inside nirs4allio.dll (Windows
-#    has no rpath, so a self-contained DLL is what we want).
+# 2. Reference the staticlib by EXACT PATH, not `-lnirs4all_io_capi`. build_and_test.sh
+#    builds only the staticlib (libnirs4all_io_capi.a) on Windows, so the explicit
+#    .a path forces the static link and all symbols land inside nirs4allio.dll
+#    (Windows has no rpath, so a self-contained DLL is what we want).
 PKG_CPPFLAGS = -I$(N4IO_INCLUDE)
 PKG_LIBS = $(N4IO_CAPI_DIR)/libnirs4all_io_capi.a \
-  -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lgcc_eh
+  -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lgcc

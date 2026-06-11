@@ -13,28 +13,34 @@ io_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # __chkstk). src/Makevars.win supplies the gnu runtime/system libs.
 case "$(uname -s 2>/dev/null || echo unknown)" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
+    is_windows=1
     rust_target="x86_64-pc-windows-gnu"
     rustup target add "${rust_target}" >/dev/null 2>&1 || true
-    target_flag="--target ${rust_target}"
     capi_dir="${io_root}/target/${rust_target}/release"
-    # `rustup target add` installs the gnu std but NOT a gnu linker. Bind rustc's
-    # windows-gnu linker to Rtools' mingw gcc so we don't depend on a bare `gcc`
-    # happening to be first on PATH (and so it's the SAME compiler that links the
-    # R package — one ABI/CRT end to end). Prefer the explicit rtools name, fall
-    # back to whatever `gcc` resolves to.
-    rtools_gcc="$(command -v x86_64-w64-mingw32.static.posix-gcc || command -v gcc || true)"
-    if [ -n "${rtools_gcc}" ]; then
-      export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="${rtools_gcc}"
-    fi
     ;;
   *)
-    target_flag=""
+    is_windows=0
     capi_dir="${io_root}/target/release"
     ;;
 esac
 
-echo ">> building nirs4all-io-capi (release) ${target_flag}"
-( cd "${io_root}" && cargo build -q -p nirs4all-io-capi --release ${target_flag} )
+if [ "${is_windows}" = 1 ]; then
+  # Build ONLY the staticlib crate-type for the gnu target. Two reasons:
+  #  - The R package links the staticlib (libnirs4all_io_capi.a) by exact path;
+  #    it never needs the cdylib DLL (Windows has no rpath — a self-contained
+  #    nirs4allio.dll is what we want).
+  #  - `cargo build` would also link the *cdylib*, and rustc's windows-gnu spec
+  #    emits `-lgcc_eh`, which Rtools45's mingw does NOT ship (its EH/unwind +
+  #    __chkstk live inside libgcc.a, with no separate libgcc_eh.a) — so the
+  #    cdylib link fails with "cannot find -lgcc_eh". A staticlib emit is `ar`
+  #    archiving only: it invokes no linker, so it sidesteps that entirely.
+  echo ">> building nirs4all-io-capi staticlib (release, ${rust_target})"
+  ( cd "${io_root}" && cargo rustc -q -p nirs4all-io-capi --release \
+      --target "${rust_target}" --crate-type staticlib )
+else
+  echo ">> building nirs4all-io-capi (release)"
+  ( cd "${io_root}" && cargo build -q -p nirs4all-io-capi --release )
+fi
 
 export N4IO_INCLUDE="${io_root}/crates/nirs4all-io-capi/include"
 export N4IO_CAPI_DIR="${capi_dir}"
