@@ -48,7 +48,7 @@ class Selector:
         return f"{type(self).__name__}({self.to_spec()!r})"
 
     def __eq__(self, other: object) -> bool:
-        return type(self) is type(other) and self.to_spec() == other.to_spec()  # type: ignore[attr-defined]
+        return isinstance(other, Selector) and type(self) is type(other) and self.to_spec() == other.to_spec()
 
 
 @dataclass(eq=False)

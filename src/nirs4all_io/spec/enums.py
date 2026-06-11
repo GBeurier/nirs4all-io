@@ -8,7 +8,7 @@ raise :class:`SpecError` with the list of accepted values.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import TypeVar
 
 _E = TypeVar("_E", bound="_StrEnum")
@@ -24,7 +24,7 @@ class SpecError(ValueError):
 _ALIASES: dict[type, dict[str, str]] = {}
 
 
-class _StrEnum(str, Enum):
+class _StrEnum(StrEnum):
     """Base for string enums with forgiving, case-insensitive parsing."""
 
     @classmethod
