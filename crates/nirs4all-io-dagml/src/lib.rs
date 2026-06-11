@@ -4,7 +4,7 @@
 //!
 //! io owns the assembled → envelope bridge. It maps the `AssembledDataset` onto a
 //! `DatasetSchema` (+ `SourceDescriptor`/`RepresentationSpec`/`AxisSpec`;
-//! nm→`Wavelength`, cm⁻¹→`Wavenumber`; signal_type→`tags`), a minimal `DataPlan`,
+//! nm→`Wavelength`, cm⁻¹→`Frequency`; signal_type→`tags`), a minimal `DataPlan`,
 //! and a `SampleRelationTable` (observation/sample/group/repetition identity from
 //! the repetition key, the only leakage unit io knows), then calls
 //! `CoordinatorDataPlanEnvelope::from_parts` (it computes the three fingerprints
@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use dag_ml_data::{
     AxisKind, AxisSpec, CoordinatorDataPlanEnvelope, DataPlan, DataPlanStep, DataPlanStepKind,
     DatasetSchema, FitScope, GroupId, ObservationId, RepetitionId, RepresentationId,
-    RepresentationSpec, SampleId, SampleRelation, SampleRelationTable, SignalKind,
-    SourceDescriptor, SourceGranularity, SourceId, TargetId, TypeId,
+    RepresentationSpec, SampleId, SampleRelation, SampleRelationTable, SourceDescriptor,
+    SourceGranularity, SourceId, TargetId, TypeId,
 };
 use nirs4all_io::core::spec::SpecError;
 use nirs4all_io::materialize::AssembledDataset;
@@ -82,16 +82,6 @@ fn unique_sample_id(
     candidate
 }
 
-fn signal_kind(signal: &str) -> SignalKind {
-    match signal.to_ascii_lowercase().as_str() {
-        "absorbance" => SignalKind::Absorbance,
-        "reflectance" => SignalKind::Reflectance,
-        "transmittance" => SignalKind::Transmittance,
-        "log_reflectance" => SignalKind::LogReflectance,
-        _ => SignalKind::Unknown,
-    }
-}
-
 /// Map an io header unit onto a spectral axis kind + canonical unit string.
 fn feature_axis(unit: &str) -> (AxisKind, Option<String>, &'static str) {
     let u = unit.to_ascii_lowercase();
@@ -103,7 +93,10 @@ fn feature_axis(unit: &str) -> (AxisKind, Option<String>, &'static str) {
         || u.contains("wavenumber")
         || u.contains("cm⁻¹")
     {
-        (AxisKind::Wavenumber, Some("cm-1".to_string()), "wavenumber")
+        // dag-ml-data has no dedicated wavenumber axis; cm⁻¹ is a (spatial)
+        // frequency, so it maps onto the generic `Frequency` axis kind. The
+        // canonical "cm-1" unit string is preserved on the axis.
+        (AxisKind::Frequency, Some("cm-1".to_string()), "wavenumber")
     } else {
         (AxisKind::Feature, None, "feature")
     }
@@ -209,7 +202,6 @@ pub fn to_dag_ml_data(
                 augmented: false,
                 excluded: false,
                 metadata: BTreeMap::new(),
-                augmentation: None,
             });
         }
     }
@@ -260,7 +252,6 @@ pub fn to_dag_ml_data(
                 dtype: Some("float64".into()),
                 sparse: false,
                 ragged: false,
-                signal_type: signal.as_deref().map(signal_kind),
             },
             sample_key: "sample_id".into(),
             granularity: if use_rep {
@@ -270,7 +261,6 @@ pub fn to_dag_ml_data(
             },
             schema: BTreeMap::new(),
             tags,
-            shape_contract: None,
         });
     }
 
@@ -306,7 +296,6 @@ pub fn to_dag_ml_data(
                 dtype: Some("float64".into()),
                 sparse: false,
                 ragged: false,
-                signal_type: None,
             };
             targets.insert(TargetId::new(&tid).map_err(err)?, rep);
         }
@@ -318,9 +307,6 @@ pub fn to_dag_ml_data(
         sources,
         targets,
         metadata: BTreeMap::new(),
-        metadata_schema: None,
-        groups: vec![],
-        folds: vec![],
     };
 
     // --- plan: materialize each source, join when multi-source ---
