@@ -1,10 +1,10 @@
-# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+# SPDX-License-Identifier: CECILL-2.1 OR AGPL-3.0-or-later
 [package]
 name = "nirs4all-io-dagml"
 description = "Ecosystem-only bridge: a nirs4all-io AssembledDataset -> a dag-ml-data CoordinatorDataPlanEnvelope (EPIC 10, ADR-0001). Excluded from the main workspace because it path-depends on the dag-ml-data sibling; building it requires the ecosystem tree."
 version = "0.1.0-alpha.0"
 edition = "2021"
-license = "CeCILL-2.1 OR AGPL-3.0-or-later"
+license = "CECILL-2.1 OR AGPL-3.0-or-later"
 authors = ["Gregory Beurier <gregory.beurier@cirad.fr>"]
 repository = "https://github.com/GBeurier/nirs4all-io"
 publish = false

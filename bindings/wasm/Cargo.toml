@@ -1,10 +1,10 @@
-# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+# SPDX-License-Identifier: CECILL-2.1 OR AGPL-3.0-or-later
 [package]
 name = "nirs4all-io-wasm"
 description = "wasm-bindgen binding for nirs4all-io: the fs-free JSON surface (to_spec / validate over a spec dict). Excluded from the cargo workspace; built with wasm-pack."
 version = "0.1.0"
 edition = "2021"
-license = "CeCILL-2.1 OR AGPL-3.0-or-later"
+license = "CECILL-2.1 OR AGPL-3.0-or-later"
 authors = ["Gregory Beurier <gregory.beurier@cirad.fr>"]
 repository = "https://github.com/GBeurier/nirs4all-io"
 publish = false

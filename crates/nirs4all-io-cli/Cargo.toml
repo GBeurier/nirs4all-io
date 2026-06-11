@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+# SPDX-License-Identifier: CECILL-2.1 OR AGPL-3.0-or-later
 [package]
 name = "nirs4all-io-cli"
 description = "Command-line front end for nirs4all-io: infer / to-spec / validate / load / emit-dag-ml-data."
