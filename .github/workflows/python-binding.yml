@@ -20,7 +20,7 @@ jobs:
         run: |
           pip install maturin pytest
           maturin build -m bindings/python/Cargo.toml --interpreter python3 --out dist
-      - name: Install + test (clean runner: only the binding is importable)
+      - name: "Install + test (clean runner: only the binding is importable)"
         run: |
           pip install dist/*.whl
           python -m pytest bindings/python/tests -q
