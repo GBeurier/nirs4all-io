@@ -86,7 +86,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$PWD/target/release:$PATH"   # Windows DLL resolution at smoke time
+          # Windows DLL resolution at smoke time. build_and_test.sh builds the
+          # capi with the x86_64-pc-windows-gnu toolchain on Windows (to match
+          # Rtools' mingw ABI), so put that target dir on PATH there too. The
+          # staticlib link bakes the symbols into nirs4allio.dll, but keep both
+          # dirs on PATH defensively in case ld resolves the cdylib import lib.
+          export PATH="$PWD/target/x86_64-pc-windows-gnu/release:$PWD/target/release:$PATH"
           bash bindings/r/build_and_test.sh
 
   # =========================================================================

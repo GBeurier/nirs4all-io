@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+# Windows (Rtools45 / mingw-w64, UCRT) link line for the C glue over the prebuilt
+# nirs4all-io-capi staticlib. The capi is built with the x86_64-pc-windows-gnu
+# toolchain (see build_and_test.sh) so its ABI matches Rtools' mingw gcc, which
+# performs the final link of the Rust archive into nirs4allio.dll.
+#
+# Two reasons the default `-lnirs4all_io_capi + (nothing)` from src/Makevars fails
+# here, both fixed below:
+#
+# 1. R's gcc driver — not rustc — drives the link, so it does NOT auto-append the
+#    Rust-std native system libs. Add the exact `rustc --print native-static-libs`
+#    set for x86_64-pc-windows-gnu (kernel32 ntdll userenv ws2_32 dbghelp) plus
+#    -lgcc_eh for the panic_unwind EH/personality refs (std is precompiled with
+#    panic=unwind; panic="abort" cannot drop it on stable Rust without
+#    nightly -Z build-std). The mingw CRT tail (-lmsvcrt/-lmingwex/-lmingw32/-lgcc)
+#    is supplied by Rtools' gcc driver itself — do NOT duplicate it here (Rtools45
+#    is UCRT; forcing -lmsvcrt would mismatch the CRT).
+#    System libs MUST come AFTER the archive (mingw ld is order-sensitive).
+#
+# 2. Reference the staticlib by EXACT PATH, not `-lnirs4all_io_capi`. Cargo emits
+#    both libnirs4all_io_capi.a (staticlib) and libnirs4all_io_capi.dll.a (cdylib
+#    import lib) in N4IO_CAPI_DIR; with -l, mingw ld would prefer the import lib
+#    and turn this into a runtime dependency on the Rust DLL. The explicit .a path
+#    forces the static link, so all symbols land inside nirs4allio.dll (Windows
+#    has no rpath, so a self-contained DLL is what we want).
+PKG_CPPFLAGS = -I$(N4IO_INCLUDE)
+PKG_LIBS = $(N4IO_CAPI_DIR)/libnirs4all_io_capi.a \
+  -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lgcc_eh
