@@ -3,19 +3,36 @@
 
 C-ABI-first binding over `libnirs4all_io_capi` (the `n4io_*` JSON surface). A
 single MEX (`n4io.c`) dispatches on a command string; the `+nirs4all_io` package
-gives idiomatic wrappers.
+gives idiomatic wrappers that take native MATLAB/Octave inputs and return decoded
+structs.
 
 ```matlab
-nirs4all_io.to_spec('"/data/run"')          % canonical DatasetSpec (JSON string)
-nirs4all_io.infer('"/data/run"')            % DatasetPlan (JSON string)
-nirs4all_io.validate(specJson)              % errors if invalid
+% Native inputs in, decoded structs out (jsonencode/jsondecode done internally).
+spec = nirs4all_io.to_spec('/data/run');          % struct: canonical DatasetSpec
+plan = nirs4all_io.infer('/data/run');            % struct: scored DatasetPlan
+nirs4all_io.validate(spec);                       % true; errors if invalid
+nirs4all_io.summary(plan);                        % readable scored-decision overview
+plan.resolved_spec                                % the editable spec (a struct)
 nirs4all_io.abi_version()
+
+% A cellstr file list or a struct config are accepted natively too:
+nirs4all_io.infer({'a.csv', 'b.csv'});
+nirs4all_io.to_spec(struct('name', 'run', 'sources', {{...}}));
 ```
 
-Inputs cross as JSON values (a path is a quoted string, a file list is a JSON
-array, a spec is a JSON object) — identical to the C ABI / other bindings. The
-idiomatic JSON⇄struct layer (e.g. `jsondecode`) is the user's; v0 returns/accepts
-canonical JSON strings.
+`input` accepts a native value — a char path, a cellstr of files, or a struct
+config — which is `jsonencode`d into the C-ABI JSON form (a quoted string, a JSON
+array, or a JSON object respectively) by `+nirs4all_io/+internal/encode_input.m`;
+the canonical result is `jsondecode`d back into a struct. `validate` accepts a
+struct or a JSON char. `nirs4all_io.summary` prints scored decisions for a plan
+and name/sources for a spec.
+
+The raw JSON surface stays reachable through the MEX dispatcher
+(`n4io('to_spec', input_json, ...)`, `n4io('infer', ...)`, `n4io('validate',
+spec_json)`, `n4io('abi_version')`) — identical to the C ABI / other bindings.
+
+`jsonencode`/`jsondecode` exist in MATLAB and in Octave ≥ 7 (the CI runs Octave
+on `ubuntu-latest`, currently 8.x).
 
 ## Build & test
 
