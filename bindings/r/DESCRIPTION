@@ -12,5 +12,6 @@ License: CeCILL-2.1 | AGPL-3
 Encoding: UTF-8
 Imports:
     jsonlite
+SystemRequirements: Cargo (Rust toolchain), rustc
 NeedsCompilation: yes
 RoxygenNote: 7.3.2

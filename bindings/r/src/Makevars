@@ -1,7 +1,63 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
-# Compile the C glue against the committed C ABI header and link the prebuilt
-# nirs4all-io-capi cdylib. Set these before `R CMD INSTALL` (see build_and_test.sh):
-#   N4IO_INCLUDE  -> dir containing nirs4all_io.h
-#   N4IO_CAPI_DIR -> dir containing libnirs4all_io_capi.so
-PKG_CPPFLAGS = -I$(N4IO_INCLUDE)
-PKG_LIBS = -L$(N4IO_CAPI_DIR) -lnirs4all_io_capi -Wl,-rpath,$(N4IO_CAPI_DIR)
+# Self-contained OFFLINE build of the nirs4all-io Rust core into a STATICLIB,
+# then compile the C shim (n4io.c) and link the staticlib by exact path. No
+# prebuilt nirs4all-io-capi cdylib, no N4IO_CAPI_DIR — the package vendors and
+# compiles its own staticlib (see ../configure, N4IO_R_VENDOR=1). The committed
+# C ABI header lives next to the shim (src/nirs4all_io.h), copied by ./configure.
+TARGET_DIR = $(CURDIR)/rust/target
+LIBDIR = $(TARGET_DIR)/release
+STATLIB = $(LIBDIR)/libnirs4all_io_capi.a
+# Reference the staticlib by EXACT PATH, not `-L$(LIBDIR) -lnirs4all_io_capi`:
+# the capi crate's [lib] crate-type is ["cdylib","staticlib","rlib"], so the
+# release dir holds BOTH libnirs4all_io_capi.{a,so} and `-l` would resolve the
+# .so (dynamic) — making nirs4allio.so depend on a libnirs4all_io_capi.so that
+# is not installed. The explicit .a path forces the static link, baking every
+# n4io_* symbol into nirs4allio.so (self-contained, no runtime rpath needed).
+PKG_LIBS = $(STATLIB)
+PKG_CPPFLAGS = -I$(CURDIR)
+
+.PHONY: all clean C_clean $(STATLIB)
+
+all: $(SHLIB)
+
+$(SHLIB): $(STATLIB)
+
+$(STATLIB):
+	@if ! command -v cargo >/dev/null; then \
+		echo "Cargo is required to build nirs4allio. Install Rust from https://rustup.rs."; \
+		exit 1; \
+	fi
+	# Report the toolchain version to the install log BEFORE compiling. R CMD
+	# check --as-cran scans the lines preceding the first "Compiling" for a
+	# `rustc <ver>` line; without it the "Rust compilation" check emits the
+	# "No rustc version reported prior to compilation" WARNING.
+	@rustc --version || true
+	# Self-contained vendored build: extract the cargo-vendored crates.io deps
+	# (shipped compressed to dodge R's tarball dotfile stripping), then build the
+	# capi STATICLIB OFFLINE against them. The crates.io source replacement is
+	# passed INLINE via --config (resolves `vendor` against rust/, and ships NO
+	# hidden .cargo/ dir that would trip R CMD check). If vendor.tar.xz is absent
+	# (raw in-repo dev), fall back to an ONLINE build. `-j 2` bounds Cargo's
+	# parallelism as required by CRAN's "Using Rust" policy
+	# (https://cran.r-project.org/web/packages/using_rust.html).
+	@if [ -f rust/vendor.tar.xz ]; then \
+		[ -d rust/vendor ] || ( echo "extracting rust/vendor.tar.xz"; cd rust && tar xJf vendor.tar.xz ); \
+		cd rust && cargo build -p nirs4all-io-capi --release -j 2 --offline \
+			--config 'source.crates-io.replace-with="vendored-sources"' \
+			--config 'source.vendored-sources.directory="vendor"'; \
+	else \
+		cd rust && cargo build -p nirs4all-io-capi --release -j 2; \
+	fi
+	# Post-build prune (R CMD check / CRAN). The staticlib is linked, so the
+	# cargo build-script scratch and the extracted crates.io vendor tree are no
+	# longer needed; removing them stops R CMD check from scanning third-party
+	# build artefacts the package compiles but does not author. Skipped when
+	# NOT_CRAN=true (dev inner loop keeps the cache for incremental rebuilds).
+	@if [ "$(NOT_CRAN)" != "true" ]; then \
+		rm -rf "$(LIBDIR)/build" "$(CURDIR)/rust/vendor"; \
+	fi
+
+C_clean:
+	rm -Rf $(SHLIB) $(OBJECTS) $(STATLIB) $(TARGET_DIR) $(CURDIR)/rust/vendor
+
+clean: C_clean

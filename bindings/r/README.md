@@ -62,21 +62,30 @@ JSON strings; the JSON⇄list layer (e.g. `jsonlite`) is the user's. The idiomat
 
 ## Build & install
 
+The package is **CRAN self-contained**: it vendors the `nirs4all-io` Rust core
+and compiles it into a static library OFFLINE at install time (no prebuilt
+`libnirs4all_io_capi`, no `N4IO_CAPI_DIR`). `bindings/r/configure`
+(`N4IO_R_VENDOR=1`) copies the workspace crates into `src/rust/vendored/`, copies
+the committed C ABI header to `src/nirs4all_io.h`, and `cargo vendor`s every
+crates.io transitive dep into `src/rust/vendor.tar.xz`; `src/Makevars(.win)` then
+extract that and build the `nirs4all-io-capi` staticlib offline, linking it into
+`nirs4allio.{so,dll}`.
+
 ```bash
-bash bindings/r/build_and_test.sh    # builds the capi, installs the package, runs the smoke test
+bash bindings/r/build_and_test.sh    # vendor + offline install + smoke test
 ```
 
-`build_and_test.sh` builds `nirs4all-io-capi` (release), then exports
-`N4IO_INCLUDE` (dir with `nirs4all_io.h`) and `N4IO_CAPI_DIR` (dir with
-`libnirs4all_io_capi.so`) — both required by `src/Makevars` — and runs
-`R CMD INSTALL --no-multiarch` followed by `tests/smoke.R` against the contract
-corpus (`N4IO_CORPUS`). To install manually, set those two env vars first:
+To produce a CRAN-style source tarball and check it as-cran:
 
 ```bash
-export N4IO_INCLUDE=.../crates/nirs4all-io-capi/include
-export N4IO_CAPI_DIR=.../target/release
-R CMD INSTALL --no-multiarch bindings/r
+( cd bindings/r && N4IO_R_VENDOR=1 ./configure )   # needs the repo crates/ + network (once)
+R CMD build bindings/r                              # -> nirs4allio_<version>.tar.gz (self-contained)
+R CMD check --as-cran nirs4allio_*.tar.gz           # offline staticlib build from the bundle
 ```
+
+R-universe builds straight from Git via the `bindings/r/.prepare` hook, which
+runs the same `N4IO_R_VENDOR=1 ./configure` before `R CMD build`. The `Cargo` /
+`rustc` toolchain is declared in `SystemRequirements`.
 
 The binding is a thin wrapper: it only marshals JSON strings across the ABI and
 runs the single shared Rust core — no NIRS/dataset logic lives here.

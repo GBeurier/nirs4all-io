@@ -1,29 +1,73 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
-# Windows (Rtools45 / mingw-w64, UCRT) link line for the C glue over the prebuilt
-# nirs4all-io-capi staticlib. The capi is built with the x86_64-pc-windows-gnu
-# toolchain (see build_and_test.sh) so its ABI matches Rtools' mingw gcc, which
-# performs the final link of the Rust archive into nirs4allio.dll.
+# Windows (Rtools45 / mingw-w64, UCRT) self-contained OFFLINE build. Compile the
+# nirs4all-io Rust core into a STATICLIB with the x86_64-pc-windows-gnu toolchain
+# (so its ABI matches Rtools' mingw gcc, which performs the final link of the
+# Rust archive into nirs4allio.dll), then compile the C shim (n4io.c) and link
+# the staticlib by exact path. No prebuilt cdylib, no N4IO_CAPI_DIR.
+TARGET ?= $(subst 64,x86_64,$(subst 32,i686,$(WIN)))-pc-windows-gnu
+TARGET_DIR = $(CURDIR)/rust/target
+LIBDIR = $(TARGET_DIR)/$(TARGET)/release
+STATLIB = $(LIBDIR)/libnirs4all_io_capi.a
+PKG_CPPFLAGS = -I$(CURDIR)
+# Reference the staticlib by EXACT PATH (not -lnirs4all_io_capi): only the
+# staticlib crate-type is built for the gnu target, so the explicit .a path
+# forces the static link and all symbols land inside nirs4allio.dll (Windows has
+# no rpath, so a self-contained DLL is what we want).
 #
-# Two reasons the default `-lnirs4all_io_capi + (nothing)` from src/Makevars fails
-# here, both fixed below:
-#
-# 1. R's gcc driver — not rustc — drives the link, so it does NOT auto-append the
-#    Rust-std native system libs. Add the exact `rustc --print native-static-libs`
-#    set for x86_64-pc-windows-gnu (kernel32 ntdll userenv ws2_32 dbghelp) plus
-#    -lgcc for the panic_unwind EH/personality + __chkstk refs. NOTE: Rtools45's
-#    mingw ships NO separate libgcc_eh.a — the unwinder (_Unwind_*),
-#    __gcc_personality_seh0, and __chkstk are all merged into libgcc.a, so -lgcc
-#    (not -lgcc_eh) is the one that resolves them here. (std is precompiled with
-#    panic=unwind; panic="abort" cannot drop it on stable Rust without nightly
-#    -Z build-std.) The rest of the mingw CRT tail (-lmsvcrt/-lmingwex/-lmingw32)
-#    is supplied by Rtools' gcc driver itself — do NOT duplicate it here (Rtools45
-#    is UCRT; forcing -lmsvcrt would mismatch the CRT).
-#    System libs MUST come AFTER the archive (mingw ld is order-sensitive).
-#
-# 2. Reference the staticlib by EXACT PATH, not `-lnirs4all_io_capi`. build_and_test.sh
-#    builds only the staticlib (libnirs4all_io_capi.a) on Windows, so the explicit
-#    .a path forces the static link and all symbols land inside nirs4allio.dll
-#    (Windows has no rpath, so a self-contained DLL is what we want).
-PKG_CPPFLAGS = -I$(N4IO_INCLUDE)
-PKG_LIBS = $(N4IO_CAPI_DIR)/libnirs4all_io_capi.a \
+# R's gcc driver — not rustc — drives the link, so it does NOT auto-append the
+# Rust-std native system libs. Add the exact `rustc --print native-static-libs`
+# set for x86_64-pc-windows-gnu (kernel32 ntdll userenv ws2_32 dbghelp) plus
+# -lgcc for the panic_unwind EH/personality + __chkstk refs. Rtools45's mingw
+# ships NO separate libgcc_eh.a — the unwinder (_Unwind_*), __gcc_personality_seh0,
+# and __chkstk are all merged into libgcc.a, so -lgcc (not -lgcc_eh) resolves
+# them. System libs MUST come AFTER the archive (mingw ld is order-sensitive).
+PKG_LIBS = $(STATLIB) \
   -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lgcc
+
+.PHONY: all clean C_clean $(STATLIB)
+
+all: $(SHLIB)
+
+$(SHLIB): $(STATLIB)
+
+$(STATLIB):
+	@if ! command -v cargo >/dev/null; then \
+		echo "Cargo is required to build nirs4allio. Install Rust from https://rustup.rs."; \
+		exit 1; \
+	fi
+	# `rustc` links the x86_64-pc-windows-gnu CDYLIB against `-lgcc_eh`, but
+	# Rtools' GCC ships no `libgcc_eh.a`. We build the STATICLIB only (`ar`
+	# archiving, no linker invoked), so that cdylib link never happens — but keep
+	# the canonical empty-libgcc_eh.a shim on LIBRARY_PATH defensively in case a
+	# transitive build-script link probes for it. See
+	# https://github.com/r-windows/rtools-packages/blob/2407b23f1e0925bbb20a4162c963600105236318/mingw-w64-gcc/PKGBUILD#L313-L316
+	mkdir -p $(TARGET_DIR)/libgcc_mock
+	touch $(TARGET_DIR)/libgcc_mock/libgcc_eh.a
+	# Report the toolchain version to the install log BEFORE compiling, so the
+	# R CMD check --as-cran "Rust compilation" check finds a `rustc <ver>` line.
+	@rustc --version || true
+	# Self-contained vendored OFFLINE build of the staticlib for the gnu target.
+	# Source replacement passed INLINE via --config (no hidden .cargo/ dir).
+	# Rtools provides tar/xz. CARGO_LINKER (Rtools mingw linker) comes from
+	# Makevars.ucrt on R >= 4.2; CARGO_TARGET_..._LINKER + LIBRARY_PATH wire in the
+	# linker and the gcc_eh shim. `-j 2` bounds Cargo's parallelism (CRAN policy).
+	export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="$(CARGO_LINKER)" && \
+	export LIBRARY_PATH="$${LIBRARY_PATH};$(CURDIR)/$(TARGET_DIR)/libgcc_mock" && \
+	if [ -f rust/vendor.tar.xz ]; then \
+		[ -d rust/vendor ] || ( echo "extracting rust/vendor.tar.xz"; cd rust && tar xJf vendor.tar.xz ); \
+		cd rust && cargo build -p nirs4all-io-capi --release -j 2 --target $(TARGET) --offline \
+			--config 'source.crates-io.replace-with="vendored-sources"' \
+			--config 'source.vendored-sources.directory="vendor"'; \
+	else \
+		cd rust && cargo build -p nirs4all-io-capi --release -j 2 --target $(TARGET); \
+	fi
+	# Post-build prune (R CMD check / CRAN) — see src/Makevars. Skipped when
+	# NOT_CRAN=true.
+	@if [ "$(NOT_CRAN)" != "true" ]; then \
+		rm -rf "$(LIBDIR)/build" "$(CURDIR)/rust/vendor"; \
+	fi
+
+C_clean:
+	rm -Rf $(SHLIB) $(OBJECTS) $(STATLIB) $(TARGET_DIR) $(CURDIR)/rust/vendor
+
+clean: C_clean
