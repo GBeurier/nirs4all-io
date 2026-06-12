@@ -76,6 +76,12 @@ jobs:
           r-version: ${{ matrix.cfg.r_version }}
           use-public-rspm: true
 
+      # The package now Imports jsonlite (idiomatic nio_* helpers). R CMD
+      # INSTALL needs it present, so install the DESCRIPTION Imports first.
+      - name: Install R Imports (jsonlite)
+        shell: Rscript {0}
+        run: install.packages("jsonlite")
+
       # bindings/r/build_and_test.sh: builds nirs4all-io-capi (release),
       # exports N4IO_INCLUDE / N4IO_CAPI_DIR / N4IO_CORPUS, R CMD INSTALLs the
       # package against the prebuilt cdylib, and runs the smoke. Rtools provides
