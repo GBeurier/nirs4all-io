@@ -9,8 +9,8 @@
 ## Phase 2 — Rust core + `dag-ml-data` target
 
 Status: **unblocked** (both gate blockers resolved 2026-05-28). The **actionable,
-multi-agent plan** is in [`RUST_REWRITE_ROADMAP.md`](RUST_REWRITE_ROADMAP.md); gate status
-in [`PHASE2_GATE.md`](PHASE2_GATE.md). The Python MVP's `AssembledDataset` IR is already
+multi-agent plan** is in the repository's `docs/RUST_REWRITE_ROADMAP.md`; gate status
+in `docs/PHASE2_GATE.md`. The Python MVP's `AssembledDataset` IR is already
 target-agnostic, so a `to_dag_ml_data(assembled)` adapter slots in beside
 `to_spectrodataset(assembled)`.
 

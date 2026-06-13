@@ -1,5 +1,13 @@
 # Dataset configurations — the complete reference
 
+```{note}
+This reference is written against the Phase-1 Python MVP (the parity oracle), so
+a few Python snippets use MVP-only spellings. The `DatasetSpec` vocabulary it
+documents is the canonical, byte-identical contract shared with the published
+wheel; for the published wheel's `infer` / `to_spec` / `validate` / `load` API,
+see [Getting started](getting_started.md).
+```
+
 > **What can `nirs4all-io` load, and how do you declare it?** This document
 > enumerates **every** way to describe a dataset for loading: every input form,
 > every `DatasetSpec` field, every column selector, merge mode, join, partition,
@@ -668,5 +676,5 @@ sample identity (row or id), repetitions/groups, and externally-supplied
 train/test/val/predict + folds. The `AssembledDataset` IR (per-partition
 `PartitionBlock`) is the target-agnostic hand-off point: a `to_dag_ml_data`
 adapter consumes the same structure that `to_spectrodataset` does today. See
-[`PHASE2_GATE.md`](PHASE2_GATE.md) for what `dag-ml-data` must add first
+the repository's `docs/PHASE2_GATE.md` for what `dag-ml-data` must add first
 (notably an `AxisKind::Wavenumber` for cm⁻¹).

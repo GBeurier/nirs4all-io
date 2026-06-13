@@ -1,5 +1,13 @@
 # Public API & integration seam
 
+```{note}
+This page describes the Phase-1 Python MVP surface (the parity oracle). For the
+**published PyPI wheel** (the pyo3 binding) — including its actual `load`
+default, `to_spec` return type and `nio.validate` — see
+[Getting started](getting_started.md). The `DatasetSpec` / `DatasetPlan` JSON
+shapes below are identical across both; some Python accessor spellings differ.
+```
+
 > Story 5.1. This is the **stable seam** `nirs4all` / `nirs4all-studio` (or any
 > host) can adopt later without depending on internals. The contract is the
 > `DatasetSpec` / `DatasetPlan` JSON shape + these four entry points.

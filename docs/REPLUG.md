@@ -1,5 +1,12 @@
 # Re-plug guide (host adoption)
 
+```{note}
+The Python snippets below use the Phase-1 MVP spelling (e.g. `plan.accept(...)`).
+The published wheel exposes `plan.resolved_spec` and the module-level
+`nio.validate(spec)` instead — see [Getting started](getting_started.md). The
+adoption sequence and ownership split are unchanged across both.
+```
+
 > Story 5.3. `nirs4all-io` is a **standalone externalization** — it does not modify
 > `nirs4all` or `nirs4all-studio`. Re-plugging the hosts onto it is a **separate,
 > user-owned effort**. This guide documents the seam + a recommended sequence so
