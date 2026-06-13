@@ -174,6 +174,11 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          # Idempotent publish: a re-run on an already-published tag (or a tag
+          # whose version was partially uploaded) must not hard-fail with
+          # "400 File already exists". skip-existing makes twine treat an
+          # already-present file as success and upload only what is missing.
+          skip-existing: true
 
   github-release:
     name: Attach assets to the GitHub release

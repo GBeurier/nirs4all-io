@@ -81,6 +81,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # On Windows the package compiles the Rust core for the gnu ABI
+      # (x86_64-pc-windows-gnu) so Rtools' mingw gcc can link the staticlib into
+      # nirs4allio.dll; see src/Makevars.win. dtolnay/rust-toolchain installs
+      # only the MSVC host std on windows-2022, and the install build is offline
+      # (vendored), so the gnu std must be added explicitly here or
+      # `cargo build --target x86_64-pc-windows-gnu` fails with "can't find crate
+      # for `std`".
+      - name: Add the gnu Rust target (Windows staticlib ABI)
+        if: runner.os == 'Windows'
+        run: rustup target add x86_64-pc-windows-gnu
+
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: ${{ matrix.cfg.r_version }}

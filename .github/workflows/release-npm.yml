@@ -155,4 +155,17 @@ jobs:
         working-directory: bindings/wasm/pkg-node
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+        # Idempotent publish: npm has no --skip-existing, and republishing an
+        # already-present version hard-fails with E403 ("cannot publish over the
+        # previously published versions"). Probe the registry first and skip the
+        # publish when this exact name@version already exists, so a re-run on a
+        # published tag is a no-op success instead of a failure.
+        run: |
+          set -euo pipefail
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VER=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VER}" version >/dev/null 2>&1; then
+            echo "${PKG_NAME}@${PKG_VER} already published; skipping."
+            exit 0
+          fi
+          npm publish --access public
