@@ -6,16 +6,13 @@ members = [
     "crates/nirs4all-io",
     "crates/nirs4all-io-capi",
     "crates/nirs4all-io-cli",
+    "crates/nirs4all-io-dagml",
 ]
 # Language bindings build with their own toolchains (maturin / cargo-ndk /
 # wasm-pack) and are intentionally excluded from the cargo workspace.
-# nirs4all-io-dagml is the dag-ml-data emit bridge: it path-depends on the
-# dag-ml-data sibling, so it is excluded to keep standalone workspace resolution
-# (and CI) working without the ecosystem tree present (EPIC 10).
 exclude = [
     "bindings/python",
     "bindings/wasm",
-    "crates/nirs4all-io-dagml",
 ]
 
 [workspace.package]
@@ -36,6 +33,7 @@ readme = "README.md"
 # track [workspace.package] version — scripts/bump_version.sh keeps it in sync.
 nirs4all-io-core = { path = "crates/nirs4all-io-core", version = "0.1.1" }
 nirs4all-io = { path = "crates/nirs4all-io", version = "0.1.1" }
+dag-ml-data = "0.1.0-alpha.0"
 # Third-party. serde_json enables `preserve_order` so that *input* object order
 # mirrors Python dict insertion order (load-bearing for legacy-config
 # normalization, where input order can leak into output list order). Canonical

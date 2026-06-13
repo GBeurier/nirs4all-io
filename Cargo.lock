@@ -251,6 +251,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dag-ml-data"
+version = "0.1.0-alpha.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d51c418469a87959eff716c7edb0262ac29e191dcd89739adbf4d810e61496af"
+dependencies = [
+ "dag-ml-data-core",
+]
+
+[[package]]
+name = "dag-ml-data-core"
+version = "0.1.0-alpha.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63c04a11ea607986ee1b74724f81302c743101b802b7187dc0178b155d895fb3"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "derive_arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -513,6 +534,17 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "nirs4all-io-dagml"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dag-ml-data",
+ "nirs4all-io",
+ "serde_json",
 ]
 
 [[package]]

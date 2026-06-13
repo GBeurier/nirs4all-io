@@ -11,18 +11,18 @@
 //! and self-validates). io does **not** build dag-ml `FoldSet`/`DataBinding` —
 //! those are dag-ml's domain (folds/campaigns).
 //!
-//! This crate is **excluded from the nirs4all-io workspace**: it path-depends on
-//! the `dag-ml-data` sibling, and an absent optional path dep would break
-//! standalone `cargo build` resolution (even with the feature off). It builds
-//! only in the ecosystem tree.
+//! This bridge resolves `dag-ml-data` from crates.io. It remains a separate
+//! `publish = false` crate so the published `nirs4all-io` CLI does not grow a
+//! hard dag-ml-data dependency.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use dag_ml_data::{
-    AxisKind, AxisSpec, CoordinatorDataPlanEnvelope, DataPlan, DataPlanStep, DataPlanStepKind,
-    DatasetSchema, FitScope, GroupId, ObservationId, RepetitionId, RepresentationId,
-    RepresentationSpec, SampleId, SampleRelation, SampleRelationTable, SourceDescriptor,
-    SourceGranularity, SourceId, TargetId, TypeId,
+    AxisKind, AxisSpec, CoordinateDType, CoordinateSpec, CoordinateValues,
+    CoordinatorDataPlanEnvelope, DataPlan, DataPlanStep, DataPlanStepKind, DatasetSchema, FitScope,
+    GroupId, ObservationId, RepetitionId, RepresentationId, RepresentationSpec, SampleId,
+    SampleRelation, SampleRelationTable, SignalKind, SourceDescriptor, SourceGranularity, SourceId,
+    TargetId, TypeId,
 };
 use nirs4all_io::core::spec::SpecError;
 use nirs4all_io::materialize::AssembledDataset;
@@ -105,7 +105,7 @@ fn feature_axis(unit: &str) -> (AxisKind, Option<String>, &'static str) {
 /// Numeric axis coordinates from feature headers, only when every header parses
 /// to a finite number and the count matches the axis size (else `None`, so the
 /// `AxisSpec` size/coordinates invariant always holds).
-fn numeric_coords(headers: &[String], size: usize) -> Option<Vec<Value>> {
+fn numeric_coords(headers: &[String], size: usize) -> Option<CoordinateSpec> {
     if headers.len() != size {
         return None;
     }
@@ -117,7 +117,33 @@ fn numeric_coords(headers: &[String], size: usize) -> Option<Vec<Value>> {
         }
         out.push(Value::from(v));
     }
-    Some(out)
+    Some(CoordinateSpec {
+        dtype: CoordinateDType::Numeric,
+        ordered: false,
+        values: CoordinateValues::Explicit { values: out },
+    })
+}
+
+fn categorical_coords(values: Vec<Value>) -> Option<CoordinateSpec> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(CoordinateSpec {
+        dtype: CoordinateDType::Categorical,
+        ordered: false,
+        values: CoordinateValues::Explicit { values },
+    })
+}
+
+fn signal_kind(raw: &str) -> SignalKind {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "absorbance" => SignalKind::Absorbance,
+        "reflectance" => SignalKind::Reflectance,
+        "transmittance" => SignalKind::Transmittance,
+        "log_reflectance" | "log-reflectance" | "log reflectance" => SignalKind::LogReflectance,
+        "preprocessed" => SignalKind::Preprocessed,
+        _ => SignalKind::Unknown,
+    }
 }
 
 /// Map an [`AssembledDataset`] to a dag-ml-data `CoordinatorDataPlanEnvelope`.
@@ -202,6 +228,7 @@ pub fn to_dag_ml_data(
                 augmented: false,
                 excluded: false,
                 metadata: BTreeMap::new(),
+                augmentation: None,
             });
         }
     }
@@ -223,7 +250,7 @@ pub fn to_dag_ml_data(
                 unit: None,
                 size: Some(n_samples),
                 variable: false,
-                coordinates: None,
+                coordinate: None,
             },
             AxisSpec {
                 name: axis_name.into(),
@@ -231,7 +258,7 @@ pub fn to_dag_ml_data(
                 unit: axis_unit,
                 size: Some(n_features),
                 variable: false,
-                coordinates: numeric_coords(&headers, n_features),
+                coordinate: numeric_coords(&headers, n_features),
             },
         ];
         let mut tags = BTreeMap::new();
@@ -252,6 +279,7 @@ pub fn to_dag_ml_data(
                 dtype: Some("float64".into()),
                 sparse: false,
                 ragged: false,
+                signal_type: signal.as_deref().map(signal_kind),
             },
             sample_key: "sample_id".into(),
             granularity: if use_rep {
@@ -261,6 +289,7 @@ pub fn to_dag_ml_data(
             },
             schema: BTreeMap::new(),
             tags,
+            shape_contract: None,
         });
     }
 
@@ -281,7 +310,7 @@ pub fn to_dag_ml_data(
                         unit: None,
                         size: Some(n_samples),
                         variable: false,
-                        coordinates: None,
+                        coordinate: None,
                     },
                     AxisSpec {
                         name: "target".into(),
@@ -289,13 +318,14 @@ pub fn to_dag_ml_data(
                         unit: None,
                         size: Some(1),
                         variable: false,
-                        coordinates: Some(vec![Value::String(header.clone())]),
+                        coordinate: categorical_coords(vec![Value::String(header.clone())]),
                     },
                 ],
                 container: "dataframe".into(),
                 dtype: Some("float64".into()),
                 sparse: false,
                 ragged: false,
+                signal_type: None,
             };
             targets.insert(TargetId::new(&tid).map_err(err)?, rep);
         }
@@ -307,6 +337,9 @@ pub fn to_dag_ml_data(
         sources,
         targets,
         metadata: BTreeMap::new(),
+        metadata_schema: None,
+        groups: vec![],
+        folds: vec![],
     };
 
     // --- plan: materialize each source, join when multi-source ---

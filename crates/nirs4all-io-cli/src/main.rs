@@ -160,14 +160,11 @@ fn main() -> Result<()> {
             .map_err(|e| anyhow!(e.message))?;
             emit(&assembled.to_summary_value())
         }
-        // The emit depends on the dag-ml-data sibling crate, which cannot be an
-        // optional dependency of a workspace member without breaking standalone
-        // resolution (an absent path dep fails `cargo build` even when the
-        // feature is off). It therefore lives in the workspace-excluded ecosystem
-        // crate `crates/nirs4all-io-dagml` (its own `emit-dagml` binary).
+        // The emit bridge lives in its own publish=false crate so the published
+        // `nirs4all-io` CLI does not grow a hard dag-ml-data dependency.
         Command::EmitDagMlData { .. } => bail!(
-            "emit-dag-ml-data lives in the ecosystem crate `nirs4all-io-dagml` (it depends on the \
-             dag-ml-data sibling). Run it from the ecosystem tree: \
+            "emit-dag-ml-data lives in the bridge crate `nirs4all-io-dagml`, which resolves \
+             dag-ml-data from crates.io. Run it from this checkout: \
              `cargo run --manifest-path crates/nirs4all-io-dagml/Cargo.toml --bin emit-dagml -- <input>`"
         ),
     }

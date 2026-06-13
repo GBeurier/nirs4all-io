@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 //! `emit-dagml`: load an input, assemble it, and emit a dag-ml-data
 //! `CoordinatorDataPlanEnvelope` as JSON (EPIC 10). The dag-ml-data emit lives in
-//! this ecosystem-only crate (it depends on the dag-ml-data sibling), so it has
-//! its own binary instead of being a subcommand of the main `nirs4all-io` CLI.
+//! this bridge crate so the published `nirs4all-io` CLI does not grow a hard
+//! dag-ml-data dependency.
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
