@@ -76,4 +76,7 @@ contract). See [`COMPAT.md`](COMPAT.md) for the full operation matrix.
 
 ## License
 
-Dual-licensed `CeCILL-2.1 OR AGPL-3.0-or-later` — see [`LICENSE`](LICENSE).
+`nirs4all-io` is dual-licensed open-source — **`CeCILL-2.1 OR AGPL-3.0-or-later`** (your choice) —
+with an optional **commercial license** for closed-source / SaaS use. For any commercial use, contact
+<nirs4all-admin@cirad.fr>. See [`LICENSING.md`](LICENSING.md), the texts under [`LICENSES/`](LICENSES/),
+and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
