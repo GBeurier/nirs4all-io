@@ -8,8 +8,18 @@
 # Same CRAN-compliant shape as src/Makevars: build-local CARGO_HOME +
 # CARGO_TARGET_DIR (never %USERPROFILE%\.cargo), version echoed to the log before
 # compiling, post-link rust_clean wipes all Rust scratch from the package source.
+#
+# WINDOWS MAX_PATH (260). R CMD check installs into
+# <pkg>.Rcheck/00_pkg_src/<pkg>/src, then cargo adds target/<triple>/release/build/
+# paths below it. On CRAN's Windows builders that can exceed MAX_PATH before the
+# Rust staticlib is archived. Relocate cargo scratch to the short Rtools /tmp mount
+# exactly like the other Rust-backed R packages.
 TARGET ?= $(subst 64,x86_64,$(subst 32,i686,$(WIN)))-pc-windows-gnu
-TARGET_DIR = $(CURDIR)/rust/target
+# Use a native Windows path when cygpath is available; cargo.exe accepts it and it
+# avoids both MAX_PATH pressure and MSYS path-conversion surprises.
+SHORT_TMP := $(shell command -v cygpath >/dev/null 2>&1 && cygpath -m /tmp 2>/dev/null || echo /tmp)
+TARGET_DIR = $(SHORT_TMP)/n4io
+CARGOTMP = $(SHORT_TMP)/n4io-ch
 LIBDIR = $(TARGET_DIR)/$(TARGET)/release
 STATLIB = $(LIBDIR)/libnirs4all_io_capi.a
 PKG_CPPFLAGS = -I$(CURDIR)
@@ -39,8 +49,8 @@ PKG_LIBS = $(STATLIB) \
 
 # Build-local cargo registry/cache (CRAN Policy: no writes to %USERPROFILE%\.cargo
 # at install time). On Windows cargo also defaults CARGO_HOME to
-# %USERPROFILE%\.cargo, so this redirect matters here too.
-CARGOTMP = $(CURDIR)/.cargo
+# %USERPROFILE%\.cargo, so this redirect matters here too. Keep it beside the
+# relocated target dir so both paths stay short.
 
 all: $(SHLIB) rust_clean
 
@@ -69,7 +79,8 @@ $(STATLIB):
 	# Self-contained vendored OFFLINE build of the staticlib for the gnu target.
 	# Source replacement passed INLINE via --config (no hidden .cargo/ dir).
 	# Rtools provides tar/xz. CARGO_HOME=$(CARGOTMP) keeps cargo off
-	# %USERPROFILE%\.cargo (CRAN Policy). CARGO_LINKER (Rtools mingw linker) comes
+	# %USERPROFILE%\.cargo (CRAN Policy) and, like CARGO_TARGET_DIR, lives under the
+	# short temp path to dodge MAX_PATH. CARGO_LINKER (Rtools mingw linker) comes
 	# from Makevars.ucrt on R >= 4.2 when set; CARGO_TARGET_..._LINKER +
 	# LIBRARY_PATH wire in the linker and the gcc_eh shim defensively (unused for a
 	# staticlib build, which performs no link). `-j 2` bounds Cargo's parallelism
@@ -89,8 +100,8 @@ $(STATLIB):
 	fi
 
 # Post-link cleanup — see src/Makevars. Runs after $(SHLIB) links $(STATLIB),
-# wiping the whole target/, the build-local CARGO_HOME and the extracted vendor/
-# so R CMD check does not scan third-party build artefacts. Skipped when
+# wiping the relocated target/, the build-local CARGO_HOME and the extracted
+# vendor/ so R CMD check does not scan third-party build artefacts. Skipped when
 # NOT_CRAN=true.
 rust_clean: $(SHLIB)
 	@if [ "$(NOT_CRAN)" != "true" ]; then \
