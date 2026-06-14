@@ -5,39 +5,51 @@ function json = encode_spec(spec)
   % Octave decodes one-element JSON object arrays as scalar structs. Without
   % restoring the known spec array fields, jsonencode turns sources/columns back
   % into objects and the Rust C ABI sees an empty DatasetSpec.
-  json = jsonencode(preserve_arrays(spec, ''));
+  json = encode_value(spec, '');
 end
 
-function out = preserve_arrays(value, field_name)
+function json = encode_value(value, field_name)
   if isstruct(value)
-    if is_array_field(field_name) && should_encode_as_array(value, field_name)
-      out = cell(1, numel(value));
-      for i = 1:numel(value)
-        out{i} = preserve_struct_fields(value(i));
+    if isempty(value)
+      if is_array_field(field_name)
+        json = '[]';
+      else
+        json = '{}';
       end
+    elseif is_array_field(field_name) && should_encode_as_array(value, field_name)
+      parts = cell(1, numel(value));
+      for i = 1:numel(value)
+        parts{i} = encode_object(value(i));
+      end
+      json = ['[' join_json(parts) ']'];
+    elseif numel(value) > 1
+      parts = cell(1, numel(value));
+      for i = 1:numel(value)
+        parts{i} = encode_object(value(i));
+      end
+      json = ['[' join_json(parts) ']'];
     else
-      out = value;
-      for i = 1:numel(value)
-        out(i) = preserve_struct_fields(value(i));
-      end
+      json = encode_object(value);
     end
   elseif iscell(value)
-    out = value;
+    parts = cell(1, numel(value));
     for i = 1:numel(value)
-      out{i} = preserve_arrays(value{i}, field_name);
+      parts{i} = encode_value(value{i}, field_name);
     end
+    json = ['[' join_json(parts) ']'];
   else
-    out = value;
+    json = jsonencode(value);
   end
 end
 
-function out = preserve_struct_fields(s)
-  out = s;
+function json = encode_object(s)
   names = fieldnames(s);
+  parts = cell(1, numel(names));
   for j = 1:numel(names)
     name = names{j};
-    out.(name) = preserve_arrays(s.(name), name);
+    parts{j} = [jsonencode(name) ':' encode_value(s.(name), name)];
   end
+  json = ['{' join_json(parts) '}'];
 end
 
 function tf = is_array_field(name)
@@ -54,5 +66,15 @@ function tf = should_encode_as_array(value, field_name)
     tf = any(strcmp(names, 'role')) && any(strcmp(names, 'select'));
   else
     tf = true;
+  end
+end
+
+function out = join_json(parts)
+  out = '';
+  for i = 1:numel(parts)
+    if i > 1
+      out = [out ',']; %#ok<AGROW>
+    end
+    out = [out parts{i}]; %#ok<AGROW>
   end
 end

@@ -14,6 +14,7 @@
  * compiles and smoke-tests it. */
 #include "mex.h"
 #include "nirs4all_io.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
