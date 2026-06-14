@@ -34,7 +34,11 @@ function json = encode_value(value, field_name)
   elseif iscell(value)
     parts = cell(1, numel(value));
     for i = 1:numel(value)
-      parts{i} = encode_value(value{i}, field_name);
+      if is_array_field(field_name)
+        parts{i} = encode_value(value{i}, '');
+      else
+        parts{i} = encode_value(value{i}, field_name);
+      end
     end
     json = ['[' join_json(parts) ']'];
   else
