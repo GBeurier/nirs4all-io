@@ -1097,6 +1097,8 @@ function renderVizTabs() {
   });
 }
 
+const SPEC_ACCENTS = ["var(--teal)", "var(--cyan)", "var(--indigo)", "var(--amber)", "var(--green)"];
+
 function renderSpecForm() {
   const spec = state.spec;
   const host = $("#specForm");
@@ -1114,8 +1116,8 @@ function renderSpecForm() {
   const partitions = spec.partitions || {};
   const folds = spec.folds || {};
   host.innerHTML = `
-    <div class="spec-overview">${specOverviewItems(spec).map((item) => `
-      <div class="spec-stat">
+    <div class="spec-overview">${specOverviewItems(spec).map((item, i) => `
+      <div class="spec-stat" style="--accent:${SPEC_ACCENTS[i % SPEC_ACCENTS.length]}">
         <span>${esc(item.label)}</span>
         <strong>${esc(item.value)}</strong>
         <small>${esc(item.detail)}</small>

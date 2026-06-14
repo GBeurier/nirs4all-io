@@ -478,9 +478,13 @@ svg { width: 1em; height: 1em; }
 .kpi::before {
   content: "";
   position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
+  right: -18px;
+  top: -18px;
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
   background: var(--accent, var(--teal));
+  opacity: .07;
 }
 .k-label {
   margin-bottom: 4px;
@@ -1141,6 +1145,19 @@ canvas {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
   background: #fff;
+  position: relative;
+  overflow: hidden;
+}
+.spec-stat::after {
+  content: "";
+  position: absolute;
+  right: -18px;
+  top: -18px;
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  background: var(--accent, var(--teal));
+  opacity: .07;
 }
 .spec-stat span {
   display: block;
