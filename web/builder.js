@@ -138,7 +138,14 @@ async function materializePreview() {
   }
   try {
     const { files, recordSets } = app.usableFilesForIo();
-    s.assembled = io.assembleDataset(files, recordSets, JSON.stringify(s.workingSpec));
+    // proposeDataset discovers sources from the file list (by name), so it needs
+    // every file; assembleDataset instead resolves each spec `input` against the
+    // union of files + record sets and rejects a name present in both. Drop the
+    // raw bytes of any file already decoded into a record set (records win —
+    // vendor formats can't be re-read from bytes) so each input resolves once.
+    const decodedNames = new Set(recordSets.map((r) => r.source));
+    const assembleFiles = files.filter((f) => !decodedNames.has(f.name));
+    s.assembled = io.assembleDataset(assembleFiles, recordSets, JSON.stringify(s.workingSpec));
   } catch (err) {
     s.assembleError = String(err?.message || err);
   }
