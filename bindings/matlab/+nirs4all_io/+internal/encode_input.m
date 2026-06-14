@@ -7,7 +7,7 @@ function json = encode_input(input)
   % accepted only when it is itself a struct/array/quoted-string (i.e. you may
   % pass a struct directly instead of a hand-written JSON string).
   if isstruct(input)
-    json = jsonencode(input);
+    json = nirs4all_io.internal.encode_spec(input);
   elseif iscellstr(input) || (isstring(input) && numel(input) > 1)
     json = jsonencode(cellstr(input));
   elseif ischar(input) || (isstring(input) && isscalar(input))

@@ -11,7 +11,7 @@ function ok = validate(spec)
   if ischar(spec) || isstring(spec)
     spec_json = char(spec);
   elseif isstruct(spec)
-    spec_json = jsonencode(spec);
+    spec_json = nirs4all_io.internal.encode_spec(spec);
   else
     error('n4io:arg', 'spec must be a struct or a JSON char');
   end

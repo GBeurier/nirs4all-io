@@ -39,7 +39,8 @@ emit_manifest="${io_root}/crates/nirs4all-io-dagml/Cargo.toml"
 ( cd "${dmd}" && cargo build -q -p dag-ml-data-cli --release )
 ( cd "${dml}" && cargo build -q -p dag-ml-cli --release )
 
-emit_cli="$(find "${io_root}/crates/nirs4all-io-dagml/target" -maxdepth 2 -name emit-dagml -type f | head -1)"
+emit_target="$(cargo metadata --format-version 1 --manifest-path "${emit_manifest}" --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+emit_cli="$(find "${emit_target}" -maxdepth 2 -name emit-dagml -type f | head -1)"
 dmd_cli="${dmd}/target/release/dag-ml-data-cli"
 dml_cli="${dml}/target/release/dag-ml-cli"
 

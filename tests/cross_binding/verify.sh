@@ -48,10 +48,12 @@ if command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1; then
   echo ">> R n4io_to_spec"
   ( cd "${io_root}" && cargo build -q -p nirs4all-io-capi --release )
   rlib="$(mktemp -d)"
+  N4IO_R_LIB="${rlib}" Rscript -e 'lib <- Sys.getenv("N4IO_R_LIB"); repos <- Sys.getenv("N4IO_R_REPOS", "https://cloud.r-project.org"); if (!"jsonlite" %in% rownames(installed.packages(lib.loc = lib))) install.packages("jsonlite", lib = lib, repos = repos)'
   N4IO_INCLUDE="${io_root}/crates/nirs4all-io-capi/include" \
   N4IO_CAPI_DIR="${io_root}/target/release" \
+  R_LIBS_USER="${rlib}:${R_LIBS_USER:-}" \
     R CMD INSTALL --no-multiarch --library="${rlib}" "${io_root}/bindings/r" >/dev/null 2>&1
-  R_LIBS_USER="${rlib}" Rscript -e "library(nirs4allio); cat(n4io_to_spec(commandArgs(TRUE)[1]))" "${spec}" > "${work}/r.out"
+  R_LIBS_USER="${rlib}:${R_LIBS_USER:-}" Rscript -e "library(nirs4allio); cat(n4io_to_spec(commandArgs(TRUE)[1]))" "${spec}" > "${work}/r.out"
   outputs+=("${work}/r.out"); labels+=("r")
 fi
 

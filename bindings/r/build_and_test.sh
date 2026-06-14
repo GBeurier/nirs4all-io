@@ -22,8 +22,11 @@ export N4IO_CORPUS="${io_root}/tests/goldens/contract/corpus"
 rm -f "${pkg_dir}/src/"*.o "${pkg_dir}/src/"*.so "${pkg_dir}/src/"*.dll
 
 lib="${install_lib:-$(mktemp -d)}"
+mkdir -p "${lib}"
+echo ">> installing R Imports -> ${lib}"
+N4IO_R_LIB="${lib}" Rscript -e 'lib <- Sys.getenv("N4IO_R_LIB"); repos <- Sys.getenv("N4IO_R_REPOS", "https://cloud.r-project.org"); if (!"jsonlite" %in% rownames(installed.packages(lib.loc = lib))) install.packages("jsonlite", lib = lib, repos = repos)'
 echo ">> R CMD INSTALL -> ${lib} (offline staticlib build via src/Makevars)"
-R CMD INSTALL --no-multiarch --library="${lib}" "${pkg_dir}"
+R_LIBS_USER="${lib}:${R_LIBS_USER:-}" R CMD INSTALL --no-multiarch --library="${lib}" "${pkg_dir}"
 
 echo ">> smoke"
-R_LIBS_USER="${lib}" Rscript "${pkg_dir}/tests/smoke.R"
+R_LIBS_USER="${lib}:${R_LIBS_USER:-}" Rscript "${pkg_dir}/tests/smoke.R"
