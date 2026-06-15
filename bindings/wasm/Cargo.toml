@@ -2,7 +2,7 @@
 [package]
 name = "nirs4all-io-wasm"
 description = "wasm-bindgen binding for nirs4all-io: the fs-free JSON surface (to_spec / validate over a spec dict). Excluded from the cargo workspace; built with wasm-pack."
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "CECILL-2.1 OR AGPL-3.0-or-later"
 authors = ["Gregory Beurier <gregory.beurier@cirad.fr>"]
