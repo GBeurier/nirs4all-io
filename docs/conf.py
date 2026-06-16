@@ -13,6 +13,7 @@ extensions = [
     "sphinx_copybutton",
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.mathjax",
+    "sphinxext.opengraph",
 ]
 
 root_doc = "index"
@@ -54,3 +55,13 @@ autosectionlabel_prefix_document = True
 # -- HTML output ------------------------------------------------------------- #
 html_theme = "furo"
 html_title = "nirs4all-io"
+html_static_path = ["_static"]
+html_favicon = "_static/brand/favicon.ico"
+html_theme_options = {
+    "light_logo": "brand/horizontal.svg",
+    "dark_logo": "brand/horizontal-dark.svg",
+}
+
+# -- OpenGraph --------------------------------------------------------------- #
+ogp_site_url = "https://nirs4all-io.readthedocs.io/en/latest/"
+ogp_image = "https://nirs4all-io.readthedocs.io/en/latest/_static/brand/og.png"
