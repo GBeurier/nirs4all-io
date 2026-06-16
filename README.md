@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/horizontal-dark.svg">
+    <img alt="nirs4all-io" src="assets/brand/horizontal.svg" width="440">
+  </picture>
+</p>
+
 # nirs4all-io
 
 > **Dataset-assembly bridge.** Turn *any* user input — a directory, a list of
