@@ -37,3 +37,9 @@ bindings/python/python/nirs4all_io/_native*.pyd
 # OS
 .DS_Store
 Thumbs.db
+
+# --- untracked build/process docs (kept locally, 2026-06-16) ---
+docs/dev/PORT_BLUEPRINT.md
+
+# coverage artefact
+coverage.xml
