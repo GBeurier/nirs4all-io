@@ -44,12 +44,14 @@ cargo test -p nirs4all-io contract_goldens   # one integration test target in th
 cargo run -p nirs4all-io-cli -- to-spec <dir>   # exercise the CLI binary
 ```
 
-The workspace has **4 members** (`crates/nirs4all-io-core`, `-io`, `-io-capi`, `-io-cli`). Three things
-are **deliberately workspace-EXCLUDED** and build with their own toolchain — `cargo test --workspace`
-will NOT touch them:
-- `crates/nirs4all-io-dagml` — the dag-ml-data emit; path-depends on the `dag-ml-data` sibling, so it
-  is excluded to keep standalone build/CI working without the ecosystem tree present.
+The workspace has **5 members** (`crates/nirs4all-io-core`, `-io`, `-io-capi`, `-io-cli`,
+`-io-dagml`). The language bindings build with their own toolchains and are deliberately
+workspace-excluded — `cargo test --workspace` will NOT touch them:
 - `bindings/python` (maturin/pyo3) and `bindings/wasm` (wasm-pack) — see below.
+
+`crates/nirs4all-io-dagml` is now a workspace member. Its default Cargo dependency resolves
+`dag-ml-data` from crates.io for standalone builds, while the cross-CLI conformance harness patches
+Cargo to the sibling checkout when one is present.
 
 ### Python MVP / oracle — green gate
 
@@ -123,7 +125,7 @@ The Rust port deliberately splits along a **pure-logic / file-IO** seam (rule be
 | `nirs4all-io` (the **facade**) | **All file IO.** Resolution, tabular loaders, the join engine, the `nirs4all-formats` vendor reads, and producing the neutral descriptions fed to `-core`. Wires `resolve → infer → configure → materialize`. Re-exports `-core` as `core`. |
 | `nirs4all-io-capi` | C ABI (`n4io_to_spec` / `infer` / `validate`, JSON in/out; opaque context + per-context error buffer; ABI versioning). Symbol surface is drift-guarded (`abi/version_script.map`, `expected_symbols_*.txt`, `tests/abi_surface.rs`). |
 | `nirs4all-io-cli` | The `nirs4all-io` binary (`infer` / `to-spec` / `validate` / `load` / `emit-dag-ml-data`). |
-| `nirs4all-io-dagml` *(excluded)* | `to_dag_ml_data(&AssembledDataset)` → `CoordinatorDataPlanEnvelope`. Path-deps the `dag-ml-data` sibling; built/CI'd on its own. |
+| `nirs4all-io-dagml` | `to_dag_ml_data(&AssembledDataset)` → `CoordinatorDataPlanEnvelope`. Uses crates.io by default; the ecosystem conformance harness patches `dag-ml-data` to the sibling checkout. |
 
 **Canonical JSON is the cross-language contract** (`canonical_json.rs` ≡ `canonical_json.py`,
 byte-identical). The frozen goldens in `tests/goldens/contract/` are shared: the Python tests, the
@@ -172,9 +174,10 @@ These are the architectural invariants. PRs that violate them are rejected.
    non-recursive profile resolution, Python-`repr` float formatting (`pyfmt`). Touching load-bearing
    logic means updating Python + Rust together and re-freezing goldens only when the change is intended.
 
-8. **The `dag-ml-data` emit lives in the excluded `nirs4all-io-dagml` crate.** It is intentionally
-   outside the cargo workspace because it path-depends on the `dag-ml-data` sibling; the standalone
-   build/CI must stay ecosystem-free. The Phase-2 gate is GREEN (`docs/PHASE2_GATE.md`), so this is
+8. **The `dag-ml-data` emit lives in the `nirs4all-io-dagml` bridge crate.** It is a workspace
+   member, but default dependency resolution stays ecosystem-free via crates.io. The cross-CLI
+   conformance harness patches Cargo to the sibling `dag-ml-data` checkout when present, and CI now
+   requires that sibling path. The Phase-2 gate is GREEN (`docs/PHASE2_GATE.md`), so this is
    implemented — don't reintroduce a `NotImplementedError` stub.
 
 ## Public API (`api.py`, re-exported from `__init__.py`)
@@ -213,8 +216,8 @@ adapter is testable with no nirs4all installed (see `test_load_e2e.py`).
 - **Two `nirs4all_io` Python packages exist.** The MVP (`src/nirs4all_io/`) and the pyo3 binding's
   mixed-maturin package (`bindings/python/python/nirs4all_io`, wrapping the native `_native` module).
   The root `mypy` run excludes `^bindings/` so they don't collide; don't remove that exclude.
-- **`cargo test --workspace` does not cover the bindings or the dagml crate** — they're workspace-
-  excluded. Run their own toolchains (maturin / wasm-pack / R script) to test them.
+- **`cargo test --workspace` covers the Rust crates, including `nirs4all-io-dagml`, but not the
+  bindings** — run their own toolchains (maturin / wasm-pack / R script) to test them.
 - **`rtk` can mask a command's exit code.** When verifying a green gate, capture the status explicitly
   (`cmd > log 2>&1; echo $?`) rather than relying on `&&` chains.
 - **YAML round-trips lists, not tuples** — specs are dict/JSON/YAML-authorable and stay `str`-enum

@@ -12,8 +12,9 @@
 # Fingerprints are content-derived, so no brittle byte-golden is pinned — the
 # "golden" is the round trip: emit -> both CLIs accept. Needs the sibling
 # `dag-ml-data` and `dag-ml` repos (the ecosystem tree); if either is absent the
-# script SKIPS (exit 0) with a message rather than failing, so standalone
-# nirs4all-io CI is unaffected. In the ecosystem CI all repos are present.
+# script SKIPS (exit 0) with a message rather than failing unless
+# NIRS4ALL_REQUIRE_DAGML_SIBLINGS=1 is set. When siblings are present, Cargo is
+# patched to use the local dag-ml-data checkout instead of the crates.io release.
 set -euo pipefail
 
 io_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -27,19 +28,25 @@ work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
 if [[ ! -d "${dmd}" || ! -d "${dml}" ]]; then
-  echo "SKIP: sibling dag-ml-data (${dmd}) or dag-ml (${dml}) not found; cross-CLI conformance not run."
+  msg="sibling dag-ml-data (${dmd}) or dag-ml (${dml}) not found; cross-CLI conformance not run."
+  if [[ "${NIRS4ALL_REQUIRE_DAGML_SIBLINGS:-0}" == "1" ]]; then
+    echo "FAIL: ${msg}" >&2
+    exit 1
+  fi
+  echo "SKIP: ${msg}"
   exit 0
 fi
 
 echo ">> building CLIs"
-# The emit lives in the workspace-excluded nirs4all-io-dagml crate (it depends on
-# the dag-ml-data sibling), built via its own manifest.
+# The emit lives in the nirs4all-io-dagml bridge crate. Build it through its own
+# manifest so we can patch dag-ml-data to the sibling checkout.
 emit_manifest="${io_root}/crates/nirs4all-io-dagml/Cargo.toml"
-( cargo build -q --manifest-path "${emit_manifest}" --bin emit-dagml )
+dagml_data_patch=(--config "patch.crates-io.dag-ml-data.path='${dmd}/crates/dag-ml-data'")
+( cargo build -q --manifest-path "${emit_manifest}" --bin emit-dagml "${dagml_data_patch[@]}" )
 ( cd "${dmd}" && cargo build -q -p dag-ml-data-cli --release )
 ( cd "${dml}" && cargo build -q -p dag-ml-cli --release )
 
-emit_target="$(cargo metadata --format-version 1 --manifest-path "${emit_manifest}" --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+emit_target="$(cargo metadata --format-version 1 --manifest-path "${emit_manifest}" --no-deps "${dagml_data_patch[@]}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
 emit_cli="$(find "${emit_target}" -maxdepth 2 -name emit-dagml -type f | head -1)"
 dmd_cli="${dmd}/target/release/dag-ml-data-cli"
 dml_cli="${dml}/target/release/dag-ml-cli"

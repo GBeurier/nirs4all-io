@@ -11,9 +11,10 @@
 //! and self-validates). io does **not** build dag-ml `FoldSet`/`DataBinding` —
 //! those are dag-ml's domain (folds/campaigns).
 //!
-//! This bridge resolves `dag-ml-data` from crates.io. It remains a separate
-//! `publish = false` crate so the published `nirs4all-io` CLI does not grow a
-//! hard dag-ml-data dependency.
+//! This bridge resolves `dag-ml-data` from crates.io by default. The cross-CLI
+//! conformance harness patches Cargo to the sibling checkout when it is present.
+//! It remains a separate `publish = false` crate so the published `nirs4all-io`
+//! CLI does not grow a hard dag-ml-data dependency.
 
 use std::collections::{BTreeMap, BTreeSet};
 

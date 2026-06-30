@@ -163,8 +163,7 @@ fn main() -> Result<()> {
         // The emit bridge lives in its own publish=false crate so the published
         // `nirs4all-io` CLI does not grow a hard dag-ml-data dependency.
         Command::EmitDagMlData { .. } => bail!(
-            "emit-dag-ml-data lives in the bridge crate `nirs4all-io-dagml`, which resolves \
-             dag-ml-data from crates.io. Run it from this checkout: \
+            "emit-dag-ml-data lives in the bridge crate `nirs4all-io-dagml`. Run it from this checkout: \
              `cargo run --manifest-path crates/nirs4all-io-dagml/Cargo.toml --bin emit-dagml -- <input>`"
         ),
     }

@@ -76,7 +76,7 @@ fn validate_rejects_bad_spec() {
 
 #[test]
 fn emit_dag_ml_data_points_to_ecosystem_crate() {
-    // The emit lives in the workspace-excluded `nirs4all-io-dagml` crate; the
+    // The emit lives in the `nirs4all-io-dagml` bridge crate; the
     // main CLI subcommand exists for discoverability and points there.
     let (ok, _, stderr) = run(&["emit-dag-ml-data", &corpus("x_y_separate")]);
     assert!(!ok);

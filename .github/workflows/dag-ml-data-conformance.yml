@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 # EPIC 10.4 / M4 — cross-CLI conformance for the dag-ml-data emit.
 #
-# Builds the workspace-excluded `nirs4all-io-dagml` emit crate and checks that an
+# Builds the `nirs4all-io-dagml` emit crate and checks that an
 # io-emitted CoordinatorDataPlanEnvelope is accepted by BOTH ecosystem CLIs
 # (dag-ml-data-cli validate-envelope + dag-ml-cli validate-data-binding). Needs
-# the sibling repos; the harness SKIPs (exit 0) if they are absent, so this job is
-# green on the standalone repo and runs for real in the ecosystem tree (siblings
-# present as submodules, or cloned below when reachable).
+# the sibling repos; CI clones them and requires the harness to use the local
+# checkout as a Cargo patch instead of the published dag-ml-data crate.
 name: dag-ml-data conformance
 
 on:
@@ -22,10 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Fetch sibling repos (best-effort)
+      - name: Fetch sibling repos
         run: |
-          # The harness skips cleanly if these are unavailable (e.g. private).
-          git clone --depth 1 https://github.com/GBeurier/dag-ml-data.git ../dag-ml-data || true
-          git clone --depth 1 https://github.com/GBeurier/dag-ml.git ../dag-ml || true
+          git clone --filter=blob:none --depth 1 https://github.com/GBeurier/dag-ml-data.git ../dag-ml-data
+          git clone --filter=blob:none --depth 1 https://github.com/GBeurier/dag-ml.git ../dag-ml
       - name: Cross-CLI conformance
+        env:
+          NIRS4ALL_REQUIRE_DAGML_SIBLINGS: "1"
         run: bash tests/dag_ml_data/verify_cross_cli.sh
