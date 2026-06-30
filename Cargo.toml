@@ -33,7 +33,7 @@ readme = "README.md"
 # track [workspace.package] version — scripts/bump_version.sh keeps it in sync.
 nirs4all-io-core = { path = "crates/nirs4all-io-core", version = "0.1.3" }
 nirs4all-io = { path = "crates/nirs4all-io", version = "0.1.3" }
-dag-ml-data = "0.1.0-alpha.0"
+dag-ml-data = "0.2.2"
 # Third-party. serde_json enables `preserve_order` so that *input* object order
 # mirrors Python dict insertion order (load-bearing for legacy-config
 # normalization, where input order can leak into output list order). Canonical
