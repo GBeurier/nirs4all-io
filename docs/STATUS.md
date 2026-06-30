@@ -19,7 +19,7 @@ All EPICs 7–12 implemented; io validated end-to-end by intensive tests.
 | 7 | Workspace (4 crates) + contract anchor + canonical-JSON parity (the #1 risk) | ✅ + Codex |
 | 8 | Rust core+facade port — `resolve→infer→configure→materialize` **byte-identical** to Python (`to_spec`/`infer`/assembled goldens) | ✅ + 2 Codex |
 | 9 | C ABI `n4io_*` (status/error model, opaque context, ABI versioning) + symbol governance + `nirs4all-io-cli` | ✅ + Codex (+4 fixes) |
-| 10 | dag-ml-data emit (`AssembledDataset`→`CoordinatorDataPlanEnvelope`) in the workspace-excluded `nirs4all-io-dagml`; validated by **both** dag-ml CLIs | ✅ + Codex (+3 fixes) |
+| 10 | dag-ml-data emit (`AssembledDataset`→`CoordinatorDataPlanEnvelope`) in `nirs4all-io-dagml`; validated by **both** dag-ml CLIs with sibling `dag-ml-data` patched into Cargo | ✅ + Codex (+3 fixes) |
 | 11 | Bindings: pyo3 (tested), wasm (tested), R (tested), MATLAB/Octave (CI-gated). Import-boundary green | ✅ + Codex (+1 fix) |
 | 12.1 | **Direct parity oracle**: the pyo3 binding builds a `SpectroDataset` via the lazy adapter; `tests/test_parity.py` proves Rust→SpectroDataset X/y/task/headers ≡ `nirs4all.DatasetConfigs` (allclose). CI: `parity-oracle.yml` (ecosystem-gated) | ✅ |
 | 12.2 | Cookbook coverage gate in Rust — all 28 vocabulary elements driven through `assemble()` (`crates/nirs4all-io/tests/cookbook.rs`) | ✅ |

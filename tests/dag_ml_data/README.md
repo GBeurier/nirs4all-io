@@ -2,11 +2,11 @@
 # dag-ml-data emit — cross-CLI conformance (EPIC 10)
 
 io owns the `AssembledDataset → CoordinatorDataPlanEnvelope` bridge (ADR-0001).
-The emit lives in the **workspace-excluded** crate `crates/nirs4all-io-dagml`
-(`to_dag_ml_data` + the `emit-dagml` binary). It is excluded because it
-path-depends on the `dag-ml-data` sibling: an absent optional path dep would
-break standalone `cargo build --workspace` resolution (verified), so the main
-workspace and standalone CI stay free of any dag-ml-data dependency. The main
+The emit lives in the `crates/nirs4all-io-dagml` bridge crate
+(`to_dag_ml_data` + the `emit-dagml` binary). It is a workspace member, but its
+default dependency resolution uses the published `dag-ml-data` crate so
+standalone IO builds remain ecosystem-free. This conformance harness patches
+Cargo to the sibling `dag-ml-data` checkout when it is present. The main
 `nirs4all-io` CLI keeps an `emit-dag-ml-data` subcommand for discoverability that
 points at this crate. io builds a `DatasetSchema` + `DataPlan` +
 `SampleRelationTable` and calls `CoordinatorDataPlanEnvelope::from_parts` (which
@@ -19,7 +19,8 @@ fingerprints and self-validates). io does **not** emit dag-ml
    `cargo test --manifest-path crates/nirs4all-io-dagml/Cargo.toml`): builds the
    envelope for each contract-corpus case, then JSON-round-trips and
    re-`validate()`s it — exactly the checks `dag-ml-data-cli validate-envelope`
-   runs, with no external binary. Needs the dag-ml-data sibling (ecosystem tree).
+   runs, with no external binary. Use the Cargo patch form below when checking
+   against the sibling `dag-ml-data` checkout.
 
 2. **Cross-CLI** (`verify_cross_cli.sh`): the full ecosystem acceptance (story
    10.4). The io-emitted envelope must pass **both**:
@@ -33,10 +34,13 @@ fingerprints and self-validates). io does **not** emit dag-ml
    Fingerprints are content-derived, so nothing brittle is pinned — the "golden"
    is the round trip *emit → both CLIs accept*. The script needs the sibling
    `dag-ml-data` and `dag-ml` repos (override locations with `NIRS4ALL_DAG_ML_DATA`
-   / `NIRS4ALL_DAG_ML`); it SKIPs (exit 0) if either is absent, so standalone CI
-   is unaffected. In the ecosystem CI all repos are present.
+   / `NIRS4ALL_DAG_ML`); it SKIPs (exit 0) if either is absent unless
+   `NIRS4ALL_REQUIRE_DAGML_SIBLINGS=1` is set. In CI the repos are cloned and
+   required.
 
 ```bash
+cargo test --manifest-path crates/nirs4all-io-dagml/Cargo.toml \
+  --config "patch.crates-io.dag-ml-data.path='../dag-ml-data/crates/dag-ml-data'"
 bash tests/dag_ml_data/verify_cross_cli.sh                 # default: train_test x_y_separate
 bash tests/dag_ml_data/verify_cross_cli.sh train_test      # a specific case
 ```
