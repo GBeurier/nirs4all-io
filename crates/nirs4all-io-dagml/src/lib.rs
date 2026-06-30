@@ -18,12 +18,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dag_ml_data::{
-    AxisKind, AxisSpec, CoordinateDType, CoordinateSpec, CoordinateValues,
-    CoordinatorDataPlanEnvelope, DataPlan, DataPlanStep, DataPlanStepKind, DatasetSchema, FitScope,
-    GroupId, ObservationId, RepetitionId, RepresentationId, RepresentationSpec, SampleId,
-    SampleRelation, SampleRelationTable, SignalKind, SourceDescriptor, SourceGranularity, SourceId,
-    TargetId, TypeId,
+    sample_metadata, signal_1d, signal_with_processings, target_categorical,
+    target_categorical_matrix, target_numeric, target_numeric_matrix, AxisKind, AxisSpec,
+    CoordinateDType, CoordinateSpec, CoordinateValues, CoordinatorDataPlanEnvelope, DataPlan,
+    DataPlanStep, DataPlanStepKind, DatasetSchema, FitScope, GroupId, MetadataFieldSpec,
+    MetadataSchema, MetadataValueKind, ObservationId, RepetitionId, RepresentationId,
+    RepresentationSpec, SampleId, SampleRelation, SampleRelationTable, SignalKind,
+    SourceDescriptor, SourceGranularity, SourceId, TargetId, REPRESENTATION_FEATURE_BLOCK_SET,
+    REPRESENTATION_SAMPLE_METADATA,
 };
+use nirs4all_io::core::infer::{ColDtype, NumericKind};
 use nirs4all_io::core::spec::SpecError;
 use nirs4all_io::materialize::AssembledDataset;
 use serde_json::Value;
@@ -93,10 +97,11 @@ fn feature_axis(unit: &str) -> (AxisKind, Option<String>, &'static str) {
         || u.contains("wavenumber")
         || u.contains("cm⁻¹")
     {
-        // dag-ml-data has no dedicated wavenumber axis; cm⁻¹ is a (spatial)
-        // frequency, so it maps onto the generic `Frequency` axis kind. The
-        // canonical "cm-1" unit string is preserved on the axis.
-        (AxisKind::Frequency, Some("cm-1".to_string()), "wavenumber")
+        (
+            AxisKind::Wavenumber,
+            Some("cm^-1".to_string()),
+            "wavenumber",
+        )
     } else {
         (AxisKind::Feature, None, "feature")
     }
@@ -135,6 +140,51 @@ fn categorical_coords(values: Vec<Value>) -> Option<CoordinateSpec> {
     })
 }
 
+fn sample_axis(n_samples: usize) -> AxisSpec {
+    AxisSpec {
+        name: "sample".into(),
+        kind: AxisKind::Sample,
+        unit: None,
+        size: Some(n_samples),
+        variable: false,
+        coordinate: None,
+    }
+}
+
+fn feature_axis_spec(headers: &[String], n_features: usize, unit: &str) -> AxisSpec {
+    let (kind, axis_unit, axis_name) = feature_axis(unit);
+    AxisSpec {
+        name: axis_name.into(),
+        kind,
+        unit: axis_unit,
+        size: Some(n_features),
+        variable: false,
+        coordinate: numeric_coords(headers, n_features),
+    }
+}
+
+fn processing_axis(names: Vec<String>) -> AxisSpec {
+    AxisSpec {
+        name: "processing".into(),
+        kind: AxisKind::Processing,
+        unit: None,
+        size: Some(names.len()),
+        variable: false,
+        coordinate: categorical_coords(names.into_iter().map(Value::String).collect()),
+    }
+}
+
+fn target_axis(headers: &[String]) -> AxisSpec {
+    AxisSpec {
+        name: "target".into(),
+        kind: AxisKind::Target,
+        unit: None,
+        size: Some(headers.len()),
+        variable: false,
+        coordinate: categorical_coords(headers.iter().cloned().map(Value::String).collect()),
+    }
+}
+
 fn signal_kind(raw: &str) -> SignalKind {
     match raw.trim().to_ascii_lowercase().as_str() {
         "absorbance" => SignalKind::Absorbance,
@@ -146,10 +196,208 @@ fn signal_kind(raw: &str) -> SignalKind {
     }
 }
 
-/// Map an [`AssembledDataset`] to a dag-ml-data `CoordinatorDataPlanEnvelope`.
-pub fn to_dag_ml_data(
+fn processing_names(assembled: &AssembledDataset, source_idx: usize) -> Vec<String> {
+    let mut names = vec!["native".to_string()];
+    for block in assembled.blocks.values() {
+        if let Some(source_processings) = block.processings.get(source_idx) {
+            for (name, _) in source_processings {
+                if !names.iter().any(|seen| seen == name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
+fn source_representation(
+    n_samples: usize,
+    n_features: usize,
+    headers: &[String],
+    unit: &str,
+    signal: Option<&str>,
+    processings: &[String],
+) -> RepresentationSpec {
+    let kind = signal.map(signal_kind).unwrap_or(SignalKind::Unknown);
+    let mut representation = if processings.len() > 1 {
+        signal_with_processings(kind)
+    } else {
+        signal_1d(kind)
+    };
+    let feature_axis = feature_axis_spec(headers, n_features, unit);
+    representation.axes = if processings.len() > 1 {
+        vec![
+            sample_axis(n_samples),
+            processing_axis(processings.to_vec()),
+            feature_axis,
+        ]
+    } else {
+        vec![sample_axis(n_samples), feature_axis]
+    };
+    representation.rank = Some(representation.axes.len());
+    representation
+}
+
+fn single_target_representation(
+    n_samples: usize,
+    _header: &str,
+    categorical: bool,
+) -> RepresentationSpec {
+    let mut representation = if categorical {
+        target_categorical()
+    } else {
+        target_numeric()
+    };
+    representation.axes = vec![sample_axis(n_samples)];
+    representation.rank = Some(1);
+    representation
+}
+
+fn target_matrix_representation(
+    n_samples: usize,
+    headers: &[String],
+    categorical: bool,
+) -> RepresentationSpec {
+    let mut representation = if categorical {
+        target_categorical_matrix()
+    } else {
+        target_numeric_matrix()
+    };
+    representation.axes = vec![sample_axis(n_samples), target_axis(headers)];
+    representation.rank = Some(2);
+    representation
+}
+
+fn target_is_categorical(
     assembled: &AssembledDataset,
-) -> Result<CoordinatorDataPlanEnvelope, SpecError> {
+    first_block: &nirs4all_io::core::materialize::PartitionBlock,
+    header: &str,
+) -> bool {
+    first_block.y_categorical.contains_key(header)
+        || matches!(assembled.task_type.as_str(), "binary" | "multiclass")
+}
+
+fn emit_target_specs(
+    assembled: &AssembledDataset,
+    n_samples: usize,
+    first_block: &nirs4all_io::core::materialize::PartitionBlock,
+    headers: &[String],
+) -> Result<BTreeMap<TargetId, RepresentationSpec>, SpecError> {
+    let mut targets = BTreeMap::new();
+    if headers.is_empty() {
+        return Ok(targets);
+    }
+
+    let target_kinds = headers
+        .iter()
+        .map(|header| target_is_categorical(assembled, first_block, header))
+        .collect::<Vec<_>>();
+    let all_same_kind = target_kinds
+        .first()
+        .is_some_and(|first| target_kinds.iter().all(|kind| kind == first));
+
+    if headers.len() > 1 && all_same_kind {
+        let id = TargetId::new("targets").map_err(err)?;
+        targets.insert(
+            id,
+            target_matrix_representation(n_samples, headers, target_kinds[0]),
+        );
+        return Ok(targets);
+    }
+
+    for (i, header) in headers.iter().enumerate() {
+        let tid = sanitize(header, &format!("target{i}"));
+        targets.insert(
+            TargetId::new(&tid).map_err(err)?,
+            single_target_representation(n_samples, header, target_kinds[i]),
+        );
+    }
+    Ok(targets)
+}
+
+fn metadata_value_kind(
+    column: &nirs4all_io::core::materialize::frame::Column,
+) -> MetadataValueKind {
+    match column.dtype {
+        ColDtype::Bool => MetadataValueKind::Boolean,
+        ColDtype::Datetime => MetadataValueKind::Datetime,
+        ColDtype::Numeric if column.numeric_kind == NumericKind::NonFloatNumeric => {
+            MetadataValueKind::Integer
+        }
+        ColDtype::Numeric => MetadataValueKind::Number,
+        ColDtype::String => MetadataValueKind::String,
+    }
+}
+
+fn sample_metadata_representation(
+    n_samples: usize,
+    field_names: Vec<String>,
+) -> Option<RepresentationSpec> {
+    if field_names.is_empty() {
+        return None;
+    }
+    let mut representation = sample_metadata();
+    representation.axes = vec![
+        sample_axis(n_samples),
+        AxisSpec {
+            name: "field".into(),
+            kind: AxisKind::Feature,
+            unit: None,
+            size: Some(field_names.len()),
+            variable: false,
+            coordinate: categorical_coords(field_names.into_iter().map(Value::String).collect()),
+        },
+    ];
+    representation.rank = Some(2);
+    Some(representation)
+}
+
+fn emit_metadata(
+    first_block: &nirs4all_io::core::materialize::PartitionBlock,
+    n_samples: usize,
+) -> (BTreeMap<String, RepresentationSpec>, Option<MetadataSchema>) {
+    let Some(frame) = &first_block.metadata else {
+        return (BTreeMap::new(), None);
+    };
+    let field_names = frame
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+
+    let mut metadata = BTreeMap::new();
+    if let Some(representation) = sample_metadata_representation(n_samples, field_names) {
+        metadata.insert(REPRESENTATION_SAMPLE_METADATA.to_string(), representation);
+    }
+
+    let fields = frame
+        .columns
+        .iter()
+        .map(|column| {
+            (
+                column.name.clone(),
+                MetadataFieldSpec {
+                    kind: metadata_value_kind(column),
+                    required: false,
+                    unit: None,
+                    allowed_values: vec![],
+                    description: None,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let schema = if fields.is_empty() {
+        None
+    } else {
+        Some(MetadataSchema { fields })
+    };
+    (metadata, schema)
+}
+
+fn build_dag_ml_data_parts(
+    assembled: &AssembledDataset,
+) -> Result<(DatasetSchema, DataPlan, Option<SampleRelationTable>), SpecError> {
     let Some((_first, b0)) = assembled.blocks.iter().next() else {
         return Err(SpecError::new(
             "cannot emit dag-ml-data: dataset has no partitions",
@@ -228,59 +476,45 @@ pub fn to_dag_ml_data(
                 augmented: false,
                 excluded: false,
                 metadata: BTreeMap::new(),
+                tags: vec![],
                 augmentation: None,
             });
         }
     }
     let n_samples = sample_ids.len();
 
-    // --- sources (each X source → a rank-2 [sample, feature] representation) ---
+    // --- sources (each X source → a standardized spectral representation) ---
     let mut sources = Vec::with_capacity(n_sources);
     for k in 0..n_sources {
         let n_features = b0.x[k].n_cols;
         let headers = b0.feature_headers.get(k).cloned().unwrap_or_default();
         let unit = b0.header_units.get(k).cloned().unwrap_or_default();
         let signal = b0.signal_types.get(k).and_then(Clone::clone);
-        let (kind, axis_unit, axis_name) = feature_axis(&unit);
-        let rep_id = sanitize(&format!("src_{k}_native"), "rep");
-        let axes = vec![
-            AxisSpec {
-                name: "sample".into(),
-                kind: AxisKind::Sample,
-                unit: None,
-                size: Some(n_samples),
-                variable: false,
-                coordinate: None,
-            },
-            AxisSpec {
-                name: axis_name.into(),
-                kind,
-                unit: axis_unit,
-                size: Some(n_features),
-                variable: false,
-                coordinate: numeric_coords(&headers, n_features),
-            },
-        ];
+        let processings = processing_names(assembled, k);
+        let native_representation = source_representation(
+            n_samples,
+            n_features,
+            &headers,
+            &unit,
+            signal.as_deref(),
+            &processings,
+        );
         let mut tags = BTreeMap::new();
         if let Some(sig) = &signal {
             tags.insert("signal_type".to_string(), Value::String(sig.clone()));
         }
+        if processings.len() > 1 {
+            tags.insert(
+                "processing_layers".to_string(),
+                Value::Array(processings.iter().cloned().map(Value::String).collect()),
+            );
+        }
         sources.push(SourceDescriptor {
             id: SourceId::new(sanitize(&format!("src_{k}"), "src")).map_err(err)?,
             name: format!("source {k}"),
-            type_id: TypeId::new("dense_signal").map_err(err)?,
+            type_id: native_representation.type_id.clone(),
             modality: "spectroscopy".into(),
-            native_representation: RepresentationSpec {
-                id: RepresentationId::new(&rep_id).map_err(err)?,
-                type_id: TypeId::new("dense_signal").map_err(err)?,
-                rank: Some(2),
-                axes,
-                container: "ndarray".into(),
-                dtype: Some("float64".into()),
-                sparse: false,
-                ragged: false,
-                signal_type: signal.as_deref().map(signal_kind),
-            },
+            native_representation,
             sample_key: "sample_id".into(),
             granularity: if use_rep {
                 SourceGranularity::PerSampleRepeated
@@ -293,51 +527,23 @@ pub fn to_dag_ml_data(
         });
     }
 
-    // --- targets (one representation per y column) ---
-    let mut targets: BTreeMap<TargetId, RepresentationSpec> = BTreeMap::new();
-    if b0.y.is_some() {
-        for (i, header) in b0.y_headers.iter().enumerate() {
-            let tid = sanitize(header, &format!("target{i}"));
-            let rep_id = sanitize(&format!("target_{tid}"), "target");
-            let rep = RepresentationSpec {
-                id: RepresentationId::new(&rep_id).map_err(err)?,
-                type_id: TypeId::new("tabular_numeric").map_err(err)?,
-                rank: Some(2),
-                axes: vec![
-                    AxisSpec {
-                        name: "sample".into(),
-                        kind: AxisKind::Sample,
-                        unit: None,
-                        size: Some(n_samples),
-                        variable: false,
-                        coordinate: None,
-                    },
-                    AxisSpec {
-                        name: "target".into(),
-                        kind: AxisKind::Target,
-                        unit: None,
-                        size: Some(1),
-                        variable: false,
-                        coordinate: categorical_coords(vec![Value::String(header.clone())]),
-                    },
-                ],
-                container: "dataframe".into(),
-                dtype: Some("float64".into()),
-                sparse: false,
-                ragged: false,
-                signal_type: None,
-            };
-            targets.insert(TargetId::new(&tid).map_err(err)?, rep);
-        }
-    }
+    // --- targets (standardized target-side contracts) ---
+    let targets = if b0.y.is_some() {
+        emit_target_specs(assembled, n_samples, b0, &b0.y_headers)?
+    } else {
+        BTreeMap::new()
+    };
+
+    // --- metadata (declared as sample_metadata when present) ---
+    let (metadata, metadata_schema) = emit_metadata(b0, n_samples);
 
     let schema = DatasetSchema {
         dataset_id: sanitize(&assembled.name, "dataset"),
         sample_ids,
         sources,
         targets,
-        metadata: BTreeMap::new(),
-        metadata_schema: None,
+        metadata,
+        metadata_schema,
         groups: vec![],
         folds: vec![],
     };
@@ -360,7 +566,7 @@ pub fn to_dag_ml_data(
     let output_representation = if schema.sources.len() == 1 {
         schema.sources[0].native_representation.id.clone()
     } else {
-        let model_input = RepresentationId::new("model_input").map_err(err)?;
+        let model_input = RepresentationId::new(REPRESENTATION_FEATURE_BLOCK_SET).map_err(err)?;
         steps.push(DataPlanStep {
             kind: DataPlanStepKind::Join,
             source_id: None,
@@ -385,12 +591,75 @@ pub fn to_dag_ml_data(
     } else {
         Some(SampleRelationTable { rows })
     };
+    Ok((schema, plan, relations))
+}
+
+/// Map an [`AssembledDataset`] to a dag-ml-data `CoordinatorDataPlanEnvelope`.
+pub fn to_dag_ml_data(
+    assembled: &AssembledDataset,
+) -> Result<CoordinatorDataPlanEnvelope, SpecError> {
+    let (schema, plan, relations) = build_dag_ml_data_parts(assembled)?;
     CoordinatorDataPlanEnvelope::from_parts(&schema, plan, relations.as_ref()).map_err(err)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dag_ml_data::{
+        DataPlanStepKind, REPRESENTATION_SIGNAL_1D, REPRESENTATION_SIGNAL_WITH_PROCESSINGS,
+        REPRESENTATION_TARGET_NUMERIC, REPRESENTATION_TARGET_NUMERIC_MATRIX,
+    };
+    use nirs4all_io::core::materialize::{
+        AssembledDataset, Cell, Column, Frame, Matrix, PartitionBlock,
+    };
+
+    fn matrix(rows: usize, cols: usize) -> Matrix {
+        Matrix {
+            data: (0..rows * cols).map(|value| value as f32).collect(),
+            n_rows: rows,
+            n_cols: cols,
+        }
+    }
+
+    fn assembled_with_block(block: PartitionBlock) -> AssembledDataset {
+        let mut assembled = AssembledDataset {
+            name: "demo".into(),
+            task_type: "regression".into(),
+            signal_type: "absorbance".into(),
+            n_sources: 1,
+            blocks: Default::default(),
+            folds: vec![],
+            repetition: None,
+            aggregate: None,
+            warnings: vec![],
+            audits: vec![],
+        };
+        assembled.blocks.insert("train".to_string(), block);
+        assembled
+    }
+
+    fn base_block() -> PartitionBlock {
+        PartitionBlock {
+            n_samples: 2,
+            x: vec![matrix(2, 3)],
+            feature_headers: vec![vec!["1000".into(), "1010".into(), "1020".into()]],
+            header_units: vec!["nm".into()],
+            signal_types: vec![Some("absorbance".into())],
+            processings: vec![vec![]],
+            y: Some(matrix(2, 1)),
+            y_headers: vec!["protein".into()],
+            y_categorical: Default::default(),
+            metadata: Some(Frame::from_columns(
+                vec![
+                    Column::from_cells("batch", vec![Cell::Str("a".into()), Cell::Str("b".into())]),
+                    Column::from_cells("rep", vec![Cell::Int(1), Cell::Int(2)]),
+                ],
+                "text",
+            )),
+            weights: None,
+            weights_header: None,
+        }
+    }
 
     #[test]
     fn unique_sample_id_disambiguates_sanitization_collisions() {
@@ -405,5 +674,99 @@ mod tests {
         );
         // the same raw value is stable across calls
         assert_eq!(a, unique_sample_id("A/B", &mut assigned, &mut taken));
+    }
+
+    #[test]
+    fn emits_standard_single_source_signal_target_and_metadata() {
+        let (schema, plan, _relations) =
+            build_dag_ml_data_parts(&assembled_with_block(base_block())).unwrap();
+        let protein = TargetId::new("protein").unwrap();
+
+        assert_eq!(schema.sources.len(), 1);
+        assert_eq!(
+            schema.sources[0].native_representation.id.as_str(),
+            REPRESENTATION_SIGNAL_1D
+        );
+        assert_eq!(
+            schema.sources[0].native_representation.axes[1].kind,
+            AxisKind::Wavelength
+        );
+        assert_eq!(
+            schema.targets[&protein].id.as_str(),
+            REPRESENTATION_TARGET_NUMERIC
+        );
+        assert!(schema.metadata.contains_key(REPRESENTATION_SAMPLE_METADATA));
+        assert!(schema
+            .metadata_schema
+            .as_ref()
+            .is_some_and(|schema| schema.fields.contains_key("batch")));
+        assert_eq!(
+            plan.output_representation.as_str(),
+            REPRESENTATION_SIGNAL_1D
+        );
+    }
+
+    #[test]
+    fn emits_processing_stack_when_variations_exist() {
+        let mut block = base_block();
+        block.processings = vec![vec![("snv".into(), matrix(2, 3))]];
+
+        let (schema, _plan, _relations) =
+            build_dag_ml_data_parts(&assembled_with_block(block)).unwrap();
+        let representation = &schema.sources[0].native_representation;
+
+        assert_eq!(
+            representation.id.as_str(),
+            REPRESENTATION_SIGNAL_WITH_PROCESSINGS
+        );
+        assert_eq!(representation.rank, Some(3));
+        assert_eq!(representation.axes[1].kind, AxisKind::Processing);
+        assert_eq!(representation.axes[1].size, Some(2));
+    }
+
+    #[test]
+    fn emits_feature_block_set_for_multi_source_join() {
+        let mut block = base_block();
+        block.x.push(matrix(2, 2));
+        block
+            .feature_headers
+            .push(vec!["1200".into(), "1210".into()]);
+        block.header_units.push("nm".into());
+        block.signal_types.push(Some("reflectance".into()));
+        block.processings.push(vec![]);
+
+        let mut assembled = assembled_with_block(block);
+        assembled.n_sources = 2;
+        let (schema, plan, _relations) = build_dag_ml_data_parts(&assembled).unwrap();
+
+        assert_eq!(schema.sources.len(), 2);
+        assert_eq!(
+            plan.output_representation.as_str(),
+            REPRESENTATION_FEATURE_BLOCK_SET
+        );
+        assert!(plan.steps.iter().any(|step| {
+            step.kind == DataPlanStepKind::Join
+                && step
+                    .output_representation
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == REPRESENTATION_FEATURE_BLOCK_SET)
+        }));
+    }
+
+    #[test]
+    fn emits_target_matrix_for_uniform_multivariate_targets() {
+        let mut block = base_block();
+        block.y = Some(matrix(2, 2));
+        block.y_headers = vec!["protein".into(), "moisture".into()];
+
+        let (schema, _plan, _relations) =
+            build_dag_ml_data_parts(&assembled_with_block(block)).unwrap();
+        let targets = TargetId::new("targets").unwrap();
+        let target = &schema.targets[&targets];
+
+        assert_eq!(target.id.as_str(), REPRESENTATION_TARGET_NUMERIC_MATRIX);
+        assert_eq!(target.rank, Some(2));
+        assert_eq!(target.axes[1].kind, AxisKind::Target);
+        assert_eq!(target.axes[1].size, Some(2));
     }
 }
