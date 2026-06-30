@@ -43,3 +43,6 @@ docs/dev/PORT_BLUEPRINT.md
 
 # coverage artefact
 coverage.xml
+
+# codegraph local index + daemon (per-developer, never committed)
+.codegraph/
