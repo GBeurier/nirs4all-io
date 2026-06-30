@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use dag_ml_data::CoordinatorDataPlanEnvelope;
+use dag_ml_data::{CoordinatorDataPlanEnvelope, REPRESENTATION_SIGNAL_1D};
 use nirs4all_io::infer::infer_path;
 use nirs4all_io::materialize::assemble;
 use nirs4all_io_dagml::to_dag_ml_data;
@@ -65,7 +65,10 @@ fn partitioned_dataset_is_one_logical_source() {
         1,
         "one source => one materialize step"
     );
-    assert_eq!(envelope.plan.output_representation.as_str(), "src_0_native");
+    assert_eq!(
+        envelope.plan.output_representation.as_str(),
+        REPRESENTATION_SIGNAL_1D
+    );
 }
 
 #[test]
