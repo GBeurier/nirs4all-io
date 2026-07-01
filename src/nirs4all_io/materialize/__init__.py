@@ -20,6 +20,27 @@ from .loaders import (
     infer_dtypes,
     read_table,
 )
+from .package import (
+    DATASET_PACKAGE_VERSION,
+    DatasetPackage,
+    FeatureMatrix,
+    GenotypeMatrix,
+    MaskBlock,
+    MetadataTable,
+    NdTensor,
+    PackagePartition,
+    PayloadBlock,
+    PayloadManifest,
+    PayloadManifestEntry,
+    PayloadStorageKind,
+    RowPositionFallback,
+    SequenceBlock,
+    SpectralRecordSet,
+    TargetTable,
+    UriRef,
+    WeightsVector,
+    repr_ids,
+)
 
 __all__ = [
     # join engine
@@ -39,4 +60,24 @@ __all__ = [
     "infer_dtypes",
     "coerce_numeric",
     "encode_categorical",
+    # package
+    "DATASET_PACKAGE_VERSION",
+    "DatasetPackage",
+    "FeatureMatrix",
+    "GenotypeMatrix",
+    "MaskBlock",
+    "MetadataTable",
+    "NdTensor",
+    "PackagePartition",
+    "PayloadBlock",
+    "PayloadManifest",
+    "PayloadManifestEntry",
+    "PayloadStorageKind",
+    "RowPositionFallback",
+    "SequenceBlock",
+    "SpectralRecordSet",
+    "TargetTable",
+    "UriRef",
+    "WeightsVector",
+    "repr_ids",
 ]
