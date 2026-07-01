@@ -5,7 +5,8 @@
 accepts a ``DatasetSpec``, a dict/JSON/YAML config (alias-normalized), a
 directory or file list (matched against conventions), or in-memory arrays, and
 materializes a ``SpectroDataset`` (default) or the target-agnostic
-``AssembledDataset``.
+``AssembledDataset``. Objects from sibling catalog packages may also expose a
+``to_io_spec()`` adapter; the returned spec is then materialized by this package.
 """
 
 from __future__ import annotations
@@ -40,6 +41,12 @@ def to_spec(
     """Normalize any (non-in-memory) input into a (DatasetSpec, base_dir) pair."""
     from .infer.plan import DatasetPlan
 
+    adapted = _adapt_to_io_spec(inp, base_dir=base_dir)
+    if adapted is not None:
+        spec, base = adapted
+        if name:
+            spec.name = name
+        return spec, base
     if isinstance(inp, DatasetPlan):
         # a plan's resolved_spec carries absolute input paths (Appendix I)
         return inp.accept(), Path(base_dir or ".")
@@ -83,6 +90,32 @@ def to_spec(
                 src["input"] = name_to_abs.get(value, value)
         return DatasetSpec.from_dict(spec_dict), Path(base_dir or ".")
     raise SpecError(f"cannot build a DatasetSpec from {type(inp).__name__}; pass arrays to load() directly")
+
+
+def _adapt_to_io_spec(inp: Any, *, base_dir: str | Path | None) -> tuple[DatasetSpec, Path] | None:
+    """Accept sibling reference-dataset objects without importing their package.
+
+    ``nirs4all-datasets.NirsDataset`` implements ``to_io_spec()``. Keeping this
+    as a duck-typed adapter avoids a runtime dependency from IO back to the
+    catalog package while still letting ``nio.load(reference_dataset)`` use the
+    normal DatasetSpec materialization path.
+    """
+    adapter = getattr(inp, "to_io_spec", None)
+    if not callable(adapter):
+        return None
+    raw = adapter()
+    adapted_base: str | Path | None = None
+    if isinstance(raw, tuple):
+        if len(raw) != 2:
+            raise SpecError("to_io_spec() must return a spec dict/DatasetSpec or a (spec, base_dir) pair")
+        raw, adapted_base = raw
+    if isinstance(raw, DatasetSpec):
+        spec = raw
+    elif isinstance(raw, dict):
+        spec = DatasetSpec.from_dict(normalize_to_spec_dict(raw))
+    else:
+        raise SpecError(f"to_io_spec() returned {type(raw).__name__}, expected dict or DatasetSpec")
+    return spec, Path(base_dir or adapted_base or ".")
 
 
 def _spec_from_directory(path: Path, conventions: list[str], name: str) -> DatasetSpec:
