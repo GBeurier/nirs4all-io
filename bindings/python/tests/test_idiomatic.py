@@ -13,6 +13,10 @@ import nirs4all_io as nio
 CORPUS = Path(__file__).resolve().parents[3] / "tests/goldens/contract/corpus"
 
 
+def _write_b64(path: Path, payload: str) -> None:
+    path.write_bytes(base64.b64decode(payload))
+
+
 def test_to_spec_accepts_pathlib_and_returns_typed_spec():
     spec = nio.to_spec(CORPUS / "train_test")  # a pathlib.Path, not a str
     assert isinstance(spec, nio.DatasetSpec)
@@ -167,6 +171,95 @@ def test_load_parquet_reference_object_succeeds_with_native_loader(tmp_path):
 
     single_file = nio.load(tmp_path / "X.parquet", target="assembled")
     assert single_file["blocks"]["train"]["x_shapes"] == [[3, 5]]
+
+
+def test_load_applies_native_na_policy_from_public_binding(tmp_path):
+    csv_path = tmp_path / "X.csv"
+    csv_path.write_text("1000;1005\n1;\n2;3\n", encoding="utf-8")
+
+    assembled = nio.load(
+        {
+            "sources": [
+                {
+                    "id": "x",
+                    "role": "features",
+                    "input": str(csv_path),
+                    "params": {"na": {"policy": "replace", "fill": {"method": "value", "fill_value": 7.0}}},
+                }
+            ]
+        },
+        target="assembled",
+        name="native-na",
+    )
+    block = assembled["blocks"]["train"]
+
+    assert block["feature_headers"] == [["1000", "1005"]]
+    assert block["x_shapes"] == [[2, 2]]
+    assert block["x"] == [[[1.0, 7.0], [2.0, 3.0]]]
+
+
+def test_load_parquet_applies_native_na_policy_from_public_binding(tmp_path):
+    parquet_path = tmp_path / "X.parquet"
+    parquet_b64 = (
+        "UEFSMRUEFSAVJEwVBBUAEgAAEDwAAAAAAADwPwAAAAAAAABAFQAVEhUWLBUEFRAVBhUGHBgIAAAAAAAAAEAYCAAAAAAAAPA/FgAoCAAAAAAAAABAGAgAAAAAAADwPxERAAAACSACAAAABAEBAwIVBBUQ"
+        "FRRMFQIVABIAAAgcAAAAAAAACEAVABUSFRYsFQQVEBUGFQYcGAgAAAAAAAAIQBgIAAAAAAAACEAWAigIAAAAAAAACEAYCAAAAAAAAAhAEREAAAAJIAIAAAADAgECABUEGTw1ABgGc2NoZW1hFQQAFQol"
+        "AhgEMTAwMAAVCiUCGAQxMDA1ABYEGRwZLCYAHBUKGTUABhAZGAQxMDAwFQIWBBbMARbUASZIJggcGAgAAAAAAAAAQBgIAAAAAAAA8D8WACgIAAAAAAAAAEAYCAAAAAAAAPA/EREAGSwVBBUAFQIAFQAV"
+        "EBUCADwpBhkmAAQAAAAmABwVChk1AAYQGRgEMTAwNRUCFgQWvAEWxAEmjAIm3AEcGAgAAAAAAAAIQBgIAAAAAAAACEAWAigIAAAAAAAACEAYCAAAAAAAAAhAEREAGSwVBBUAFQIAFQAVEBUCADwpBhkm"
+        "AgIAAAAWiAMWBCYIFpgDABkcGAxBUlJPVzpzY2hlbWEY7AEvLy8vLzZnQUFBQVFBQUFBQUFBS0FBd0FCZ0FGQUFnQUNnQUFBQUFCQkFBTUFBQUFDQUFJQUFBQUJBQUlBQUFBQkFBQUFBSUFBQUJFQUFB"
+        "QUJBQUFBTlQvLy84QUFBRURFQUFBQUJnQUFBQUVBQUFBQUFBQUFBUUFBQUF4TURBMUFBQUFBTWIvLy84QUFBSUFFQUFVQUFnQUJnQUhBQXdBQUFBUUFCQUFBQUFBQUFFREVBQUFBQndBQUFBRUFBQUFBQUFB"
+        "QUFRQUFBQXhNREF3QUFBR0FBZ0FCZ0FHQUFBQUFBQUNBQUFBQUFBPQAYIHBhcnF1ZXQtY3BwLWFycm93IHZlcnNpb24gMjQuMC4wGSwcAAAcAAAAMwIAAFBBUjE="
+    )
+    _write_b64(parquet_path, parquet_b64)
+
+    assembled = nio.load(
+        {
+            "sources": [
+                {
+                    "id": "x",
+                    "role": "features",
+                    "input": str(parquet_path),
+                    "params": {"na": {"policy": "replace", "fill": {"method": "value", "fill_value": 7.0}}},
+                }
+            ]
+        },
+        target="assembled",
+    )
+    block = assembled["blocks"]["train"]
+
+    assert block["feature_headers"] == [["1000", "1005"]]
+    assert block["x"] == [[[1.0, 7.0], [2.0, 3.0]]]
+
+
+def test_load_parquet_projection_skips_unsupported_unselected_column(tmp_path):
+    parquet_path = tmp_path / "X.parquet"
+    parquet_b64 = (
+        "UEFSMRUEFSAVJEwVBBUAEgAAEDwAAAAAAADwPwAAAAAAAABAFQAVEhUWLBUEFRAVBhUGHBgIAAAAAAAAAEAYCAAAAAAAAPA/FgAoCAAAAAAAAABAGAgAAAAAAADwPxERAAAACSACAAAABAEBAwIVBBUQ"
+        "FRRMFQQVABIAAAgcAQAAAAIAAAAVABUSFRYsFQQVEBUGFQYcGAQCAAAAGAQBAAAAFgAoBAIAAAAYBAEAAAAREQAAAAkgAgAAAAQBAQMCFQQZPDUAGAZzY2hlbWEVBAAVCiUCGAQxMDAwABUCJQIYEHVu"
+        "c3VwcG9ydGVkX2RhdGUlDExsAAAAFgQZHBksJgAcFQoZNQAGEBkYBDEwMDAVAhYEFswBFtQBJkgmCBwYCAAAAAAAAABAGAgAAAAAAADwPxYAKAgAAAAAAAAAQBgIAAAAAAAA8D8REQAZLBUEFQAVAgAV"
+        "ABUQFQIAPCkGGSYABAAAACYAHBUCGTUABhAZGBB1bnN1cHBvcnRlZF9kYXRlFQIWBBacARakASaMAibcARwYBAIAAAAYBAEAAAAWACgEAgAAABgEAQAAABERABksFQQVABUCABUAFRAVAgA8KQYZJgAE"
+        "AAAAFugCFgQmCBb4AgAZHBgMQVJST1c6c2NoZW1hGPgBLy8vLy83QUFBQUFRQUFBQUFBQUtBQXdBQmdBRkFBZ0FDZ0FBQUFBQkJBQU1BQUFBQ0FBSUFBQUFCQUFJQUFBQUJBQUFBQUlBQUFCUUFBQUFC"
+        "QUFBQU1qLy8vOEFBQUVJRUFBQUFDUUFBQUFFQUFBQUFBQUFBQkFBQUFCMWJuTjFjSEJ2Y25SbFpGOWtZWFJsQUFBQUFNYi8vLzhBQUFBQUVBQVVBQWdBQmdBSEFBd0FBQUFRQUJBQUFBQUFBQUVERUFB"
+        "QUFCd0FBQUFFQUFBQUFBQUFBQVFBQUFBeE1EQXdBQUFHQUFnQUJnQUdBQUFBQUFBQ0FBPT0AGCBwYXJxdWV0LWNwcC1hcnJvdyB2ZXJzaW9uIDI0LjAuMBksHAAAHAAAAE0CAABQQVIx"
+    )
+    _write_b64(parquet_path, parquet_b64)
+
+    assembled = nio.load(
+        {
+            "sources": [
+                {
+                    "id": "x",
+                    "role": "features",
+                    "input": str(parquet_path),
+                    "params": {"format": {"columns": ["1000"]}},
+                }
+            ]
+        },
+        target="assembled",
+    )
+    block = assembled["blocks"]["train"]
+
+    assert block["feature_headers"] == [["1000"]]
+    assert block["x"] == [[[1.0], [2.0]]]
 
 
 def test_validate_rejects_invalid_typed_path():
