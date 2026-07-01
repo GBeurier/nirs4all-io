@@ -108,6 +108,24 @@ assert.ok(metaCols.includes("galactic_spc"), "metadata frame is populated");
 assert.ok(!metaCols.includes("sample_id"), "sample_id is identity, not metadata");
 assert.ok(!block.y, "no targets => no y");
 
+// CSV/tabular bytes path: assembleDataset applies the same native NA policy in
+// the fs-free core as the native facade and Python binding.
+const assembledCsv = wasm.assembleDataset(
+  [{ name: "X.csv", bytes: new TextEncoder().encode("1000;1005\n1;\n2;3\n") }],
+  [],
+  JSON.stringify({
+    sources: [{
+      id: "x",
+      role: "features",
+      input: "X.csv",
+      params: { na: { policy: "replace", fill: { method: "value", fill_value: 7.0 } } },
+    }],
+  })
+);
+const csvBlock = assembledCsv.blocks.train;
+assert.strictEqual(csvBlock.x[0].n_rows, 2, "CSV NA rows preserved");
+assert.deepStrictEqual(csvBlock.x[0].data, [1.0, 7.0, 2.0, 3.0], "CSV NA is replaced");
+
 // proposeDataset: iterative builder surface. An X/y pair sharing sample_id ->
 // the proposal layer surfaces a pairing decision; confirming it as a join writes
 // a SourceSpec.join and suppresses the open proposal.
