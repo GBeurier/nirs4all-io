@@ -20,7 +20,7 @@ use arrow_array::{
 };
 use arrow_schema::DataType;
 use nirs4all_io_core::infer::table::{ColDtype, NumericKind};
-use nirs4all_io_core::materialize::loaders::read_table_bytes;
+use nirs4all_io_core::materialize::loaders::{apply_na_policy, read_table_bytes};
 use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::SpecError;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -281,7 +281,7 @@ fn column_from_parquet_cells(
     }
 }
 
-fn read_parquet(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError> {
+fn read_parquet_raw(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError> {
     let file = std::fs::File::open(path)
         .map_err(|e| SpecError::new(format!("file not found: {} ({e})", path.display())))?;
     let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -359,6 +359,15 @@ fn read_parquet(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError>
     Ok(frame)
 }
 
+pub(crate) fn read_parquet_frame(path: &Path) -> Result<Frame, SpecError> {
+    read_parquet_raw(path, &LoadingParams::default())
+}
+
+fn read_parquet(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError> {
+    let frame = read_parquet_raw(path, params)?;
+    apply_na_policy(&frame, &params.na)
+}
+
 /// Read a tabular file into a [`Frame`]: read bytes (+ gzip/zip), then run the
 /// shared core CSV decoder. v0: the CSV family. numpy/parquet/excel/vendor
 /// readers land with the broader load path; until then unknown extensions fall
@@ -378,6 +387,8 @@ mod tests {
     use arrow_array::{ArrayRef, Date32Array, Float64Array, Int64Array, StringArray};
     use arrow_schema::{Field, Schema};
     use nirs4all_io_core::infer::table::NumericKind;
+    use nirs4all_io_core::spec::dataset_spec::NaConfig;
+    use nirs4all_io_core::spec::enums::{FillMethod, NaPolicy};
     use parquet::arrow::arrow_writer::ArrowWriter;
     use std::io::Write;
     use std::sync::Arc;
@@ -525,6 +536,45 @@ mod tests {
         assert_eq!(table.column_names(), vec!["label", "id"]);
         assert_eq!(table.str_column("label"), vec!["a", "b"]);
         assert_eq!(table.numeric_column_f64("id"), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn reads_parquet_nullable_columns_with_na_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("data.parquet");
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, true),
+        ]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0)])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![None, Some(3.0)])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        write_parquet(&p, batch);
+
+        let mut params = LoadingParams {
+            na: NaConfig {
+                policy: NaPolicy::Replace,
+                fill_method: Some(FillMethod::Value),
+                fill_value: serde_json::json!(7.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let replaced = read_table(&p, &params).unwrap();
+        assert_eq!(replaced.numeric_column_f64("b"), vec![7.0, 3.0]);
+
+        params.na = NaConfig {
+            policy: NaPolicy::RemoveSample,
+            ..Default::default()
+        };
+        let filtered = read_table(&p, &params).unwrap();
+        assert_eq!(filtered.n_rows, 1);
+        assert_eq!(filtered.numeric_column_f64("a"), vec![2.0]);
     }
 
     #[test]

@@ -15,8 +15,9 @@ use std::sync::LazyLock;
 
 use crate::infer::table::{ColDtype, NumericKind};
 use crate::spec::dataset_spec::{FormatParams, LoadingParams, NaConfig};
-use crate::spec::enums::NaPolicy;
+use crate::spec::enums::{FillMethod, NaPolicy};
 use crate::spec::SpecError;
+use serde_json::Value;
 
 use super::frame::{Cell, Column, Frame};
 
@@ -178,6 +179,268 @@ fn header_unit(params: &LoadingParams, has_header: bool) -> String {
     }
 }
 
+fn cell_is_na(cell: &Cell) -> bool {
+    matches!(cell, Cell::Na) || matches!(cell, Cell::Float(f) if f.is_nan())
+}
+
+fn first_na(frame: &Frame) -> Option<(usize, String)> {
+    for row in 0..frame.n_rows {
+        for col in &frame.columns {
+            if col.values.get(row).is_some_and(cell_is_na) {
+                return Some((row, col.name.clone()));
+            }
+        }
+    }
+    None
+}
+
+fn row_has_na(frame: &Frame, row: usize) -> bool {
+    frame
+        .columns
+        .iter()
+        .any(|col| col.values.get(row).is_some_and(cell_is_na))
+}
+
+fn column_has_na(col: &Column) -> bool {
+    col.values.iter().any(cell_is_na)
+}
+
+fn frame_from_column_values(frame: &Frame, values_by_column: Vec<Vec<Cell>>) -> Frame {
+    let columns = frame
+        .columns
+        .iter()
+        .zip(values_by_column)
+        .map(|(col, values)| Column::from_cells(&col.name, values))
+        .collect();
+    Frame {
+        columns,
+        n_rows: frame.n_rows,
+        header_unit: frame.header_unit.clone(),
+    }
+}
+
+fn fill_value_cell(fill_value: &Value) -> Result<Cell, SpecError> {
+    match fill_value {
+        Value::Null => Ok(Cell::Float(0.0)),
+        Value::Bool(value) => Ok(Cell::Bool(*value)),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(Cell::Int(value))
+            } else if let Some(value) = value.as_u64() {
+                Ok(i64::try_from(value)
+                    .map(Cell::Int)
+                    .unwrap_or_else(|_| Cell::Float(value as f64)))
+            } else if let Some(value) = value.as_f64() {
+                Ok(Cell::Float(value))
+            } else {
+                Err(SpecError::new(
+                    "na.fill.fill_value must be a number, string, bool, or null",
+                ))
+            }
+        }
+        Value::String(value) => Ok(Cell::Str(value.clone())),
+        _ => Err(SpecError::new(
+            "na.fill.fill_value must be a number, string, bool, or null",
+        )),
+    }
+}
+
+fn replace_na_value(frame: &Frame, fill_value: &Value) -> Result<Frame, SpecError> {
+    let replacement = fill_value_cell(fill_value)?;
+    let values_by_column = frame
+        .columns
+        .iter()
+        .map(|col| {
+            col.values
+                .iter()
+                .map(|cell| {
+                    if cell_is_na(cell) {
+                        replacement.clone()
+                    } else {
+                        cell.clone()
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    Ok(frame_from_column_values(frame, values_by_column))
+}
+
+fn sorted_numeric_values(col: &Column) -> Vec<f64> {
+    if col.dtype != ColDtype::Numeric {
+        return Vec::new();
+    }
+    let mut values: Vec<f64> = col
+        .values
+        .iter()
+        .map(Cell::to_numeric)
+        .filter(|value| !value.is_nan())
+        .collect();
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    values
+}
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        f64::NAN
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+}
+
+fn median(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return f64::NAN;
+    }
+    let mid = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    }
+}
+
+fn replace_na_stat(frame: &Frame, per_column: bool, stat: fn(&[f64]) -> f64) -> Frame {
+    if per_column {
+        let values_by_column = frame
+            .columns
+            .iter()
+            .map(|col| {
+                if col.dtype != ColDtype::Numeric {
+                    return col.values.clone();
+                }
+                let values = sorted_numeric_values(col);
+                let replacement = Cell::Float(stat(&values));
+                col.values
+                    .iter()
+                    .map(|cell| {
+                        if cell_is_na(cell) {
+                            replacement.clone()
+                        } else {
+                            cell.clone()
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        frame_from_column_values(frame, values_by_column)
+    } else {
+        let mut values = Vec::new();
+        for col in &frame.columns {
+            values.extend(sorted_numeric_values(col));
+        }
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        frame_from_column_values(
+            frame,
+            frame
+                .columns
+                .iter()
+                .map(|col| {
+                    let replacement = Cell::Float(stat(&values));
+                    col.values
+                        .iter()
+                        .map(|cell| {
+                            if cell_is_na(cell) {
+                                replacement.clone()
+                            } else {
+                                cell.clone()
+                            }
+                        })
+                        .collect()
+                })
+                .collect(),
+        )
+    }
+}
+
+fn fill_across_columns(frame: &Frame, forward: bool) -> Frame {
+    let mut rows: Vec<Vec<Cell>> = vec![vec![Cell::Na; frame.columns.len()]; frame.n_rows];
+    for (row_idx, row) in rows.iter_mut().enumerate() {
+        for (col_idx, col) in frame.columns.iter().enumerate() {
+            row[col_idx] = col.values.get(row_idx).cloned().unwrap_or(Cell::Na);
+        }
+        let mut carry: Option<Cell> = None;
+        if forward {
+            for cell in row.iter_mut() {
+                if cell_is_na(cell) {
+                    if let Some(value) = &carry {
+                        *cell = value.clone();
+                    }
+                } else {
+                    carry = Some(cell.clone());
+                }
+            }
+        } else {
+            for cell in row.iter_mut().rev() {
+                if cell_is_na(cell) {
+                    if let Some(value) = &carry {
+                        *cell = value.clone();
+                    }
+                } else {
+                    carry = Some(cell.clone());
+                }
+            }
+        }
+    }
+    let values_by_column = (0..frame.columns.len())
+        .map(|col_idx| rows.iter().map(|row| row[col_idx].clone()).collect())
+        .collect();
+    frame_from_column_values(frame, values_by_column)
+}
+
+fn replace_na(frame: &Frame, na: &NaConfig, method: FillMethod) -> Result<Frame, SpecError> {
+    match method {
+        FillMethod::Value => replace_na_value(frame, &na.fill_value),
+        FillMethod::Mean => Ok(replace_na_stat(frame, na.fill_per_column, mean)),
+        FillMethod::Median => Ok(replace_na_stat(frame, na.fill_per_column, median)),
+        FillMethod::ForwardFill => Ok(fill_across_columns(frame, true)),
+        FillMethod::BackwardFill => Ok(fill_across_columns(frame, false)),
+    }
+}
+
+/// Apply the configured NA policy to an already-decoded [`Frame`].
+///
+/// The Python MVP treats `auto` as `abort`; the Rust core follows that contract
+/// for both CSV bytes and facade-decoded frames such as Parquet.
+pub fn apply_na_policy(frame: &Frame, na: &NaConfig) -> Result<Frame, SpecError> {
+    let policy = if na.policy == NaPolicy::Auto {
+        NaPolicy::Abort
+    } else {
+        na.policy
+    };
+    let Some((row, col)) = first_na(frame) else {
+        return Ok(frame.clone());
+    };
+
+    match policy {
+        NaPolicy::Abort => Err(SpecError::new(format!(
+            "NA values detected and na_policy is 'abort'. First NA in column '{col}' (row: {row})."
+        ))),
+        NaPolicy::Ignore => Ok(frame.clone()),
+        NaPolicy::RemoveSample => {
+            let mask: Vec<bool> = (0..frame.n_rows)
+                .map(|row| !row_has_na(frame, row))
+                .collect();
+            Ok(frame.mask_rows(&mask))
+        }
+        NaPolicy::RemoveFeature => Ok(Frame {
+            columns: frame
+                .columns
+                .iter()
+                .filter(|col| !column_has_na(col))
+                .cloned()
+                .collect(),
+            n_rows: frame.n_rows,
+            header_unit: frame.header_unit.clone(),
+        }),
+        NaPolicy::Replace => {
+            let method = na.fill_method.unwrap_or(FillMethod::Value);
+            replace_na(frame, na, method)
+        }
+        NaPolicy::Auto => unreachable!("auto is normalized to abort"),
+    }
+}
+
 /// pandas `mangle_dupe_cols`: `a, a.1, a.2`; stringify + pad to `ncols`.
 fn mangle_dupes(header: &[String], ncols: usize) -> Vec<String> {
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -236,11 +499,14 @@ pub fn read_table_bytes(bytes: &[u8], params: &LoadingParams) -> Result<Frame, S
         records.push(rec.iter().map(str::to_string).collect());
     }
     if records.is_empty() {
-        return Ok(Frame {
-            columns: vec![],
-            n_rows: 0,
-            header_unit: header_unit(params, has_header),
-        });
+        return apply_na_policy(
+            &Frame {
+                columns: vec![],
+                n_rows: 0,
+                header_unit: header_unit(params, has_header),
+            },
+            &params.na,
+        );
     }
 
     let ncols = records.iter().map(|r| r.len()).max().unwrap_or(0);
@@ -262,11 +528,14 @@ pub fn read_table_bytes(bytes: &[u8], params: &LoadingParams) -> Result<Frame, S
             infer_column(name, &raw, decimal)
         })
         .collect();
-    Ok(Frame {
-        columns,
-        n_rows: records.len() - data_start,
-        header_unit: header_unit(params, has_header),
-    })
+    apply_na_policy(
+        &Frame {
+            columns,
+            n_rows: records.len() - data_start,
+            header_unit: header_unit(params, has_header),
+        },
+        &params.na,
+    )
 }
 
 #[cfg(test)]
@@ -275,6 +544,22 @@ mod tests {
 
     fn read(text: &str, params: &LoadingParams) -> Frame {
         read_table_bytes(text.as_bytes(), params).unwrap()
+    }
+
+    fn params_with_na(na: NaConfig) -> LoadingParams {
+        LoadingParams {
+            delimiter: Some(";".into()),
+            has_header: Some(true),
+            na,
+            ..Default::default()
+        }
+    }
+
+    fn na(policy: NaPolicy) -> NaConfig {
+        NaConfig {
+            policy,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -311,5 +596,140 @@ mod tests {
         assert!(!idc.is_float_dtype());
         assert!(idc.is_numeric_dtype());
         assert_eq!(idc.str_values, vec!["1", "2"]);
+    }
+
+    #[test]
+    fn csv_auto_and_abort_error_on_first_na() {
+        let text = "a;b\n1;\n2;3\n";
+
+        let auto = read_table_bytes(text.as_bytes(), &params_with_na(na(NaPolicy::Auto)))
+            .expect_err("auto must abort on NA");
+        assert!(auto.message.contains("First NA in column 'b' (row: 0)"));
+
+        let abort = read_table_bytes(text.as_bytes(), &params_with_na(na(NaPolicy::Abort)))
+            .expect_err("abort must abort on NA");
+        assert!(abort.message.contains("na_policy is 'abort'"));
+    }
+
+    #[test]
+    fn csv_ignore_preserves_na() {
+        let frame = read("a;b\n1;\n2;3\n", &params_with_na(na(NaPolicy::Ignore)));
+
+        assert_eq!(frame.n_rows, 2);
+        let b = frame.numeric_column_f64("b");
+        assert!(b[0].is_nan());
+        assert_eq!(b[1], 3.0);
+    }
+
+    #[test]
+    fn csv_remove_sample_drops_rows_with_any_na() {
+        let frame = read(
+            "a;b;c\n1;;x\n2;3;y\n;4;z\n",
+            &params_with_na(na(NaPolicy::RemoveSample)),
+        );
+
+        assert_eq!(frame.n_rows, 1);
+        assert_eq!(frame.numeric_column_f64("a"), vec![2.0]);
+        assert_eq!(frame.str_column("c"), vec!["y"]);
+    }
+
+    #[test]
+    fn csv_remove_feature_drops_columns_with_any_na() {
+        let frame = read(
+            "a;b;c\n1;;x\n2;3;y\n;4;z\n",
+            &params_with_na(na(NaPolicy::RemoveFeature)),
+        );
+
+        assert_eq!(frame.column_names(), vec!["c"]);
+        assert_eq!(frame.n_rows, 3);
+    }
+
+    #[test]
+    fn csv_replace_value_fills_na() {
+        let mut cfg = na(NaPolicy::Replace);
+        cfg.fill_method = Some(FillMethod::Value);
+        cfg.fill_value = serde_json::json!(9.5);
+
+        let frame = read("a;b\n1;\n2;3\n", &params_with_na(cfg));
+
+        assert_eq!(frame.numeric_column_f64("b"), vec![9.5, 3.0]);
+
+        let default_fill = read("a;b\n1;\n2;3\n", &params_with_na(na(NaPolicy::Replace)));
+        assert_eq!(default_fill.numeric_column_f64("b"), vec![0.0, 3.0]);
+    }
+
+    #[test]
+    fn replace_value_supports_numeric_string_and_bool_fill_values() {
+        let replace = |fill_value: Value| NaConfig {
+            policy: NaPolicy::Replace,
+            fill_method: Some(FillMethod::Value),
+            fill_value,
+            ..Default::default()
+        };
+
+        let numeric = Frame::from_columns(
+            vec![Column::from_cells(
+                "x",
+                vec![Cell::Float(1.0), Cell::Float(f64::NAN)],
+            )],
+            "text",
+        );
+        let numeric = apply_na_policy(&numeric, &replace(serde_json::json!(7.5))).unwrap();
+        assert_eq!(numeric.numeric_column_f64("x"), vec![1.0, 7.5]);
+
+        let string = Frame::from_columns(
+            vec![Column::from_cells(
+                "label",
+                vec![Cell::Str("a".into()), Cell::Na],
+            )],
+            "text",
+        );
+        let string = apply_na_policy(&string, &replace(serde_json::json!("missing"))).unwrap();
+        assert_eq!(string.str_column("label"), vec!["a", "missing"]);
+
+        let bools = Frame::from_columns(
+            vec![Column::from_cells("flag", vec![Cell::Bool(true), Cell::Na])],
+            "text",
+        );
+        let bools = apply_na_policy(&bools, &replace(serde_json::json!(false))).unwrap();
+        assert_eq!(bools.str_column("flag"), vec!["True", "False"]);
+    }
+
+    #[test]
+    fn csv_replace_mean_and_median_follow_python_axis_rules() {
+        let mut cfg = na(NaPolicy::Replace);
+        cfg.fill_method = Some(FillMethod::Mean);
+
+        let mean_fill = read(
+            "a;b;label\n1;10;x\n;20;y\n3;30;\n",
+            &params_with_na(cfg.clone()),
+        );
+        assert_eq!(mean_fill.numeric_column_f64("a"), vec![1.0, 2.0, 3.0]);
+        assert!(
+            matches!(mean_fill.column("label").unwrap().values[2], Cell::Na),
+            "per-column numeric mean must not fill non-numeric columns"
+        );
+
+        cfg.fill_method = Some(FillMethod::Median);
+        let median_fill = read("a;b\n1;10\n;20\n5;30\n", &params_with_na(cfg.clone()));
+        assert_eq!(median_fill.numeric_column_f64("a"), vec![1.0, 3.0, 5.0]);
+
+        cfg.fill_per_column = false;
+        let global_fill = read("a;b\n1;10\n;20\n5;30\n", &params_with_na(cfg));
+        assert_eq!(global_fill.numeric_column_f64("a"), vec![1.0, 10.0, 5.0]);
+    }
+
+    #[test]
+    fn csv_replace_forward_and_backward_fill_across_columns() {
+        let mut cfg = na(NaPolicy::Replace);
+        cfg.fill_method = Some(FillMethod::ForwardFill);
+        let ffill = read("a;b;c\n1;;3\n;2;3\n", &params_with_na(cfg.clone()));
+        assert_eq!(ffill.numeric_column_f64("b"), vec![1.0, 2.0]);
+        assert!(ffill.numeric_column_f64("a")[1].is_nan());
+
+        cfg.fill_method = Some(FillMethod::BackwardFill);
+        let bfill = read("a;b;c\n1;;3\n;2;3\n", &params_with_na(cfg));
+        assert_eq!(bfill.numeric_column_f64("b"), vec![3.0, 2.0]);
+        assert_eq!(bfill.numeric_column_f64("a")[1], 2.0);
     }
 }

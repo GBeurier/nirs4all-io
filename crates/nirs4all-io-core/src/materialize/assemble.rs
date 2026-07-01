@@ -31,7 +31,7 @@ use serde_json::{Map, Value};
 use super::folds::Fold;
 use super::frame::{Cell, Column, Frame, Matrix};
 use super::join::{concat_features, concat_samples, join_tables, merge_by_key};
-use super::loaders::{effective_params, read_table_bytes};
+use super::loaders::{apply_na_policy, effective_params, read_table_bytes};
 
 /// A source payload supplied in-memory instead of a file path.
 pub enum SourcePayload {
@@ -476,7 +476,7 @@ fn frame_with_params(frame: &Frame, params: &LoadingParams) -> Result<Frame, Spe
     if let Some(unit) = params.header_unit {
         out.header_unit = unit.value().to_string();
     }
-    Ok(out)
+    apply_na_policy(&out, &params.na)
 }
 
 fn load_source_frame_mem(
