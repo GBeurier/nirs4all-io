@@ -4,7 +4,8 @@
 > Appendix J readiness checklist of the redesign doc. This file records the
 > **verified current status** of that gate (assessed against the live
 > `dag-ml-data` and `dag-ml` repos). **As of 2026-05-28 both former blockers are
-> resolved — the gate is GREEN.** The actionable Phase-2 plan is in
+> resolved — the gate is GREEN.** The Rust bridge is now implemented in
+> `crates/nirs4all-io-dagml`; the original Phase-2 plan is recorded in
 > [`RUST_REWRITE_ROADMAP.md`](RUST_REWRITE_ROADMAP.md).
 
 ## Verdict: **GREEN — UNBLOCKED** (both former blockers resolved in `dag-ml-data`, 2026-05-28)
@@ -32,13 +33,14 @@ coordinator envelope → validate via `dag-ml-data-cli ValidateEnvelope` **and**
 `dag-ml ... validate-data-binding`) already exists. The right acceptance test
 (story 4.4) is a cross-CLI golden of `coordinator_data_plan_envelope.json`.
 
-## Now unblocked — the Phase-2 plan
+## Implemented bridge shape
 
-The actionable, multi-agent plan is in [`RUST_REWRITE_ROADMAP.md`](RUST_REWRITE_ROADMAP.md)
-(EPIC 10 = the emit). The Appendix-H.2 mapping is `DatasetSpec` → `DatasetSchema` +
-`DataPlan` + `SampleRelationTable`, assembled into a `CoordinatorDataPlanEnvelope` via
-`CoordinatorDataPlanEnvelope::from_parts`. **io does not emit `FoldSet`/`DataBinding`** —
-those stay in `dag-ml` (folds/campaigns are its domain; the cross-CLI acceptance test wraps
-the envelope as an `ExternalDataPlanEnvelope` behind a fixture `DataBinding`). The Phase-1
-`AssembledDataset` IR is deliberately target-agnostic so a `to_dag_ml_data(assembled)`
-adapter slots in beside `to_spectrodataset`.
+The implemented EPIC-10 bridge maps an `AssembledDataset` to `DatasetSchema` +
+`DataPlan` + `SampleRelationTable`, assembled into a `CoordinatorDataPlanEnvelope`
+via `CoordinatorDataPlanEnvelope::from_parts`. It lives in `crates/nirs4all-io-dagml`
+as `to_dag_ml_data(&AssembledDataset)` plus the `emit-dagml` binary. **io does not
+emit `FoldSet`/`DataBinding`** — those stay in `dag-ml` (folds/campaigns are its
+domain; the cross-CLI acceptance test wraps the envelope as an `ExternalDataPlanEnvelope`
+behind a fixture `DataBinding`). The Python MVP remains `SpectroDataset` /
+`AssembledDataset` / `DatasetPackage`; it does not expose a `dag-ml-data` `load`
+target.

@@ -111,9 +111,10 @@ aliases). Column selection is a small DSL in `spec/selectors.py` (positional / s
 ### `AssembledDataset` is the target-agnostic seam (`materialize/assemble.py`)
 `assemble(spec)` produces an `AssembledDataset` (per-partition `PartitionBlock`s: multi-source `X`,
 `y`, `metadata`, headers, units, weights, named processings). `to_spectrodataset(assembled)`
-(`materialize/spectrodataset.py`) adapts it to nirs4all today; `to_dag_ml_data(assembled)` slots in
-beside it. Keep assembly logic target-agnostic so it stays testable without nirs4all —
-`target="assembled"` is the test seam.
+(`materialize/spectrodataset.py`) adapts it to nirs4all; `DatasetPackage` wraps the same IR for
+target-agnostic payload manifests; the Rust bridge crate adapts it to `dag-ml-data` via
+`to_dag_ml_data(&AssembledDataset)`. Keep assembly logic target-agnostic so it stays testable
+without nirs4all — `target="assembled"` is the test seam.
 
 ### The Rust workspace mirrors the Python stages, split core ↔ facade
 

@@ -2,8 +2,8 @@
 """Versioned, machine-validatable JSON Schema for DatasetSpec (D3, story 5.1).
 
 The dataclass IR + :func:`validate_spec` are the runtime authority; this JSON
-Schema is the **portable wire contract** (shared verbatim with the future Rust
-core, cross-language gate 6.4). It enforces the closed vocabularies and the
+Schema is the **portable wire contract** (shared verbatim with the Rust core,
+cross-language gate 6.4). It enforces the closed vocabularies and the
 source/join structure; it is lenient about extra keys (the IR ignores unknowns).
 """
 

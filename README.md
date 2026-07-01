@@ -19,19 +19,25 @@ matches the expressiveness of `nirs4all`'s `DatasetConfig`/`DatasetLoader` and
 adds a score-based inference engine.
 
 ```
-any input ──► RESOLVE ──► INFER ──► CONFIGURE ──► MATERIALIZE ──► SpectroDataset
-              (InputSet)  (DatasetPlan, scored)   (DatasetSpec)    (and later: dag-ml-data)
+any input ──► RESOLVE ──► INFER ──► CONFIGURE ──► MATERIALIZE ──► SpectroDataset / DatasetPackage
+              (InputSet)  (DatasetPlan, scored)   (DatasetSpec)    or dag-ml-data envelope (Rust bridge)
 ```
 
 ## Status
 
 **Phase 1 (Python MVP) — complete and parity-verified.** `load()` and `infer()`
-work end-to-end and target `SpectroDataset`; the build is **byte-equivalent to
-nirs4all's own `DatasetConfigs`** on the supported topologies (`pytest -m parity`).
-178 tests, ruff + mypy clean. See [`docs/STATUS.md`](docs/STATUS.md) for the
-per-epic breakdown, [`docs/API.md`](docs/API.md) for the seam, and
-[`docs/PHASE2_GATE.md`](docs/PHASE2_GATE.md) for why the Rust / `dag-ml-data`
-target (Phase 2) stays gated. Full design:
+work end-to-end and target `SpectroDataset`, `AssembledDataset`, and the
+target-agnostic `DatasetPackage`; the build is **byte-equivalent to nirs4all's
+own `DatasetConfigs`** on the supported topologies (`pytest -m parity`).
+
+**Phase 2 (Rust rewrite + dag-ml-data bridge) — complete.** The Rust workspace
+ports the same pipeline and the `dag-ml-data` emit lives in
+`crates/nirs4all-io-dagml` (`to_dag_ml_data` + the `emit-dagml` binary). The main
+`nirs4all-io` CLI keeps an `emit-dag-ml-data` discovery subcommand that points to
+that bridge crate. There is intentionally no Python `load(..., target="dag-ml-data")`
+surface. See [`docs/STATUS.md`](docs/STATUS.md) for the per-epic breakdown,
+[`docs/API.md`](docs/API.md) for the seam, and
+[`docs/PHASE2_GATE.md`](docs/PHASE2_GATE.md) for the GREEN gate record. Full design:
 [`../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md`](../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md).
 
 ## Quick start (target API)
@@ -43,9 +49,10 @@ import nirs4all_io as nio
 plan = nio.infer("data/mango/", conventions=["nirs4all-classic"])
 print(plan.recommendations)
 
-# Materialize a spec/plan/input into a SpectroDataset
+# Materialize a spec/plan/input into a SpectroDataset or target-agnostic package
 ds = nio.load(plan, target="spectrodataset")
 ds = nio.load({"sources": [{"id": "x", "role": "features", "input": "X.csv"}]})
+pkg = nio.to_dataset_package(plan)
 
 # Vendor corpus + reference table (headline new capability)
 plan = nio.infer(["spectra/*.0", "reference.csv"], conventions=["vendor-corpus"])
@@ -63,7 +70,8 @@ and an honest ✅/🟡/📋 implementation status on each option.
 One Rust core, thin wrappers per language (all over the same canonical-JSON
 contract). See [`COMPAT.md`](COMPAT.md) for the full operation matrix.
 
-- **CLI** — `nirs4all-io` (`infer` / `to-spec` / `validate` / `load` / `emit-dag-ml-data`).
+- **CLI** — `nirs4all-io` (`infer` / `to-spec` / `validate` / `load`; `emit-dag-ml-data` points to the bridge crate).
+- **dag-ml-data bridge** — `crates/nirs4all-io-dagml` (`to_dag_ml_data` / `emit-dagml`), validated by the cross-CLI conformance gate.
 - **Python** (pyo3/maturin) — [`bindings/python`](bindings/python/README.md); the only surface that builds a real `SpectroDataset`.
 - **R** (`.Call` over the C ABI) — [`bindings/r`](bindings/r/README.md). Install the prebuilt binary from R-universe:
   ```r

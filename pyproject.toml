@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nirs4all-io"
-description = "Dataset-assembly bridge: resolve / infer / configure / materialize arbitrary user inputs into a SpectroDataset (and, later, a dag-ml-data contract)."
+description = "Dataset-assembly bridge: resolve / infer / configure / materialize arbitrary user inputs into SpectroDataset or DatasetPackage; the Rust workspace includes the dag-ml-data bridge."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "CeCILL-2.1 OR AGPL-3.0-or-later"

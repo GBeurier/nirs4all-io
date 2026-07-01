@@ -18,7 +18,7 @@ directly, so it (and only it) can hand back native Python objects and a real
 | `validate` | ✅ `validate` | ✅ `validate` | ✅ `n4io_validate` | ✅ `nirs4all_io.validate` | ✅ `validate` |
 | `load` → assembled | ✅ `load` | ✅ `load(target="assembled")` / `load_summary` | ❌ | ❌ | ✅ fs-free `assembleDataset(files, records, specJson)` |
 | `load` → SpectroDataset | ❌ | ✅ `load(target="spectrodataset")` (lazy adapter) | ❌ | ❌ | ❌ |
-| `emit-dag-ml-data` | 🟡 stub → ecosystem crate | ❌ | ❌ | ❌ | ❌ |
+| `emit-dag-ml-data` | ✅ bridge crate `emit-dagml` (main CLI points there) | ❌ | ❌ | ❌ | ❌ |
 | ABI / version | — | `__version__` | `n4io_abi_version` | `nirs4all_io.abi_version` | `version` |
 
 Legend: ✅ supported · 🟡 partial / out-of-process · ❌ out of scope in v0.
@@ -34,10 +34,11 @@ Legend: ✅ supported · 🟡 partial / out-of-process · ❌ out of scope in v0
 | WASM / JS | `to_spec`/`validate`: JSON string; `inferFiles`/`inferDataset`/`inferRecords`/`proposeDataset`/`assembleDataset`: `{name, bytes:Uint8Array}[]` + decoded record sets (+ `{confirmed}` locks) | `to_spec`: canonical JSON string; the browser ops return plain JS objects (`DatasetPlan` / `{plan, proposals, spec}` / `AssembledDataset`) |
 
 Notes:
-- **`emit-dag-ml-data`** is not built into the in-tree CLI: the subcommand exists
-  but bails with a pointer to the workspace-excluded ecosystem crate
-  `crates/nirs4all-io-dagml` (`emit-dagml` binary), which carries the
-  `dag-ml-data` sibling dependency. No binding exposes it in v0.
+- **`emit-dag-ml-data`** is implemented in the Rust bridge crate
+  `crates/nirs4all-io-dagml` (`to_dag_ml_data` + `emit-dagml`). The published
+  `nirs4all-io` CLI keeps a discovery subcommand that bails with a pointer to that
+  bridge so the main CLI does not grow a hard `dag-ml-data` dependency. No language
+  binding exposes the emit in v0.
 - **R / MATLAB / Octave** are C-ABI-first and v0-scoped to the JSON surface
   (`infer` / `to_spec` / `validate` + the version probe); they have no array
   `load`.
@@ -54,7 +55,10 @@ Notes:
 ## Exact entry points (verified against source)
 
 - **CLI** (`nirs4all-io` binary, `crates/nirs4all-io-cli/src/main.rs`):
-  `infer`, `to-spec`, `validate`, `load`, `emit-dag-ml-data`.
+  `infer`, `to-spec`, `validate`, `load`; `emit-dag-ml-data` is a discovery pointer
+  to the bridge crate.
+- **dag-ml-data bridge** (`crates/nirs4all-io-dagml`): library function
+  `to_dag_ml_data(&AssembledDataset)` and binary `emit-dagml`.
 - **Python** (`bindings/python`): native module `nirs4all_io._native` exports
   `infer(input, conventions=None)`, `to_spec(input, conventions=None, name=None)`,
   `validate(spec)`, `load_summary(input, conventions=None, name=None)`,
