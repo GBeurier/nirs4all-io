@@ -5,8 +5,9 @@ Flow per source: load (loaders) -> merge multi-file input (join engine) ->
 split columns by role (selectors). Then, per partition: align feature sources
 (multi-source X), join targets/metadata/lookup sources onto the sample rows, and
 collect X / y / metadata. The result is an :class:`AssembledDataset` IR that
-``to_spectrodataset`` (and, later, ``to_dag_ml_data``) adapt to a concrete target.
-Keeping the IR target-agnostic lets the assembly logic be tested without nirs4all.
+``to_spectrodataset`` and ``DatasetPackage`` adapt on the Python MVP side, while
+the Rust bridge crate adapts the same IR to ``dag-ml-data``. Keeping the IR
+target-agnostic lets the assembly logic be tested without nirs4all.
 """
 
 from __future__ import annotations

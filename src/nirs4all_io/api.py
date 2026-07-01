@@ -4,9 +4,10 @@
 ``load`` is the end-to-end entry: *resolve -> configure -> materialize*. It
 accepts a ``DatasetSpec``, a dict/JSON/YAML config (alias-normalized), a
 directory or file list (matched against conventions), or in-memory arrays, and
-materializes a ``SpectroDataset`` (default) or the target-agnostic
-``AssembledDataset``. Objects from sibling catalog packages may also expose a
-``to_io_spec()`` adapter; the returned spec is then materialized by this package.
+materializes a ``SpectroDataset`` (default), the target-agnostic
+``AssembledDataset``, or a ``DatasetPackage``. Objects from sibling catalog
+packages may also expose a ``to_io_spec()`` adapter; the returned spec is then
+materialized by this package.
 """
 
 from __future__ import annotations
@@ -223,8 +224,11 @@ def load(
     if target == "spectrodataset":
         return to_spectrodataset(assembled, spectro_dataset_cls=spectro_dataset_cls)
     if target in ("dag-ml-data", "dag_ml_data"):
-        raise NotImplementedError("the dag-ml-data target is Phase 2 (gated on the Appendix J readiness checklist)")
-    raise SpecError(f"unknown target {target!r}; expected 'spectrodataset' | 'assembled' | 'dataset_package'")
+        raise NotImplementedError(
+            "target 'dag-ml-data' is not exposed by the Python MVP load() surface; use the Rust bridge crate "
+            "`crates/nirs4all-io-dagml` (`to_dag_ml_data` / `emit-dagml`)"
+        )
+    raise SpecError(f"unknown target {target!r}; expected 'spectrodataset' | 'assembled' | 'dataset_package' | 'package'")
 
 
 def to_dataset_package(

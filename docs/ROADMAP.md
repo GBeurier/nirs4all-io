@@ -6,13 +6,13 @@
 > Nothing here is a blocker for the lib's current users; it is a forward log so
 > nothing slips through the cracks when the relevant external pieces move.
 
-## Phase 2 — Rust core + `dag-ml-data` target
+## dag-ml-data bridge follow-ups
 
-Status: **unblocked** (both gate blockers resolved 2026-05-28). The **actionable,
-multi-agent plan** is in the repository's `docs/RUST_REWRITE_ROADMAP.md`; gate status
-in `docs/PHASE2_GATE.md`. The Python MVP's `AssembledDataset` IR is already
-target-agnostic, so a `to_dag_ml_data(assembled)` adapter slots in beside
-`to_spectrodataset(assembled)`.
+Status: **Rust Phase 2 complete.** The bridge lives in `crates/nirs4all-io-dagml`
+(`to_dag_ml_data(&AssembledDataset)` + `emit-dagml`) and is validated by the
+Phase-2 gate in [`PHASE2_GATE.md`](PHASE2_GATE.md). The Python MVP exposes
+`SpectroDataset`, `AssembledDataset`, and `DatasetPackage`; it intentionally does
+not expose a `dag-ml-data` `load` target.
 
 Former blockers — both **resolved** by the `dag-ml-data` owners (2026-05-28):
 
@@ -20,20 +20,9 @@ Former blockers — both **resolved** by the `dag-ml-data` owners (2026-05-28):
 2. ✅ **Connector-ownership ADR** (`ADR-0001`, Accepted) — `nirs4all-io` owns the
    `SpectroDataset → CoordinatorDataPlanEnvelope` bridge; `dag-ml-data` ROADMAP Phase 4 descoped.
 
-What we will then do here (already designed, see Appendix H.2 of the redesign
-doc):
-
-- **`to_dag_ml_data(assembled)`** adapter — `DatasetSpec` → `DatasetSchema` +
-  `DataPlan` + `SampleRelationTable`, assembled into a `CoordinatorDataPlanEnvelope`.
-  **io does not emit `FoldSet` / `DataBinding`** (those stay in `dag-ml`). Consumes the
-  `observation_id` / `group_id` fields from `sample_index` (already parsed and carried in
-  the IR, see [`DATASET_CONFIGURATIONS.md §3`](DATASET_CONFIGURATIONS.md)).
-- **Rust port of the Python core** (`describe` / spec parse / resolver /
-  inference) so the same logic powers both Python and Rust callers; the
-  Python lib becomes a thin facade over the Rust core (or stays Python --
-  decision deferred to when the gate opens).
-- **Cross-language goldens (story 6.4)** — fixtures of JSON produced by
-  Python that must be byte-identical to ones produced by the Rust core.
+Remaining non-MVP items are outside this Python package surface: ergonomic Python
+builders for `dag-ml-data`, production array-host arenas in `dag-ml-data`, and
+any future decision to expose the emit through language bindings.
 
 ## SpectroDataset extension on the nirs4all side (host-owned)
 

@@ -116,8 +116,8 @@ sample_index:
 
 > **Why `observation_id` / `group_id` are 🟡** — These two fields are accepted
 > in the IR (and round-trip through JSON/YAML, schema-validated, surfaced by
-> `infer()`) because they are first-class concepts in the future `dag-ml-data`
-> target (`origin_id` ↔ `origin_sample_id` resolution and leakage groups). The
+> `infer()`) because they are first-class concepts in the `dag-ml-data`
+> bridge (`origin_id` ↔ `origin_sample_id` resolution and leakage groups). The
 > current `to_spectrodataset` materializer does **not** consume them: nirs4all's
 > `SpectroDataset` exposes `add_samples` / `add_targets` / `add_metadata` /
 > `set_repetition` / `set_folds` / `set_aggregate` -- but no first-class slot
@@ -662,14 +662,14 @@ sources: [{ id: a, role: mixed, input: wide.csv, strict_columns: true,
 | Formats | CSV/TSV/npy/npz/parquet/excel; MATLAB + vendor (OPUS/JCAMP/SPC/ASD/SED/SIG/…) via `nirs4all-formats` (lazy import, `pip install nirs4all-io[formats]`) | — |
 | Weights | ✅ `role: weights` → `__sample_weight__` metadata column on the SpectroDataset | — |
 | Variations | ✅ pre-computed preprocessing variants (CSV/Parquet/...) attached to a feature source → named processings via `add_features()` | — |
-| Identity extensions for `dag-ml-data` | `sample_index.observation_id` / `group_id` are **parsed and carried in the IR** for the future Rust → `CoordinatorDataPlanEnvelope` adapter; the current `to_spectrodataset` materializer does **not** consume them (`SpectroDataset` lacks these slots -- extending it is intentionally out of scope, see [`ROADMAP.md`](ROADMAP.md)) | — |
+| Identity extensions for `dag-ml-data` | `sample_index.observation_id` / `group_id` are **parsed and carried in the IR** for the Rust `CoordinatorDataPlanEnvelope` bridge; the current `to_spectrodataset` materializer does **not** consume them (`SpectroDataset` lacks these slots -- extending it is intentionally out of scope, see [`ROADMAP.md`](ROADMAP.md)) | — |
 
 ---
 
 ## 17. Toward Phase 2 (the NIRS `dag-ml-data` type)
 
-This vocabulary defines exactly what a future **NIRS-specific dag data type
-inherited from `dag-ml-data`** must be able to represent: multi-source feature
+This vocabulary defines exactly what the NIRS-specific `dag-ml-data` bridge
+must be able to represent: multi-source feature
 blocks (with per-source axis unit + signal type), targets (possibly multi-Y +
 categorical), metadata (incl. m:1-broadcast dimension columns), an explicit
 sample identity (row or id), repetitions/groups, and externally-supplied

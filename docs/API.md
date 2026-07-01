@@ -10,7 +10,8 @@ shapes below are identical across both; some Python accessor spellings differ.
 
 > Story 5.1. This is the **stable seam** `nirs4all` / `nirs4all-studio` (or any
 > host) can adopt later without depending on internals. The contract is the
-> `DatasetSpec` / `DatasetPlan` JSON shape + these four entry points.
+> `DatasetSpec` / `DatasetPlan` JSON shape, the core entry points below, and the
+> public `DatasetPackage` helper.
 
 ## Entry points
 
@@ -30,6 +31,8 @@ ds  = nio.load("dataset.yaml")                          # JSON/YAML config (alia
 ds  = nio.load((X, y))                                  # in-memory arrays
 ds  = nio.load(reference_dataset)                       # any object with to_io_spec(), e.g. NirsDataset
 asm = nio.load(spec, target="assembled")               # target-agnostic AssembledDataset
+pkg = nio.load(spec, target="dataset_package")         # target-agnostic DatasetPackage
+pkg = nio.to_dataset_package(spec)                     # equivalent helper
 
 # 3. to_spec(input) -> (DatasetSpec, base_dir) : just resolve, no materialization
 spec, base = nio.to_spec("data/mango/")
@@ -42,7 +45,7 @@ spec.to_dict(); spec.to_yaml(); spec.to_json()
 ### `load` signature
 
 ```python
-nio.load(inp, *, target="spectrodataset" | "assembled",
+nio.load(inp, *, target="spectrodataset" | "assembled" | "dataset_package" | "package",
          conventions=None, base_dir=None, name=None, spectro_dataset_cls=None)
 ```
 
@@ -50,10 +53,14 @@ nio.load(inp, *, target="spectrodataset" | "assembled",
   Pass `spectro_dataset_cls=` to inject a double (used in tests; no nirs4all needed).
 - `target="assembled"` returns the **target-agnostic** `AssembledDataset` (per-partition
   `PartitionBlock`: multi-source `X`, `y`, `metadata`, headers, units) — testable, and the
-  hand-off point for the future `to_dag_ml_data` adapter (Phase 2).
+  shared hand-off point for `DatasetPackage` and the Rust `to_dag_ml_data` bridge.
 - `target="dataset_package"` returns the public target-agnostic `DatasetPackage`
-  summary/manifest wrapper.
-- `target="dag-ml-data"` raises `NotImplementedError` (Phase 2, gated — see `PHASE2_GATE.md`).
+  summary/manifest wrapper; `target="package"` is an alias.
+- `target="dag-ml-data"` is intentionally **not** a Python MVP target. The implemented
+  emit is Rust-only in `crates/nirs4all-io-dagml` (`to_dag_ml_data(&AssembledDataset)`
+  and the `emit-dagml` binary), validated by the Phase-2 conformance gate. The Python
+  call raises `NotImplementedError` with that bridge pointer instead of claiming a stub
+  target.
 
 ### Reference Dataset Adapter
 

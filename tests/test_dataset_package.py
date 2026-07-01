@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import nirs4all_io as nio
 from nirs4all_io.materialize import DatasetPackage, PayloadStorageKind, repr_ids
@@ -92,6 +93,31 @@ def test_load_dataset_package_target_and_describe_accept_in_memory_input():
     assert isinstance(described, dict)
     assert described["name"] == "arrays"
     assert described["partitions"]["train"]["n_samples"] == 4
+
+
+def test_dataset_package_helper_and_load_targets_stay_coherent():
+    X = np.arange(12, dtype=np.float32).reshape(4, 3)
+    y = np.arange(4, dtype=np.float32)
+
+    by_helper = nio.to_dataset_package((X, y), name="arrays")
+    by_target = nio.load((X, y), target="dataset_package", name="arrays")
+    by_alias = nio.load((X, y), target="package", name="arrays")
+
+    assert isinstance(by_helper, DatasetPackage)
+    assert isinstance(by_target, DatasetPackage)
+    assert isinstance(by_alias, DatasetPackage)
+    assert by_target.to_summary_dict() == by_helper.to_summary_dict()
+    assert by_alias.to_summary_dict() == by_helper.to_summary_dict()
+    assert nio.to_dataset_package(by_helper) is by_helper
+    assert nio.load(by_helper, target="dataset_package") is by_helper
+    assert nio.load(by_helper, target="package") is by_helper
+
+
+def test_python_dag_ml_data_target_points_to_rust_bridge():
+    X = np.arange(6, dtype=np.float32).reshape(3, 2)
+
+    with pytest.raises(NotImplementedError, match="nirs4all-io-dagml"):
+        nio.load(X, target="dag-ml-data")
 
 
 def test_dataset_package_round_trips_v1_assembled_payloads():
