@@ -21,7 +21,7 @@ pub use assemble::{
 pub use folds::{parse_fold_str, Fold};
 pub use frame::{Cell, Column, Frame, Matrix};
 pub use join::{concat_features, concat_samples, join_tables, merge_by_key, JoinAudit};
-pub use loaders::{effective_params, read_table_bytes, LoadedTable};
+pub use loaders::{apply_na_policy, effective_params, read_table_bytes, LoadedTable};
 pub use package::{
     repr_ids, DatasetPackage, FeatureMatrix, GenotypeMatrix, MaskBlock, MetadataTable, NdTensor,
     PackagePartition, PayloadBlock, PayloadManifest, PayloadManifestEntry, PayloadStorageKind,

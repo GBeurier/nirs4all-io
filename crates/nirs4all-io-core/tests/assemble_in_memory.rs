@@ -21,7 +21,9 @@ use nirs4all_io_core::canonical_json;
 use nirs4all_io_core::infer::memory::{
     infer_decoded_records, infer_named_bytes, DecodedRecordSet, NamedBytes,
 };
-use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
+use nirs4all_io_core::materialize::{
+    assemble_in_memory, Cell, Column, Frame, InMemorySource, SourcePayload,
+};
 use nirs4all_io_core::spec::{validate_spec, DatasetSpec};
 use serde_json::{json, Value};
 
@@ -372,4 +374,42 @@ fn records_path_full_value_carries_x_y_metadata() {
             .unwrap_or_default(),
         vec!["site"]
     );
+}
+
+#[test]
+fn frame_payload_applies_source_na_policy_after_projection() {
+    let spec = DatasetSpec::from_value(&json!({
+        "name": "frame-na",
+        "sources": [{
+            "id": "x",
+            "role": "features",
+            "input": "scan.parquet",
+            "params": {
+                "na": {"policy": "replace", "fill": {"method": "value", "fill_value": 7.0}},
+                "format": {"columns": ["1000", "1005"]},
+            },
+        }],
+    }))
+    .expect("spec");
+    validate_spec(&spec).expect("valid spec");
+
+    let frame = Frame::from_columns(
+        vec![
+            Column::from_cells("1000", vec![Cell::Float(1.0), Cell::Float(2.0)]),
+            Column::from_cells("1005", vec![Cell::Float(f64::NAN), Cell::Float(3.0)]),
+            Column::from_cells("unused", vec![Cell::Float(f64::NAN), Cell::Float(f64::NAN)]),
+        ],
+        "text",
+    );
+    let sources = vec![InMemorySource {
+        name: "scan.parquet".into(),
+        payload: SourcePayload::Frame(frame),
+    }];
+
+    let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None)
+        .expect("assemble frame payload with source NA policy");
+    let block = &assembled.blocks["train"];
+
+    assert_eq!(block.feature_headers, vec![vec!["1000", "1005"]]);
+    assert_eq!(block.x[0].data, vec![1.0, 7.0, 2.0, 3.0]);
 }

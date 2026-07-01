@@ -15,13 +15,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
-use nirs4all_io_core::spec::dataset_spec::{DatasetSpec, LoadingParams};
+use nirs4all_io_core::spec::dataset_spec::DatasetSpec;
 use nirs4all_io_core::spec::enums::PartitionBy;
 use nirs4all_io_core::spec::SpecError;
 use serde_json::Value;
 
 use super::folds::{parse_fold_file, Fold};
-use super::loaders::read_table;
+use super::loaders::read_parquet_frame;
 
 pub use nirs4all_io_core::materialize::{AssembledDataset, PartitionBlock};
 
@@ -122,10 +122,7 @@ fn is_parquet_path(path: &Path) -> bool {
 
 fn source_payload(path: &Path) -> Result<SourcePayload, SpecError> {
     if is_parquet_path(path) {
-        return Ok(SourcePayload::Frame(read_table(
-            path,
-            &LoadingParams::default(),
-        )?));
+        return Ok(SourcePayload::Frame(read_parquet_frame(path)?));
     }
     Ok(SourcePayload::Bytes(read_maybe_compressed(path)?))
 }
