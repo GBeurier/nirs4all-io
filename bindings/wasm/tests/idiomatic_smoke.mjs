@@ -48,6 +48,22 @@ const assembled = nio.assembleDataset([], [{ source: "nir.spc", records }], recP
 assert.strictEqual(assembled.blocks.train.n_samples, 2, "two assembled samples");
 assert.strictEqual(assembled.blocks.train.x[0].n_cols, SIGNAL_WIDTH, "feature width");
 
+// CSV bytes path: public assembleDataset must apply the native NA policy.
+const assembledCsv = nio.assembleDataset(
+  [{ name: "X.csv", bytes: new TextEncoder().encode("1000;1005\n1;\n2;3\n") }],
+  [],
+  {
+    sources: [{
+      id: "x",
+      role: "features",
+      input: "X.csv",
+      params: { na: { policy: "replace", fill: { method: "value", fill_value: 7.0 } } },
+    }],
+  },
+);
+assert.strictEqual(assembledCsv.blocks.train.x[0].n_rows, 2, "CSV NA rows preserved");
+assert.deepStrictEqual(assembledCsv.blocks.train.x[0].data, [1.0, 7.0, 2.0, 3.0], "CSV NA is replaced");
+
 // proposeDataset is re-exported and returns the iterative result object.
 const proposed = nio.proposeDataset(
   [
