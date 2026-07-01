@@ -13,9 +13,11 @@ use crate::pyfmt::py_str_scalar;
 use serde_json::Value;
 
 /// A pandas-typed cell. Within a column all cells share the column dtype
-/// (`Int` for int64, `Float` for float64 with `NaN`=NA, `Str`/`Na` for object).
+/// (`Bool`, `Int` for int64, `Float` for float64 with `NaN`=NA, `Str`/`Na`
+/// for object).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cell {
+    Bool(bool),
     Int(i64),
     Float(f64),
     Str(String),
@@ -26,6 +28,7 @@ impl Cell {
     /// `to_numeric(errors="coerce")` → f64 (NaN for non-numeric / NA).
     pub fn to_numeric(&self) -> f64 {
         match self {
+            Cell::Bool(b) => i64::from(*b) as f64,
             Cell::Int(i) => *i as f64,
             Cell::Float(f) => *f,
             Cell::Str(s) => s.trim().parse::<f64>().unwrap_or(f64::NAN),
@@ -35,6 +38,13 @@ impl Cell {
     /// `py_str_scalar` of the pandas-typed value.
     pub fn to_str_scalar(&self) -> String {
         match self {
+            Cell::Bool(b) => {
+                if *b {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
+            }
             Cell::Int(i) => i.to_string(),
             Cell::Float(f) => py_str_scalar(&Value::from(*f)),
             Cell::Str(s) => s.clone(),
@@ -44,6 +54,7 @@ impl Cell {
     /// A hashable identity for `nunique`/grouping (pandas: all NaN are one group).
     fn group_key(&self) -> GroupKey {
         match self {
+            Cell::Bool(b) => GroupKey::Bool(*b),
             Cell::Int(i) => GroupKey::Num((*i as f64).to_bits()),
             Cell::Float(f) if f.is_nan() => GroupKey::Na,
             Cell::Float(f) => GroupKey::Num(f.to_bits()),
@@ -56,6 +67,7 @@ impl Cell {
     /// (returns `None`), mirroring pandas merge (NaN keys don't join).
     pub fn join_key(&self) -> Option<JoinKey> {
         match self {
+            Cell::Bool(b) => Some(JoinKey::Bool(*b)),
             Cell::Int(i) => Some(JoinKey::Num((*i as f64).to_bits())),
             Cell::Float(f) if f.is_nan() => None,
             Cell::Float(f) => Some(JoinKey::Num(f.to_bits())),
@@ -68,12 +80,14 @@ impl Cell {
 /// A hashable join key (numeric values unified by f64 bits; strings verbatim).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JoinKey {
+    Bool(bool),
     Num(u64),
     Str(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum GroupKey {
+    Bool(bool),
     Num(u64),
     Str(String),
     Na,
@@ -102,20 +116,28 @@ impl Column {
             .len()
     }
     /// Build a column from cells, inferring the pandas dtype: object if any
-    /// string; int64 if all-int and no NA; else float64 (with int→float and
-    /// NA→NaN promotion, as pandas does on a join/concat).
+    /// string; bool if all-bool; int64 if all-int and no NA; else float64
+    /// (with int/bool→float and NA→NaN promotion, as pandas does on a join/concat).
     pub fn from_cells(name: &str, cells: Vec<Cell>) -> Column {
         let mut any_str = false;
+        let mut any_bool = false;
         let mut any_na = false;
         let mut all_int = true;
+        let mut all_bool = true;
         for c in &cells {
             match c {
                 Cell::Str(_) => {
                     any_str = true;
                     all_int = false;
+                    all_bool = false;
+                }
+                Cell::Bool(_) => {
+                    any_bool = true;
+                    all_int = false;
                 }
                 Cell::Float(f) => {
                     all_int = false;
+                    all_bool = false;
                     if f.is_nan() {
                         any_na = true;
                     }
@@ -124,7 +146,9 @@ impl Column {
                     any_na = true;
                     all_int = false;
                 }
-                Cell::Int(_) => {}
+                Cell::Int(_) => {
+                    all_bool = false;
+                }
             }
         }
         if any_str {
@@ -132,6 +156,13 @@ impl Column {
                 name: name.into(),
                 dtype: ColDtype::String,
                 numeric_kind: NumericKind::NonNumeric,
+                values: cells,
+            }
+        } else if any_bool && all_bool {
+            Column {
+                name: name.into(),
+                dtype: ColDtype::Bool,
+                numeric_kind: NumericKind::NonFloatNumeric,
                 values: cells,
             }
         } else if all_int && !any_na {
@@ -145,6 +176,7 @@ impl Column {
             let values = cells
                 .into_iter()
                 .map(|c| match c {
+                    Cell::Bool(b) => Cell::Float(i64::from(b) as f64),
                     Cell::Int(i) => Cell::Float(i as f64),
                     Cell::Na => Cell::Float(f64::NAN),
                     other => other,

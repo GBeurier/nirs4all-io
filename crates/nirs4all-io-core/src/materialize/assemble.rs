@@ -37,6 +37,9 @@ use super::loaders::{effective_params, read_table_bytes};
 pub enum SourcePayload {
     /// Raw CSV/tabular bytes the formats layer won't decode (y/metadata tables).
     Bytes(Vec<u8>),
+    /// A facade-decoded typed table for formats that need filesystem-backed
+    /// native loaders (for example Parquet).
+    Frame(Frame),
     /// Pre-decoded nirs4all-formats records (signals[].values=X, targets{}, metadata{}).
     Records(Vec<Value>),
 }
@@ -207,6 +210,7 @@ fn matrix_full(m: &Matrix) -> Value {
 
 fn cell_value(c: &Cell) -> Value {
     match c {
+        Cell::Bool(b) => Value::from(*b),
         Cell::Int(i) => Value::from(*i),
         Cell::Float(f) => Value::from(*f),
         Cell::Str(s) => Value::from(s.clone()),
@@ -431,8 +435,48 @@ fn unique_match<'a>(
 fn frame_from_source(src: &InMemorySource, params: &LoadingParams) -> Result<Frame, SpecError> {
     match &src.payload {
         SourcePayload::Bytes(bytes) => read_table_bytes(bytes, params),
+        SourcePayload::Frame(frame) => frame_with_params(frame, params),
         SourcePayload::Records(records) => records_to_frame(records, params),
     }
+}
+
+fn frame_requested_columns(params: &LoadingParams) -> Result<Option<Vec<String>>, SpecError> {
+    match params.format.values.get("columns") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) => Ok(Some(vec![name.clone()])),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_string).ok_or_else(|| {
+                    SpecError::new("loading.format.columns must be a string or a list of strings")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(SpecError::new(
+            "loading.format.columns must be a string or a list of strings",
+        )),
+    }
+}
+
+fn frame_with_params(frame: &Frame, params: &LoadingParams) -> Result<Frame, SpecError> {
+    let mut out = if let Some(columns) = frame_requested_columns(params)? {
+        for name in &columns {
+            if !frame.has_column(name) {
+                return Err(SpecError::new(format!(
+                    "column name '{name}' not found; available: {:?}",
+                    frame.column_names()
+                )));
+            }
+        }
+        frame.select(&columns)
+    } else {
+        frame.clone()
+    };
+    if let Some(unit) = params.header_unit {
+        out.header_unit = unit.value().to_string();
+    }
+    Ok(out)
 }
 
 fn load_source_frame_mem(
@@ -661,7 +705,7 @@ fn header_unit_from_axis(unit: &str) -> String {
 fn target_cell(v: Option<Value>) -> Cell {
     match v {
         None | Some(Value::Null) => Cell::Na,
-        Some(Value::Bool(b)) => Cell::Str(b.to_string()),
+        Some(Value::Bool(b)) => Cell::Bool(b),
         Some(Value::Number(n)) => {
             if let Some(i) = n.as_i64() {
                 Cell::Int(i)
