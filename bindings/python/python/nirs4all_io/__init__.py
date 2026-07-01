@@ -17,7 +17,9 @@ structural summary dict; ``target="spectrodataset"`` builds a real nirs4all
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from ._adapter import to_spectrodataset
 from ._native import __version__, assembled_full, load_summary
@@ -46,6 +48,101 @@ def _normalize_input(input: Any) -> Any:
     if isinstance(input, (list, tuple)):
         return [os.fspath(p) if isinstance(p, os.PathLike) else p for p in input]
     return input
+
+
+def _plain_data(value: Any) -> Any:
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    if isinstance(value, dict):
+        return {str(k): _plain_data(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_data(item) for item in value]
+    return value
+
+
+def _is_relative_local_ref(value: str) -> bool:
+    return not Path(value).is_absolute() and urlparse(value).scheme == ""
+
+
+def _absolutize_input_ref(value: Any, base_dir: Path) -> Any:
+    if isinstance(value, str) and _is_relative_local_ref(value):
+        return str((base_dir / value).resolve())
+    if isinstance(value, list):
+        return [_absolutize_input_ref(item, base_dir) for item in value]
+    return value
+
+
+def _absolutize_dataset_spec_refs(spec: dict[str, Any], base_dir: Path) -> None:
+    for source in spec.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        if "input" in source:
+            source["input"] = _absolutize_input_ref(source["input"], base_dir)
+        for variation in source.get("variations", []):
+            if isinstance(variation, dict) and "input" in variation:
+                variation["input"] = _absolutize_input_ref(variation["input"], base_dir)
+
+    partitions = spec.get("partitions")
+    if isinstance(partitions, dict):
+        for key in ("train_file", "test_file", "predict_file"):
+            if key in partitions:
+                partitions[key] = _absolutize_input_ref(partitions[key], base_dir)
+
+    folds = spec.get("folds")
+    if isinstance(folds, dict) and "file" in folds:
+        folds["file"] = _absolutize_input_ref(folds["file"], base_dir)
+
+
+def _iter_string_refs(value: Any) -> Any:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_string_refs(item)
+
+
+def _spec_uses_parquet_inputs(spec: dict[str, Any]) -> bool:
+    for source in spec.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        refs = list(_iter_string_refs(source.get("input")))
+        for variation in source.get("variations", []):
+            if isinstance(variation, dict):
+                refs.extend(_iter_string_refs(variation.get("input")))
+        if any(Path(ref).suffix.lower() == ".parquet" for ref in refs):
+            return True
+    return False
+
+
+def _raise_for_unsupported_native_input(input: Any) -> None:
+    if isinstance(input, str) and Path(input).suffix.lower() == ".parquet":
+        raise ValueError("Parquet inputs are not supported by the pyo3 nirs4all_io binding; install the Python MVP nirs4all-io package for canonical Parquet datasets.")
+    if isinstance(input, list) and any(isinstance(item, str) and Path(item).suffix.lower() == ".parquet" for item in input):
+        raise ValueError("Parquet inputs are not supported by the pyo3 nirs4all_io binding; install the Python MVP nirs4all-io package for canonical Parquet datasets.")
+    if isinstance(input, dict) and _spec_uses_parquet_inputs(input):
+        raise ValueError("Parquet inputs are not supported by the pyo3 nirs4all_io binding; install the Python MVP nirs4all-io package for canonical Parquet datasets.")
+
+
+def _adapt_to_io_spec(input: Any) -> Any:
+    adapter = getattr(input, "to_io_spec", None)
+    if not callable(adapter):
+        return input
+
+    raw = adapter()
+    base_dir: Path | None = None
+    if isinstance(raw, tuple):
+        if len(raw) != 2:
+            raise ValueError("to_io_spec() must return a spec dict or a (spec, base_dir) pair")
+        raw, base = raw
+        base_dir = Path(base) if base is not None else None
+
+    if not isinstance(raw, dict):
+        raise TypeError(f"to_io_spec() returned {type(raw).__name__}, expected dict or (dict, base_dir)")
+
+    spec = _plain_data(raw)
+    if base_dir is not None:
+        _absolutize_dataset_spec_refs(spec, base_dir)
+    return spec
 
 
 class DatasetSpec(dict):
@@ -146,7 +243,7 @@ def to_spec(input: Any, conventions: list[str] | None = None, name: str | None =
         A :class:`DatasetSpec` (a ``dict`` subclass) that round-trips through
         :func:`validate` and :func:`load`.
     """
-    spec = _native_to_spec(_normalize_input(input), conventions, name)
+    spec = _native_to_spec(_normalize_input(_adapt_to_io_spec(input)), conventions, name)
     return DatasetSpec(spec)
 
 
@@ -182,7 +279,8 @@ def load(
     Returns:
         The assembled summary ``dict`` or a ``SpectroDataset``.
     """
-    native_input = _normalize_input(input)
+    native_input = _normalize_input(_adapt_to_io_spec(input))
+    _raise_for_unsupported_native_input(native_input)
     if target == "assembled":
         return load_summary(native_input, conventions, name)
     if target == "spectrodataset":
