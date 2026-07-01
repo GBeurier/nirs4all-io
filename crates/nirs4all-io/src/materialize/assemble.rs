@@ -15,12 +15,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
-use nirs4all_io_core::spec::dataset_spec::DatasetSpec;
+use nirs4all_io_core::spec::dataset_spec::{DatasetSpec, LoadingParams};
 use nirs4all_io_core::spec::enums::PartitionBy;
 use nirs4all_io_core::spec::SpecError;
 use serde_json::Value;
 
 use super::folds::{parse_fold_file, Fold};
+use super::loaders::read_table;
 
 pub use nirs4all_io_core::materialize::{AssembledDataset, PartitionBlock};
 
@@ -86,7 +87,7 @@ fn resolve_named(input: &Value, base_dir: &Path) -> Vec<(String, PathBuf)> {
 }
 
 /// Gather every input referenced by `spec` (sources + variations) into named
-/// in-memory byte payloads, reading each unique file once.
+/// in-memory payloads, reading each unique file once.
 fn gather_sources(spec: &DatasetSpec, base_dir: &Path) -> Result<Vec<InMemorySource>, SpecError> {
     let mut seen: HashMap<String, ()> = HashMap::new();
     let mut out: Vec<InMemorySource> = Vec::new();
@@ -95,11 +96,8 @@ fn gather_sources(spec: &DatasetSpec, base_dir: &Path) -> Result<Vec<InMemorySou
             if seen.insert(name.clone(), ()).is_some() {
                 continue;
             }
-            let bytes = read_maybe_compressed(&path)?;
-            out.push(InMemorySource {
-                name,
-                payload: SourcePayload::Bytes(bytes),
-            });
+            let payload = source_payload(&path)?;
+            out.push(InMemorySource { name, payload });
         }
         Ok(())
     };
@@ -110,6 +108,26 @@ fn gather_sources(spec: &DatasetSpec, base_dir: &Path) -> Result<Vec<InMemorySou
         }
     }
     Ok(out)
+}
+
+fn is_parquet_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("parquet" | "pq")
+    )
+}
+
+fn source_payload(path: &Path) -> Result<SourcePayload, SpecError> {
+    if is_parquet_path(path) {
+        return Ok(SourcePayload::Frame(read_table(
+            path,
+            &LoadingParams::default(),
+        )?));
+    }
+    Ok(SourcePayload::Bytes(read_maybe_compressed(path)?))
 }
 
 /// Read a file, transparently decompressing `.gz` / `.zip`.
@@ -228,4 +246,63 @@ fn read_index_file(path: &Path) -> Result<Vec<i64>, SpecError> {
                 .map_err(|_| SpecError::new(format!("index_file: non-integer token '{t}'")))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{ArrayRef, Float64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use parquet::arrow::arrow_writer::ArrowWriter;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn write_parquet(path: &Path) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(vec![1.0, 2.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![10.0, 20.0])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    #[test]
+    fn shared_parquet_path_applies_format_columns_per_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_parquet(&tmp.path().join("data.parquet"));
+        let spec = DatasetSpec::from_value(&json!({
+            "sources": [
+                {
+                    "id": "left",
+                    "role": "features",
+                    "input": "data.parquet",
+                    "params": {"format": {"columns": ["a"]}}
+                },
+                {
+                    "id": "right",
+                    "role": "features",
+                    "input": "data.parquet",
+                    "params": {"format": {"columns": ["b"]}}
+                }
+            ]
+        }))
+        .unwrap();
+
+        let assembled = assemble(&spec, tmp.path()).unwrap();
+        let block = assembled.blocks.get("train").unwrap();
+
+        assert_eq!(block.feature_headers, vec![vec!["a"], vec!["b"]]);
+        assert_eq!(block.x[0].data, vec![1.0, 2.0]);
+        assert_eq!(block.x[1].data, vec![10.0, 20.0]);
+    }
 }

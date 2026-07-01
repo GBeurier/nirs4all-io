@@ -93,36 +93,6 @@ def _absolutize_dataset_spec_refs(spec: dict[str, Any], base_dir: Path) -> None:
         folds["file"] = _absolutize_input_ref(folds["file"], base_dir)
 
 
-def _iter_string_refs(value: Any) -> Any:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from _iter_string_refs(item)
-
-
-def _spec_uses_parquet_inputs(spec: dict[str, Any]) -> bool:
-    for source in spec.get("sources", []):
-        if not isinstance(source, dict):
-            continue
-        refs = list(_iter_string_refs(source.get("input")))
-        for variation in source.get("variations", []):
-            if isinstance(variation, dict):
-                refs.extend(_iter_string_refs(variation.get("input")))
-        if any(Path(ref).suffix.lower() == ".parquet" for ref in refs):
-            return True
-    return False
-
-
-def _raise_for_unsupported_native_input(input: Any) -> None:
-    if isinstance(input, str) and Path(input).suffix.lower() == ".parquet":
-        raise ValueError("Parquet inputs are not supported by the pyo3 nirs4all_io binding; install the Python MVP nirs4all-io package for canonical Parquet datasets.")
-    if isinstance(input, list) and any(isinstance(item, str) and Path(item).suffix.lower() == ".parquet" for item in input):
-        raise ValueError("Parquet inputs are not supported by the pyo3 nirs4all_io binding; install the Python MVP nirs4all-io package for canonical Parquet datasets.")
-    if isinstance(input, dict) and _spec_uses_parquet_inputs(input):
-        raise ValueError("Parquet inputs are not supported by the pyo3 nirs4all_io binding; install the Python MVP nirs4all-io package for canonical Parquet datasets.")
-
-
 def _adapt_to_io_spec(input: Any) -> Any:
     adapter = getattr(input, "to_io_spec", None)
     if not callable(adapter):
@@ -280,7 +250,6 @@ def load(
         The assembled summary ``dict`` or a ``SpectroDataset``.
     """
     native_input = _normalize_input(_adapt_to_io_spec(input))
-    _raise_for_unsupported_native_input(native_input)
     if target == "assembled":
         return load_summary(native_input, conventions, name)
     if target == "spectrodataset":

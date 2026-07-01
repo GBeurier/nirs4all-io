@@ -2,6 +2,7 @@
 """The idiomatic Python surface: native inputs (str / Path / list / dict) in,
 typed DatasetPlan / DatasetSpec mappings out."""
 
+import base64
 import json
 from pathlib import Path
 
@@ -111,18 +112,61 @@ def test_to_io_spec_base_dir_applies_to_secondary_file_refs(tmp_path):
     assert set(assembled["blocks"]) == {"train", "test"}
 
 
-def test_load_parquet_reference_object_fails_with_actionable_binding_error(tmp_path):
-    (tmp_path / "X.parquet").write_bytes(b"PAR1")
+def test_load_parquet_reference_object_succeeds_with_native_loader(tmp_path):
+    parquet_path = tmp_path / "X.parquet"
+    # Generated with pyarrow from columns 400/410/y/sample/flag. Keeping bytes
+    # inline makes the binding gate independent of local Parquet writer extras.
+    parquet_b64 = (
+        "UEFSMRUEFTAVMEwVBhUAEgAAmpmZmZmZuT+amZmZmZnJPzMzMzMzM9M/FQAVCBUILBUGFRAVBhUGHBgIMzMzMzMz0z8YCJqZmZmZ"
+        "mbk/FgAoCDMzMzMzM9M/GAiamZmZmZm5PwAAAAIDJAAVBBUwFTBMFQYVABIAAClcj8L1KLw/4XoUrkfhyj/Xo3A9CtfTPxUAFQgV"
+        "CCwVBhUQFQYVBhwYCNejcD0K19M/GAgpXI/C9Si8PxYAKAjXo3A9CtfTPxgIKVyPwvUovD8AAAACAyQAFQQVMBUwTBUGFQASAAAA"
+        "AAAAAADwPwAAAAAAAABAAAAAAAAACEAVABUIFQgsFQYVEBUGFQYcGAgAAAAAAAAIQBgIAAAAAAAA8D8WACgIAAAAAAAACEAYCAAA"
+        "AAAAAPA/AAAAAgMkABUEFSQVJEwVBhUAEgAAAgAAAHMxAgAAAHMyAgAAAHMzFQAVCBUILBUGFRAVBhUGHDYAKAJzMxgCczEAAAAC"
+        "AyQAFQAVAhUCLBUGFQAVBhUGHBgBARgBABYAKAEBGAEAAAAABRUEGWw1ABgGc2NoZW1hFQoAFQolABgDNDAwABUKJQAYAzQxMAAV"
+        "CiUAGAF5ABUMJQAYBnNhbXBsZSUATBwAAAAVACUAGARmbGFnABYGGRwZXCYAHBUKGTUABhAZGAM0MDAVABYGFs4BFs4BJlQmCBwY"
+        "CDMzMzMzM9M/GAiamZmZmZm5PxYAKAgzMzMzMzPTPxgImpmZmZmZuT8AGSwVBBUAFQIAFQAVEBUCAAAAJgAcFQoZNQAGEBkYAzQx"
+        "MBUAFgYWzgEWzgEmogIm1gEcGAjXo3A9CtfTPxgIKVyPwvUovD8WACgI16NwPQrX0z8YCClcj8L1KLw/ABksFQQVABUCABUAFRAV"
+        "AgAAACYAHBUKGTUABhAZGAF5FQAWBhbOARbOASbwAyakAxwYCAAAAAAAAAhAGAgAAAAAAADwPxYAKAgAAAAAAAAIQBgIAAAAAAAA"
+        "8D8AGSwVBBUAFQIAFQAVEBUCAAAAJgAcFQwZNQAGEBkYBnNhbXBsZRUAFgYWggEWggEmsgUm8gQcNgAoAnMzGAJzMQAZLBUEFQAV"
+        "AgAVABUQFQIAPBYMGQYZBgAAACYAHBUAGSUGABkYBGZsYWcVABYGFkQWRCb0BTwYAQEYAQAWACgBARgBAAAZHBUAFQAVAgAAABaw"
+        "BhYGJggWsAYAGRwYDEFSUk9XOnNjaGVtYRiYAy8vLy8veWdCQUFBUUFBQUFBQUFLQUF3QUJnQUZBQWdBQ2dBQUFBQUJCQUFNQUFB"
+        "QUNBQUlBQUFBQkFBSUFBQUFCQUFBQUFVQUFBRElBQUFBakFBQUFHQUFBQUF3QUFBQUJBQUFBRnovLy84QUFBQUdFQUFBQUJnQUFB"
+        "QUVBQUFBQUFBQUFBUUFBQUJtYkdGbkFBQUFBTmovLy8rRS8vLy9BQUFBQlJBQUFBQWNBQUFBQkFBQUFBQUFBQUFHQUFBQWMyRnRj"
+        "R3hsQUFBRUFBUUFCQUFBQUxELy8vOEFBQUFERUFBQUFCUUFBQUFFQUFBQUFBQUFBQUVBQUFCNUFBQUFudi8vL3dBQUFnRFkvLy8v"
+        "QUFBQUF4QUFBQUFVQUFBQUJBQUFBQUFBQUFBREFBQUFOREV3QU1iLy8vOEFBQUlBRUFBVUFBZ0FBQUFIQUF3QUFBQVFBQkFBQUFB"
+        "QUFBQURFQUFBQUJ3QUFBQUVBQUFBQUFBQUFBTUFBQUEwTURBQUFBQUdBQWdBQmdBR0FBQUFBQUFDQUE9PQAYIHBhcnF1ZXQtY3Bw"
+        "LWFycm93IHZlcnNpb24gMjEuMC4wGVwcAAAcAAAcAAAcAAAcAAAA0QMAAFBBUjE="
+    )
+    parquet_path.write_bytes(base64.b64decode(parquet_b64))
 
     class ReferenceDatasetDouble:
         def to_io_spec(self):
-            return ({"sources": [{"id": "x", "role": "features", "input": "X.parquet"}]}, tmp_path)
+            return (
+                {
+                    "sources": [
+                        {
+                            "id": "x",
+                            "role": "mixed",
+                            "input": "X.parquet",
+                            "columns": [
+                                {"role": "features", "select": ["400", "410"]},
+                                {"role": "targets", "select": ["y"]},
+                                {"role": "metadata", "select": ["sample", "flag"]},
+                            ],
+                        }
+                    ]
+                },
+                tmp_path,
+            )
 
-    with pytest.raises(ValueError, match="Parquet inputs are not supported"):
-        nio.load(ReferenceDatasetDouble(), target="assembled")
+    assembled = nio.load(ReferenceDatasetDouble(), target="assembled")
+    block = assembled["blocks"]["train"]
+    assert block["x_shapes"] == [[3, 2]]
+    assert block["y_shape"] == [3, 1]
+    assert block["metadata_columns"] == ["sample", "flag"]
 
-    with pytest.raises(ValueError, match="Parquet inputs are not supported"):
-        nio.load([tmp_path / "X.parquet"], target="assembled")
+    single_file = nio.load(tmp_path / "X.parquet", target="assembled")
+    assert single_file["blocks"]["train"]["x_shapes"] == [[3, 5]]
 
 
 def test_validate_rejects_invalid_typed_path():

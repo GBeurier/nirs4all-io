@@ -744,6 +744,7 @@ fn weights_content_bytes(w: &WeightsVector) -> Vec<u8> {
 
 fn cell_value(c: &Cell) -> Value {
     match c {
+        Cell::Bool(b) => Value::from(*b),
         Cell::Int(i) => Value::from(*i),
         Cell::Float(f) => Value::from(*f),
         Cell::Str(s) => Value::from(s.clone()),
