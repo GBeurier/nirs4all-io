@@ -26,6 +26,4 @@ jobs:
           git clone --filter=blob:none --depth 1 https://github.com/GBeurier/dag-ml-data.git ../dag-ml-data
           git clone --filter=blob:none --depth 1 https://github.com/GBeurier/dag-ml.git ../dag-ml
       - name: Cross-CLI conformance
-        env:
-          NIRS4ALL_REQUIRE_DAGML_SIBLINGS: "1"
-        run: bash tests/dag_ml_data/verify_cross_cli.sh
+        run: bash scripts/dag_ml_data_conformance.sh
