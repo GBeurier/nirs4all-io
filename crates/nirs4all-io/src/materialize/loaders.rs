@@ -359,8 +359,18 @@ fn read_parquet_raw(path: &Path, params: &LoadingParams) -> Result<Frame, SpecEr
     Ok(frame)
 }
 
-pub(crate) fn read_parquet_frame(path: &Path) -> Result<Frame, SpecError> {
-    read_parquet_raw(path, &LoadingParams::default())
+pub(crate) fn read_parquet_frame(
+    path: &Path,
+    columns: Option<&[String]>,
+) -> Result<Frame, SpecError> {
+    let mut params = LoadingParams::default();
+    if let Some(columns) = columns {
+        params.format.values.insert(
+            "columns".into(),
+            Value::Array(columns.iter().cloned().map(Value::from).collect()),
+        );
+    }
+    read_parquet_raw(path, &params)
 }
 
 fn read_parquet(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError> {

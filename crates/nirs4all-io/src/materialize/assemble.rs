@@ -14,8 +14,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use nirs4all_io_core::materialize::loaders::effective_params;
 use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
 use nirs4all_io_core::spec::dataset_spec::DatasetSpec;
+use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::enums::PartitionBy;
 use nirs4all_io_core::spec::SpecError;
 use serde_json::Value;
@@ -86,9 +88,82 @@ fn resolve_named(input: &Value, base_dir: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
+fn path_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn requested_parquet_columns(params: &LoadingParams) -> Result<Option<Vec<String>>, SpecError> {
+    match params.format.values.get("columns") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) => Ok(Some(vec![name.clone()])),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_string).ok_or_else(|| {
+                    SpecError::new(
+                        "parquet loading.format.columns must be a string or a list of strings",
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(SpecError::new(
+            "parquet loading.format.columns must be a string or a list of strings",
+        )),
+    }
+}
+
+fn update_projection(
+    projections: &mut HashMap<PathBuf, Option<Vec<String>>>,
+    path: &Path,
+    params: &LoadingParams,
+) -> Result<(), SpecError> {
+    if !is_parquet_path(path) {
+        return Ok(());
+    }
+    let key = path_key(path);
+    let Some(requested) = requested_parquet_columns(params)? else {
+        projections.insert(key, None);
+        return Ok(());
+    };
+    let entry = projections.entry(key).or_insert_with(|| Some(Vec::new()));
+    if let Some(union) = entry {
+        for column in requested {
+            if !union.contains(&column) {
+                union.push(column);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn gather_parquet_projections(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+) -> Result<HashMap<PathBuf, Option<Vec<String>>>, SpecError> {
+    let mut projections = HashMap::new();
+    for source in &spec.sources {
+        let source_params = effective_params(&spec.params, &source.params);
+        for (_, path) in resolve_named(&source.input, base_dir) {
+            update_projection(&mut projections, &path, &source_params)?;
+        }
+        for variation in &source.variations {
+            let mut params = source_params.clone();
+            if !variation.params.is_empty_value() {
+                params = effective_params(&params, &variation.params);
+            }
+            for (_, path) in resolve_named(&variation.input, base_dir) {
+                update_projection(&mut projections, &path, &params)?;
+            }
+        }
+    }
+    Ok(projections)
+}
+
 /// Gather every input referenced by `spec` (sources + variations) into named
 /// in-memory payloads, reading each unique file once.
 fn gather_sources(spec: &DatasetSpec, base_dir: &Path) -> Result<Vec<InMemorySource>, SpecError> {
+    let parquet_projections = gather_parquet_projections(spec, base_dir)?;
     let mut seen: HashMap<String, ()> = HashMap::new();
     let mut out: Vec<InMemorySource> = Vec::new();
     let mut add_input = |input: &Value| -> Result<(), SpecError> {
@@ -96,7 +171,10 @@ fn gather_sources(spec: &DatasetSpec, base_dir: &Path) -> Result<Vec<InMemorySou
             if seen.insert(name.clone(), ()).is_some() {
                 continue;
             }
-            let payload = source_payload(&path)?;
+            let parquet_columns = parquet_projections
+                .get(&path_key(&path))
+                .and_then(|columns| columns.as_deref());
+            let payload = source_payload(&path, parquet_columns)?;
             out.push(InMemorySource { name, payload });
         }
         Ok(())
@@ -120,9 +198,15 @@ fn is_parquet_path(path: &Path) -> bool {
     )
 }
 
-fn source_payload(path: &Path) -> Result<SourcePayload, SpecError> {
+fn source_payload(
+    path: &Path,
+    parquet_columns: Option<&[String]>,
+) -> Result<SourcePayload, SpecError> {
     if is_parquet_path(path) {
-        return Ok(SourcePayload::Frame(read_parquet_frame(path)?));
+        return Ok(SourcePayload::Frame(read_parquet_frame(
+            path,
+            parquet_columns,
+        )?));
     }
     Ok(SourcePayload::Bytes(read_maybe_compressed(path)?))
 }
