@@ -29,6 +29,7 @@ use dag_ml_data::{
     REPRESENTATION_SAMPLE_METADATA,
 };
 use nirs4all_io::core::infer::{ColDtype, NumericKind};
+use nirs4all_io::core::materialize::package::DatasetPackage;
 use nirs4all_io::core::spec::SpecError;
 use nirs4all_io::materialize::AssembledDataset;
 use serde_json::Value;
@@ -601,6 +602,22 @@ pub fn to_dag_ml_data(
 ) -> Result<CoordinatorDataPlanEnvelope, SpecError> {
     let (schema, plan, relations) = build_dag_ml_data_parts(assembled)?;
     CoordinatorDataPlanEnvelope::from_parts(&schema, plan, relations.as_ref()).map_err(err)
+}
+
+/// Build the v2 [`DatasetPackage`] for an [`AssembledDataset`] — the typed-payload
+/// + content-hash-manifest companion to [`to_dag_ml_data`] (`IO-002`).
+///
+/// This **extends** the bridge rather than replacing it: the same
+/// `AssembledDataset` now yields both the dag-ml-data envelope
+/// (`DatasetSchema`/`DataPlan`/`SampleRelationTable`) and the target-agnostic
+/// package (typed payload blocks, a `content_hash` payload manifest, and an
+/// explicit row-position fallback diagnostic). The package's representation-ID
+/// hints are the same `DMD-001` strings the envelope's `SourceDescriptor`s use —
+/// asserted by the `core_repr_ids_match_dag_ml_data_registry` drift guard below.
+/// Payload-store export (`IO-006`) can later hang off this manifest without
+/// touching the envelope seam.
+pub fn to_dataset_package(assembled: &AssembledDataset) -> DatasetPackage {
+    DatasetPackage::from_assembled(assembled)
 }
 
 #[cfg(test)]
