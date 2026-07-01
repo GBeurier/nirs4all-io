@@ -53,6 +53,28 @@ rs <- nio_resolved_spec(fl_plan)
 stopifnot(inherits(rs, "n4io_spec"))
 stopifnot(isTRUE(nio_validate(rs)))
 
+# Public R surface parity guard: the current R package does not expose
+# load/assemble yet, but it must preserve native loading controls used by the
+# Python and WASM surfaces when callers marshal specs through nio_*.
+policy_spec <- as.list(nio_to_spec(c(xcsv, ycsv)))
+policy_spec$params <- list(
+  na = list(policy = "replace", fill = list(method = "value", fill_value = 0.0)),
+  format = list(columns = c("a", "b"))
+)
+policy_spec$sources[[1]]$params <- list(
+  na = list(policy = "replace", fill = list(method = "value", fill_value = 7.5)),
+  format = list(columns = c("a", "b"))
+)
+policy_roundtrip <- nio_to_spec(policy_spec)
+stopifnot(isTRUE(nio_validate(policy_roundtrip)))
+policy_list <- as.list(policy_roundtrip)
+stopifnot(policy_list$params$na$policy == "replace")
+stopifnot(policy_list$sources[[1]]$params$na$fill$fill_value == 7.5)
+stopifnot(identical(
+  unlist(policy_list$sources[[1]]$params$format$columns, use.names = FALSE),
+  c("a", "b")
+))
+
 # nio_validate signals an error on a bad spec (list input).
 bad2 <- tryCatch({
   nio_validate(list(partitions = list(by = "random")))
