@@ -33,12 +33,12 @@ def test_to_dataset_package_exposes_manifest_and_summary(tmp_path):
         "sample_index": {"by": "id", "key": "sample_id"},
         "repetition": "rep",
         "sources": [
-                {
-                    "id": "data",
-                    "role": "mixed",
-                    "input": "data.csv",
-                    "key": "sample_id",
-                    "columns": [
+            {
+                "id": "data",
+                "role": "mixed",
+                "input": "data.csv",
+                "key": "sample_id",
+                "columns": [
                     {"role": "features", "select": ["400", "401"]},
                     {"role": "targets", "select": ["y"]},
                     {"role": "weights", "select": ["weight"]},
@@ -76,8 +76,8 @@ def test_to_dataset_package_exposes_manifest_and_summary(tmp_path):
 
     canonical = package.to_canonical_summary()
     assert canonical.endswith("\n")
-    assert "\"schema_version\": 2" in canonical
-    assert "\"data\"" not in canonical
+    assert '"schema_version": 2' in canonical
+    assert '"data"' not in canonical
 
 
 def test_load_dataset_package_target_and_describe_accept_in_memory_input():
@@ -108,3 +108,53 @@ def test_dataset_package_round_trips_v1_assembled_payloads():
     assert restored.n_sources == assembled.n_sources
     np.testing.assert_allclose(restored.blocks["train"].X[0], assembled.blocks["train"].X[0])
     np.testing.assert_allclose(restored.blocks["train"].y, assembled.blocks["train"].y)
+
+
+def test_reference_dataset_adapter_uses_to_io_spec(tmp_path):
+    _csv(tmp_path / "X.csv", pd.DataFrame({"observation_id": ["o1", "o2"], "sample_id": ["s1", "s2"], "1100": [0.1, 0.2], "1102": [0.3, 0.4]}))
+    _csv(tmp_path / "variables.csv", pd.DataFrame({"sample_id": ["s1", "s2"], "protein": [5.0, 6.0], "site": ["north", "south"]}))
+
+    # The adapter contract is independent of nirs4all-datasets: any object that
+    # can publish an IO spec can be materialized through the normal IO pipeline.
+    class ReferenceDatasetDouble:
+        def to_io_spec(self):
+            return (
+                {
+                    "name": "reference",
+                    "sample_index": {"by": "id", "key": "sample_id", "observation_id": "observation_id"},
+                    "sources": [
+                        {
+                            "id": "X",
+                            "role": "mixed",
+                            "input": "X.csv",
+                            "key": "sample_id",
+                            "columns": [
+                                {"role": "ignore", "select": ["observation_id"]},
+                                {"role": "features", "select": ["1100", "1102"]},
+                            ],
+                            "params": {"delimiter": ";", "header_unit": "nm"},
+                        },
+                        {
+                            "id": "variables",
+                            "role": "mixed",
+                            "input": "variables.csv",
+                            "key": "sample_id",
+                            "columns": [
+                                {"role": "targets", "select": ["protein"]},
+                                {"role": "metadata", "select": ["site"]},
+                            ],
+                            "join": {"to": "X", "on": "sample_id", "how": "m:1", "coverage": "complete"},
+                            "params": {"delimiter": ";"},
+                        },
+                    ],
+                },
+                tmp_path,
+            )
+
+    package = nio.load(ReferenceDatasetDouble(), target="dataset_package")
+
+    assert isinstance(package, DatasetPackage)
+    block = package.to_assembled().blocks["train"]
+    np.testing.assert_allclose(block.X[0], [[0.1, 0.3], [0.2, 0.4]], rtol=1e-6)
+    np.testing.assert_allclose(block.y, [[5.0], [6.0]], rtol=1e-6)
+    assert block.metadata["site"].tolist() == ["north", "south"]
