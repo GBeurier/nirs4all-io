@@ -13,6 +13,7 @@ pub mod folds;
 pub mod frame;
 pub mod join;
 pub mod loaders;
+pub mod package;
 
 pub use assemble::{
     assemble_in_memory, AssembledDataset, InMemorySource, PartitionBlock, SourcePayload,
@@ -21,3 +22,9 @@ pub use folds::{parse_fold_str, Fold};
 pub use frame::{Cell, Column, Frame, Matrix};
 pub use join::{concat_features, concat_samples, join_tables, merge_by_key, JoinAudit};
 pub use loaders::{effective_params, read_table_bytes, LoadedTable};
+pub use package::{
+    repr_ids, DatasetPackage, FeatureMatrix, GenotypeMatrix, MaskBlock, MetadataTable, NdTensor,
+    PackagePartition, PayloadBlock, PayloadManifest, PayloadManifestEntry, PayloadStorageKind,
+    RowPositionFallback, SequenceBlock, SpectralRecordSet, TargetTable, UriRef, WeightsVector,
+    DATASET_PACKAGE_VERSION,
+};

@@ -14,7 +14,7 @@ use serde_json::Value;
 
 /// A pandas-typed cell. Within a column all cells share the column dtype
 /// (`Int` for int64, `Float` for float64 with `NaN`=NA, `Str`/`Na` for object).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Cell {
     Int(i64),
     Float(f64),
@@ -79,7 +79,7 @@ enum GroupKey {
     Na,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Column {
     pub name: String,
     pub dtype: ColDtype,
@@ -174,7 +174,7 @@ impl Column {
 }
 
 /// A column-major typed frame.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     pub columns: Vec<Column>,
     pub n_rows: usize,
