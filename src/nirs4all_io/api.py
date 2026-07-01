@@ -19,6 +19,7 @@ from .conventions.engine import match_items
 from .conventions.profiles import resolve_profiles
 from .conventions.to_spec import assignments_to_spec_dict
 from .materialize.assemble import AssembledDataset, PartitionBlock, assemble
+from .materialize.package import DatasetPackage
 from .materialize.spectrodataset import to_spectrodataset
 from .resolve import resolve
 from .spec import DatasetSpec
@@ -173,6 +174,10 @@ def load(
     """Materialize ``inp`` into a dataset (default target: a nirs4all SpectroDataset)."""
     if _is_in_memory(inp):
         assembled = _assemble_in_memory(inp, name)
+    elif isinstance(inp, DatasetPackage):
+        if target in ("dataset_package", "package"):
+            return inp
+        assembled = inp.to_assembled()
     else:
         spec, base = to_spec(inp, conventions=conventions, base_dir=base_dir, name=name)
         spec.validate()
@@ -180,8 +185,45 @@ def load(
 
     if target == "assembled":
         return assembled
+    if target in ("dataset_package", "package"):
+        return DatasetPackage.from_assembled(assembled)
     if target == "spectrodataset":
         return to_spectrodataset(assembled, spectro_dataset_cls=spectro_dataset_cls)
     if target in ("dag-ml-data", "dag_ml_data"):
         raise NotImplementedError("the dag-ml-data target is Phase 2 (gated on the Appendix J readiness checklist)")
-    raise SpecError(f"unknown target {target!r}; expected 'spectrodataset' | 'assembled'")
+    raise SpecError(f"unknown target {target!r}; expected 'spectrodataset' | 'assembled' | 'dataset_package'")
+
+
+def to_dataset_package(
+    inp: Any,
+    *,
+    conventions: list[str] | None = None,
+    base_dir: str | Path | None = None,
+    name: str | None = None,
+) -> DatasetPackage:
+    """Materialize ``inp`` into a public, target-agnostic :class:`DatasetPackage`."""
+    if isinstance(inp, DatasetPackage):
+        return inp
+    if isinstance(inp, AssembledDataset):
+        return DatasetPackage.from_assembled(inp)
+    package = load(inp, target="dataset_package", conventions=conventions, base_dir=base_dir, name=name)
+    if not isinstance(package, DatasetPackage):  # defensive guard for type checkers and future targets
+        raise SpecError(f"target 'dataset_package' returned {type(package).__name__}, expected DatasetPackage")
+    return package
+
+
+def describe_dataset_package(
+    inp: Any,
+    *,
+    conventions: list[str] | None = None,
+    base_dir: str | Path | None = None,
+    name: str | None = None,
+    canonical: bool = False,
+) -> dict[str, Any] | str:
+    """Return the bytes-free ``DatasetPackage`` summary for ``inp``.
+
+    Set ``canonical=True`` to receive canonical JSON; otherwise a JSON-ready dict
+    is returned.
+    """
+    package = to_dataset_package(inp, conventions=conventions, base_dir=base_dir, name=name)
+    return package.to_canonical_summary() if canonical else package.to_summary_dict()
