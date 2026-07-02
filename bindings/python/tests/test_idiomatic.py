@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import nirs4all_io as nio
+from nirs4all_io.materialize import DatasetPackage, PayloadStorageKind, repr_ids
 
 CORPUS = Path(__file__).resolve().parents[3] / "tests/goldens/contract/corpus"
 
@@ -75,6 +76,84 @@ def test_load_accepts_reference_object_with_to_io_spec():
     assembled = nio.load(ReferenceDatasetDouble(), target="assembled", name="reference")
     assert assembled["name"] == "reference"
     assert "train" in assembled["blocks"]
+
+
+def test_dataset_package_target_exposes_manifest_summary_and_assembled_view():
+    package = nio.to_dataset_package(CORPUS / "x_y_separate", name="pkg")
+
+    assert isinstance(package, DatasetPackage)
+    assert package.name == "pkg"
+    assert nio.load(package, target="dataset_package") is package
+
+    manifest = package.manifest()
+    assert len(manifest.root) == 64
+    by_id = {entry.id: entry for entry in manifest.entries}
+    assert "train/x0" in by_id
+    assert by_id["train/x0"].representation_id == repr_ids.SIGNAL_1D
+    assert by_id["train/x0"].storage is PayloadStorageKind.INLINE
+    assert len(by_id["train/x0"].content_hash) == 64
+
+    summary = nio.describe_dataset_package(package)
+    assert summary["schema_version"] == 2
+    assert summary["name"] == "pkg"
+    assert summary["manifest"]["root"] == manifest.root
+    canonical = nio.describe_dataset_package(package, canonical=True)
+    assert isinstance(canonical, str)
+    assert canonical.endswith("\n")
+    assert '"schema_version": 2' in canonical
+
+    assembled = package.to_assembled()
+    block = assembled.blocks["train"]
+    assert block.X[0].shape[0] == block.n_samples
+    assert block.feature_headers
+    assert package.row_position_fallback.fingerprint
+
+
+def test_dataset_package_target_accepts_base_dir_for_relative_specs(tmp_path):
+    (tmp_path / "X.csv").write_text("1000;1002\n0.1;0.2\n0.3;0.4\n", encoding="utf-8")
+
+    package = nio.load(
+        {"sources": [{"id": "x", "role": "features", "input": "X.csv"}]},
+        target="package",
+        base_dir=tmp_path,
+        name="relative",
+    )
+
+    assert isinstance(package, DatasetPackage)
+    assert package.name == "relative"
+    assert package.to_assembled().blocks["train"].X[0].shape == (2, 2)
+
+
+def test_dataset_package_load_targets_are_coherent():
+    package = nio.to_dataset_package(CORPUS / "x_y_separate", name="pkg")
+
+    assert nio.load(package, target="package") is package
+    assembled = nio.load(package, target="assembled")
+    assert assembled.name == "pkg"
+    assert assembled.blocks["train"].X[0].shape[0] == assembled.blocks["train"].n_samples
+
+
+def test_public_repr_ids_match_package_contract():
+    for name in (
+        "SIGNAL_1D",
+        "SIGNAL_WITH_PROCESSINGS",
+        "FEATURE_BLOCK_SET",
+        "TARGET_NUMERIC",
+        "TARGET_CATEGORICAL",
+        "TARGET_NUMERIC_MATRIX",
+        "TARGET_CATEGORICAL_MATRIX",
+        "SAMPLE_METADATA",
+        "GRAY_IMAGE",
+        "RGB_IMAGE",
+        "MC_IMAGE",
+        "MULTISPECTRAL_IMAGE",
+    ):
+        assert isinstance(getattr(repr_ids, name), str)
+
+
+def test_python_dag_ml_data_target_points_to_rust_bridge():
+    with pytest.raises(NotImplementedError, match="nirs4all-io-dagml"):
+        nio.load(CORPUS / "x_only_single_csv", target="dag-ml-data")
 
 
 def test_to_io_spec_base_dir_applies_to_secondary_file_refs(tmp_path):
@@ -269,6 +348,16 @@ def test_validate_rejects_invalid_typed_path():
 
 def test_public_surface_unchanged():
     # The historical names plus the new typed classes are all exported.
-    for name in ("infer", "to_spec", "validate", "load", "to_spectrodataset", "__version__"):
+    for name in (
+        "infer",
+        "to_spec",
+        "validate",
+        "load",
+        "to_dataset_package",
+        "describe_dataset_package",
+        "to_spectrodataset",
+        "__version__",
+    ):
         assert name in nio.__all__
     assert "DatasetPlan" in nio.__all__ and "DatasetSpec" in nio.__all__
+    assert "DatasetPackage" in nio.__all__

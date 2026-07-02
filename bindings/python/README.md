@@ -34,7 +34,9 @@ All functions are re-exported from `nirs4all_io`.
 | `infer` | `infer(input, conventions=None)` | a `DatasetPlan` (data input only) |
 | `to_spec` | `to_spec(input, conventions=None, name=None)` | a `DatasetSpec` |
 | `validate` | `validate(spec)` | `None`; raises `ValueError` if invalid |
-| `load` | `load(input, *, target="assembled", conventions=None, name=None, spectro_dataset_cls=None)` | summary dict, or a `SpectroDataset` |
+| `load` | `load(input, *, target="assembled", conventions=None, name=None, base_dir=None, spectro_dataset_cls=None)` | summary dict, `DatasetPackage`, or a `SpectroDataset` |
+| `to_dataset_package` | `to_dataset_package(input, *, conventions=None, base_dir=None, name=None)` | a target-agnostic `DatasetPackage` |
+| `describe_dataset_package` | `describe_dataset_package(input, *, conventions=None, base_dir=None, name=None, canonical=False)` | package summary dict or canonical JSON |
 | `to_spectrodataset` | `to_spectrodataset(full, *, spectro_dataset_cls=None)` | a `SpectroDataset` |
 
 **Inputs** (`input`) accept a `str` path, a `pathlib.Path`, a sequence of either
@@ -62,6 +64,8 @@ DatasetSpec(name='data', schema_version=1, sources=[data:mixed])
 
 **`load` targets:**
 - `target="assembled"` → the rounded structural summary dict (no `nirs4all`).
+- `target="dataset_package"` / `target="package"` → a target-agnostic
+  `DatasetPackage` with payload manifest hashes and an assembled view.
 - `target="spectrodataset"` → a real nirs4all `SpectroDataset`, built via a **lazy**
   `nirs4all` import inside the adapter. This is the **only** `nirs4all` touch-point;
   `import nirs4all_io` never imports `nirs4all` (enforced by
@@ -82,6 +86,7 @@ print(spec.schema_version, len(spec.sources))  # convenience accessors
 print(plan.decisions())                        # scored inference decisions
 
 summary = nio.load("/data/run")                # target="assembled" (default)
+package = nio.to_dataset_package("/data/run")  # target-agnostic package
 ds = nio.load("/data/run", target="spectrodataset")   # nirs4all SpectroDataset
 ```
 
