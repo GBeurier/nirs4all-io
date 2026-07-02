@@ -50,10 +50,11 @@ nio.load(inp, *, target="spectrodataset" | "assembled",
   Pass `spectro_dataset_cls=` to inject a double (used in tests; no nirs4all needed).
 - `target="assembled"` returns the **target-agnostic** `AssembledDataset` (per-partition
   `PartitionBlock`: multi-source `X`, `y`, `metadata`, headers, units) — testable, and the
-  hand-off point for the future `to_dag_ml_data` adapter (Phase 2).
+  hand-off point mirrored by the Rust `nirs4all-io-dagml` bridge.
 - `target="dataset_package"` returns the public target-agnostic `DatasetPackage`
   summary/manifest wrapper.
-- `target="dag-ml-data"` raises `NotImplementedError` (Phase 2, gated — see `PHASE2_GATE.md`).
+- `target="dag-ml-data"` raises `NotImplementedError` in this Python MVP. The supported
+  `dag-ml-data` emit is the Rust bridge crate `crates/nirs4all-io-dagml`.
 
 ### Reference Dataset Adapter
 

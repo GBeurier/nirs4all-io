@@ -223,7 +223,7 @@ def load(
     if target == "spectrodataset":
         return to_spectrodataset(assembled, spectro_dataset_cls=spectro_dataset_cls)
     if target in ("dag-ml-data", "dag_ml_data"):
-        raise NotImplementedError("the dag-ml-data target is Phase 2 (gated on the Appendix J readiness checklist)")
+        raise NotImplementedError("the Python MVP does not emit dag-ml-data; use the Rust bridge crate `nirs4all-io-dagml`")
     raise SpecError(f"unknown target {target!r}; expected 'spectrodataset' | 'assembled' | 'dataset_package'")
 
 

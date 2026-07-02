@@ -18,7 +18,7 @@ directly, so it (and only it) can hand back native Python objects and a real
 | `validate` | ✅ `validate` | ✅ `validate` | ✅ `n4io_validate` | ✅ `nirs4all_io.validate` | ✅ `validate` |
 | `load` → assembled | ✅ `load` | ✅ `load(target="assembled")` / `load_summary` | ❌ | ❌ | ✅ fs-free `assembleDataset(files, records, specJson)` |
 | `load` → SpectroDataset | ❌ | ✅ `load(target="spectrodataset")` (lazy adapter) | ❌ | ❌ | ❌ |
-| `emit-dag-ml-data` | 🟡 stub → ecosystem crate | ❌ | ❌ | ❌ | ❌ |
+| `emit-dag-ml-data` | 🟡 discoverability command → `nirs4all-io-dagml` bridge crate | ❌ | ❌ | ❌ | ❌ |
 | ABI / version | — | `__version__` | `n4io_abi_version` | `nirs4all_io.abi_version` | `version` |
 
 Legend: ✅ supported · 🟡 partial / out-of-process · ❌ out of scope in v0.
@@ -34,10 +34,10 @@ Legend: ✅ supported · 🟡 partial / out-of-process · ❌ out of scope in v0
 | WASM / JS | `to_spec`/`validate`: JSON string; `inferFiles`/`inferDataset`/`inferRecords`/`proposeDataset`/`assembleDataset`: `{name, bytes:Uint8Array}[]` + decoded record sets (+ `{confirmed}` locks) | `to_spec`: canonical JSON string; the browser ops return plain JS objects (`DatasetPlan` / `{plan, proposals, spec}` / `AssembledDataset`) |
 
 Notes:
-- **`emit-dag-ml-data`** is not built into the in-tree CLI: the subcommand exists
-  but bails with a pointer to the workspace-excluded ecosystem crate
+- **`emit-dag-ml-data`** is not emitted by the main CLI binary: the subcommand
+  exists for discoverability and points to the workspace bridge crate
   `crates/nirs4all-io-dagml` (`emit-dagml` binary), which carries the
-  `dag-ml-data` sibling dependency. No binding exposes it in v0.
+  `dag-ml-data` dependency. No binding exposes it in v0.
 - **R / MATLAB / Octave** are C-ABI-first and v0-scoped to the JSON surface
   (`infer` / `to_spec` / `validate` + the version probe); they have no array
   `load`.
@@ -96,7 +96,7 @@ bash bindings/matlab/build_and_test.sh
 wasm-pack build bindings/wasm --target nodejs --out-dir pkg
 node bindings/wasm/tests/node_smoke.cjs
 
-# emit-dag-ml-data (ecosystem crate, separate dag-ml-data dependency)
+# emit-dag-ml-data (bridge crate, separate dag-ml-data dependency)
 cargo run --manifest-path crates/nirs4all-io-dagml/Cargo.toml --bin emit-dagml -- <input>
 ```
 

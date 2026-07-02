@@ -5,7 +5,7 @@
 //! call and prints the canonical JSON it returns (2-space, sorted keys,
 //! trailing newline — identical to the C ABI / Python surface). `infer` uses
 //! role inference; `to-spec` / `load` use the convention path; `emit-dag-ml-data`
-//! is the Phase-2-gated target.
+//! points to the dedicated `nirs4all-io-dagml` bridge crate.
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -66,7 +66,7 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Emit a dag-ml-data CoordinatorDataPlanEnvelope (needs `--features dag-ml-data`).
+    /// Point to the dag-ml-data bridge crate that emits a CoordinatorDataPlanEnvelope.
     EmitDagMlData {
         /// Data path(s) to resolve via conventions.
         #[arg(required = true)]

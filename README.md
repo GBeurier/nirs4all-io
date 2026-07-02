@@ -20,7 +20,7 @@ adds a score-based inference engine.
 
 ```
 any input ──► RESOLVE ──► INFER ──► CONFIGURE ──► MATERIALIZE ──► SpectroDataset
-              (InputSet)  (DatasetPlan, scored)   (DatasetSpec)    (and later: dag-ml-data)
+              (InputSet)  (DatasetPlan, scored)   (DatasetSpec)    (or dag-ml-data via the Rust bridge)
 ```
 
 ## Status
@@ -28,10 +28,10 @@ any input ──► RESOLVE ──► INFER ──► CONFIGURE ──► MATERI
 **Phase 1 (Python MVP) — complete and parity-verified.** `load()` and `infer()`
 work end-to-end and target `SpectroDataset`; the build is **byte-equivalent to
 nirs4all's own `DatasetConfigs`** on the supported topologies (`pytest -m parity`).
-178 tests, ruff + mypy clean. See [`docs/STATUS.md`](docs/STATUS.md) for the
-per-epic breakdown, [`docs/API.md`](docs/API.md) for the seam, and
-[`docs/PHASE2_GATE.md`](docs/PHASE2_GATE.md) for why the Rust / `dag-ml-data`
-target (Phase 2) stays gated. Full design:
+**Phase 2 (Rust rewrite + bindings + `dag-ml-data` bridge) is complete.** See
+[`docs/STATUS.md`](docs/STATUS.md) for the per-epic breakdown,
+[`docs/API.md`](docs/API.md) for the Python MVP seam, and
+[`docs/PHASE2_GATE.md`](docs/PHASE2_GATE.md) for the gate history. Full design:
 [`../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md`](../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md).
 
 ## Quick start (target API)
