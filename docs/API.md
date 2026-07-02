@@ -45,7 +45,7 @@ spec.to_dict(); spec.to_yaml(); spec.to_json()
 ### `load` signature
 
 ```python
-nio.load(inp, *, target="spectrodataset" | "assembled" | "dataset_package" | "package",
+nio.load(inp, *, target="spectrodataset" | "assembled" | "dataset_package" | "package" | "dag-ml-data",
          conventions=None, base_dir=None, name=None, spectro_dataset_cls=None)
 ```
 
