@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,12 +20,29 @@ from nirs4all_io.materialize import (
 )
 from nirs4all_io.spec import LoadingParams
 from nirs4all_io.spec.dataset_spec import NaConfig
-from nirs4all_io.spec.enums import FillMethod, NaPolicy
+from nirs4all_io.spec.enums import FillMethod, HeaderUnit, NaPolicy
 
 
 # --------------------------------------------------------------------------- #
 # Per-format reading                                                          #
 # --------------------------------------------------------------------------- #
+def _formats_sample(relative: str) -> Path:
+    workspace_root = next(
+        (
+            parent
+            for parent in Path(__file__).resolve().parents
+            if (parent / "nirs4all-formats").is_dir()
+        ),
+        None,
+    )
+    if workspace_root is None:
+        pytest.skip("nirs4all-formats sibling repository not available")
+    sample = workspace_root / "nirs4all-formats" / relative
+    if not sample.exists():
+        pytest.skip(f"nirs4all-formats sample not available: {relative}")
+    return sample
+
+
 def test_read_csv_semicolon_with_header(tmp_path):
     p = tmp_path / "data.csv"
     p.write_text("400;401;y\n0.1;0.2;1.0\n0.3;0.4;2.0\n", encoding="utf-8")
@@ -61,6 +80,32 @@ def test_read_excel(tmp_path):
     pd.DataFrame({"a": [1, 2], "b": [3, 4]}).to_excel(p, index=False)
     table = read_table(p)
     assert table.df.shape == (2, 2)
+
+
+@pytest.mark.formats
+def test_read_vendor_formats_recordset_strips_provenance_metadata():
+    pytest.importorskip("nirs4all_formats")
+    sample = _formats_sample("samples/jcamp_dx/BRUKAFFN.DX")
+
+    table = read_table(sample)
+
+    assert table.df.shape[0] == 1
+    assert table.df.shape[1] > 1000
+    assert table.header_unit == "nm"
+    assert "sample_id" not in table.headers
+    assert not any(header.startswith("nirs4all_formats.") for header in table.headers)
+    assert all(header.startswith("x_") for header in table.headers)
+    assert set(table.dtypes) == {"numeric"}
+
+
+@pytest.mark.formats
+def test_read_vendor_formats_preserves_explicit_header_unit():
+    pytest.importorskip("nirs4all_formats")
+    sample = _formats_sample("samples/jcamp_dx/BRUKAFFN.DX")
+
+    table = read_table(sample, LoadingParams(header_unit=HeaderUnit.CM_1))
+
+    assert table.header_unit == "cm-1"
 
 
 # --------------------------------------------------------------------------- #
