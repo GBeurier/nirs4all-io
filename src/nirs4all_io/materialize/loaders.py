@@ -25,6 +25,9 @@ _CSV_EXTS = {".csv", ".tsv", ".txt"}
 _CSV_COMPOUND = (".csv.gz", ".csv.zip")
 _NA_VALUES = ["NA", "N/A", ""]
 _VENDOR_HINT_EXTS = {".0", ".1", ".2", ".dx", ".jdx", ".spc", ".spa", ".asd", ".sed", ".sig", ".sli", ".0a"}
+_VENDOR_META_COLUMNS = {"sample_id"}
+_VENDOR_META_PREFIXES = ("nirs4all_formats.",)
+_VENDOR_FEATURE_PREFIX = "x_"
 
 
 class NAError(SpecError):
@@ -244,9 +247,31 @@ def _read_vendor(path: Path, params: LoadingParams) -> tuple[pd.DataFrame, str]:
         import nirs4all_formats as nfmt  # lazy: optional dependency
     except ImportError as exc:  # pragma: no cover - depends on optional install
         raise LoaderError(f"reading vendor file {path.name!r} requires the 'nirs4all-formats' package (pip install nirs4all-io[formats])") from exc
-    records = nfmt.open_path(str(path))
-    df = records.to_pandas() if hasattr(records, "to_pandas") else pd.DataFrame(records)
+
+    open_recordset = getattr(nfmt, "open_recordset", None)
+    if not callable(open_recordset):
+        raise LoaderError("installed 'nirs4all-formats' package does not expose open_recordset()")
+    try:
+        records = open_recordset(str(path))
+    except Exception as exc:
+        raise LoaderError(f"nirs4all-formats could not read vendor file {path.name!r}: {exc}") from exc
+    if not hasattr(records, "to_pandas"):
+        raise LoaderError("nirs4all-formats open_recordset() returned an object without to_pandas()")
+
+    df = records.to_pandas()
     df.columns = [str(c) for c in df.columns]
+    spectral_cols = [c for c in df.columns if c.startswith(_VENDOR_FEATURE_PREFIX)]
+    if not spectral_cols:
+        spectral_cols = [
+            c
+            for c in df.columns
+            if c not in _VENDOR_META_COLUMNS
+            and not any(c.startswith(prefix) for prefix in _VENDOR_META_PREFIXES)
+            and pd.api.types.is_numeric_dtype(df[c])
+        ]
+    if not spectral_cols:
+        raise LoaderError(f"nirs4all-formats produced no spectral columns for {path.name!r}")
+    df = df.loc[:, spectral_cols].copy()
     unit = params.header_unit.value if params.header_unit else "nm"
     return df, unit
 
