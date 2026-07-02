@@ -103,6 +103,16 @@ enum n4io_status_t n4io_infer(struct n4io_context_t *ctx,
                               const char *conventions_json,
                               char **out);
 
+// Materialize an input and write the assembled-dataset structural summary JSON
+// to `*out` (owned).
+//
+// # Safety
+// All pointers must be valid for the call; `out` writable.
+enum n4io_status_t n4io_load_summary(struct n4io_context_t *ctx,
+                                     const char *input_json,
+                                     const char *conventions_json,
+                                     char **out);
+
 // Validate a `DatasetSpec` JSON. Returns `N4IO_OK` if valid, else
 // `N4IO_ERR_SPEC` with the aggregate message in the context error buffer.
 //

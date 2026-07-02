@@ -88,8 +88,8 @@ categorical; assembler + lazy SpectroDataset adapter; parity oracle; import-boun
     which a thin C-ABI/ctypes layer cannot do without an array-export ABI. pyo3 links the facade crate
     directly. (Bundling `nirs4all-formats` into the wheel is a packaging spike — story 11.0.)
   - **R / MATLAB / Octave / C = C-ABI-first (methods model)**, scoped in v0 to the C-ABI **JSON
-    surface** (`infer` / `to-spec` / `validate`); **`emit-dag-ml-data` is reached via the
-    `nirs4all-io-cli` fallback in v0** (promoted to a native ABI symbol in v0.1). **No array `load()`
+    surface** (`infer` / `to-spec` / `validate`; R also exposes the bytes-free assembled summary);
+    **`emit-dag-ml-data` is reached via the `nirs4all-io-cli` fallback in v0**. **No array `load()`
     in v0** for these hosts (see D-R7). Reuse `bindings/SPEC.md`, the ABI gates, and the parity harness.
   - **WASM/JS = wasm-bindgen-native**, `infer`/`plan` over bytes/JSON, no fs.
 - **D-R4 Core/facade boundary (load-bearing).** `io-core` is **pure**: it owns specs, selectors,
@@ -110,10 +110,9 @@ categorical; assembler + lazy SpectroDataset adapter; parity oracle; import-boun
   snapshot diff + version script + forbidden-runtime-dep audit in CI; Windows exports handled
   explicitly (`.def`/`dllexport`, UTF-8 path policy, MSVC CI leg).
 - **D-R7 What crosses the ABI (v0).** Primary surface is **strings (JSON)**: `infer`, `to_spec`,
-  `validate`. (`emit_dag_ml_data` stays CLI/facade-only in v0 — see story 9.2 — and is promoted to an
-  ABI symbol in v0.1.) **No materialized arrays cross the C ABI in v0** (YAGNI): Python
-  gets arrays via pyo3 in-process; R/MATLAB/C get `infer/to_spec/validate` only (with `emit` via the
-  CLI in v0). The dag-ml-data
+  `validate`, plus the bytes-free assembled summary where bindings expose it. (`emit_dag_ml_data`
+  stays CLI/facade-only in v0 — see story 9.2.) **No materialized arrays cross the C ABI in v0**
+  (YAGNI): Python gets arrays via pyo3 in-process; R/MATLAB/C do not receive array handles. The dag-ml-data
   provider/arena path is a *runtime-provider integration* with production arenas still pending — it is
   **not** a substitute array hand-off for standalone MATLAB/C hosts. A minimal owned array/table
   export ABI (reusing the reserved `n4io_matrix_view_t` design) is **deferred to v0.1**, added only
@@ -169,11 +168,11 @@ preserving behaviour & goldens.
 | **T5 infer** [XL] | describe-producer + detectors + inference engine → DatasetPlan | `io-core/src/infer/` | T1 (+ neutral desc iface; **not** facade loaders) | DatasetPlan goldens byte-identical |
 | **T6 assemble (+identity)** [L] | assembler (partitions/folds/variations/weights) + carry `observation/group/repetition_id` | `io/src/materialize/assemble.rs` | T1, T3, T4 | cookbook coverage matrix (Rust) |
 | **T7 facade** [L] | wire resolve→infer→configure→materialize; formats integration; feed neutral desc to core | `io/src/{lib,api}.rs` | T1–T6 | **SYNC #1: all 6.4 goldens green** |
-| **T8 C ABI v0** [L] | `n4io_*` JSON surface (`infer/to_spec/validate`) + status/error model + handles; cbindgen header; symbol snapshot; version script; **Windows exports** | `io-capi/` | T7 (scaffold early) | **SYNC #2: ABI v0 frozen** |
+| **T8 C ABI v0** [L] | `n4io_*` JSON surface (`infer/to_spec/validate/load_summary`) + status/error model + handles; cbindgen header; symbol snapshot; version script; **Windows exports** | `io-capi/` | T7 (scaffold early) | **SYNC #2: ABI v0 frozen** |
 | **T9 CLI** [M] | `infer/to-spec/validate/load/emit-dag-ml-data`; binding CLI fallback; kill dead `cli.py` | `io-cli/` | T7 | CLI golden runs |
 | **T10 dag-ml-data emit** [L] | `to_dag_ml_data` → `CoordinatorDataPlanEnvelope`; AxisKind/relations map | `io/src/materialize/dag_ml_data.rs` (feature) | T1, T6 (+ **T9** for the cross-CLI gate; early prep allowed) | cross-CLI golden (validate-envelope **+** validate-data-binding via wrapper) |
 | **T11 Python (pyo3)** [L] | idiomatic `infer/load/to_spec/describe`; pandas/numpy/sklearn; lazy SpectroDataset; import-boundary; wheels | `bindings/python/` | **T7** (facade crate; **not** T8) + 11.0 packaging | parity oracle + import-boundary green |
-| **T12 R (C ABI)** [M] | `.Call`/extendr over C ABI; `infer/to_spec/validate` JSON; data.frame idioms | `bindings/r/` | T8 | R smoke + plan parity |
+| **T12 R (C ABI)** [M] | `.Call`/extendr over C ABI; `infer/to_spec/validate/load_summary` JSON; data.frame idioms | `bindings/r/` | T8 | R smoke + plan parity |
 | **T13 MATLAB/Octave (MEX)** [M] | MEX over C ABI; `infer/to_spec/validate`; classdef wrappers | `bindings/matlab/` | T8 | Octave smoke + plan parity |
 | **T14 WASM/JS** [S] | wasm-bindgen `infer`/`plan` (no fs) | `bindings/wasm/` | T7 (own wasm crate) | node smoke + plan parity |
 | **T15 CI/parity/release/fuzz** [L] | parity oracle, cookbook gate, goldens CI, ABI CI, dag-ml conformance CI, fuzz/property + sanitizers, release pipelines, docs | `.github/`, `fuzz/`, `docs/` | continuous | all gates wired |
@@ -239,7 +238,7 @@ each story carries an `AC:`. Phase 2 continues at EPIC 7.
 
 **EPIC 9 — C ABI & CLI**
 - 9.1 [M] ABI scaffold + **error model**: `n4io_abi_version`, `n4io_check_abi_compatibility`, `n4io_string_free`, opaque handle ZST, `n4io_status_t`, per-context error buffer, diagnostic-JSON `SpecError` mapping. *AC: header generates; C example links; error round-trips.*
-- 9.2 [L] Wrap the JSON surface: `n4io_infer`, `n4io_to_spec`, `n4io_validate` (+ handle lifecycle). **Emit is NOT in ABI v0** (kept in the CLI/facade; ABI-exposed in v0.1) so the ABI does not depend on T10. *AC: each maps 1:1 to a facade call; round-trips a golden.*
+- 9.2 [L] Wrap the JSON surface: `n4io_infer`, `n4io_to_spec`, `n4io_validate`, `n4io_load_summary` (+ handle lifecycle). **Emit is NOT in ABI v0** (kept in the CLI/facade) so the ABI does not depend on T10. *AC: each maps 1:1 to a facade call; round-trips a golden.*
 - 9.3 [M] cbindgen committed header + `expected_symbols_{linux,macos,windows}.txt` + version script + forbidden-runtime-dep audit + **Windows exports** (`.def`/`dllexport`, UTF-8 paths, MSVC CI). *AC: **SYNC #2** ABI v0 frozen; abi-check CI green on 3 OSes.*
 - 9.4 [M] `nirs4all-io-cli` (`infer/to-spec/validate/load/emit-dag-ml-data`); binding CLI fallback; remove dead `cli.py` entry. *AC: CLI golden runs; pyproject entry realized.*
 
@@ -253,7 +252,7 @@ each story carries an `AC:`. Phase 2 continues at EPIC 7.
 **EPIC 11 — Language bindings**
 - 11.0 [M] **Packaging spike**: how the Python wheel obtains `nirs4all-formats` (Cargo path dep linked by pyo3 vs reusing formats’ own wheel; static vs dynamic; avoid two native-reader copies). *AC: decision recorded; one reader copy.*
 - 11.1 [L] Python (pyo3/maturin): idiomatic `infer/load/to_spec/describe` → DatasetPlan/pandas/numpy; sklearn-friendly projections (`to_sklearn`/`to_numpy`, mirroring formats); **lazy `SpectroDataset`** (sole nirs4all touch-point). *AC: import-boundary test green; parity oracle green; cibuildwheel wheels.*
-- 11.2 [M] R: `.Call`/extendr over C ABI for `infer/to-spec/validate` (+ `emit` via the CLI fallback); `data.frame`/`tibble` idioms. *AC: `R CMD INSTALL` + smoke + `to_spec`/`infer` parity.*
+- 11.2 [M] R: `.Call`/extendr over C ABI for `infer/to-spec/validate/load_summary` (+ `emit` via the CLI fallback); `data.frame`/`tibble` idioms. *AC: `R CMD INSTALL` + smoke + `to_spec`/`infer` parity.*
 - 11.3 [M] MATLAB/Octave: MEX over C ABI for `infer/to-spec/validate` (+ `emit` via the CLI); `+nirs4all_io` classdef wrappers; Octave CI leg. *AC: Octave smoke + `to_spec`/`infer` parity.*
 - 11.4 [S] WASM/JS: wasm-bindgen `infer`/`plan` (bytes/JSON, no fs). *AC: node smoke + plan parity.*
 
@@ -288,8 +287,8 @@ each story carries an `AC:`. Phase 2 continues at EPIC 7.
 1. **Canonical-JSON parity** (serde vs Python `json`) — top risk; mitigated by story 7.3 *before* any port.
 2. **Python FFI** — *resolved:* pyo3-native (it must hand back pandas/numpy/SpectroDataset). R/MATLAB/C
    stay C-ABI. A later pyo3-vs-ctypes revisit is unnecessary unless io drops Python materialization.
-3. **Array hand-off** — *resolved (v0):* Python via pyo3 in-process; R/MATLAB/C get `infer/to_spec/validate`
-   only; owned array/table export ABI deferred to v0.1. The dag-ml-data provider path is *not* the
+3. **Array hand-off** — *resolved (v0):* Python via pyo3 in-process; R/MATLAB/C do not get array
+   handles; R can request a bytes-free assembled summary. Owned array/table export ABI is deferred. The dag-ml-data provider path is *not* the
    standalone-host array channel (arenas pending).
 4. **Retire the Python MVP?** Keep as the `pytest -m parity` oracle until 6.4 + bindings are green; then
    remove (no-dead-code). Confirm end-state.

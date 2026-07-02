@@ -16,7 +16,7 @@ directly, so it (and only it) can hand back native Python objects and a real
 | `propose` (iterative) | ❌ | ❌ | ❌ | ❌ | ✅ `proposeDataset(files, records, {confirmed})` → `{plan, proposals, spec, valid, validation_errors}` |
 | `to_spec` | ✅ `to-spec` | ✅ `to_spec` | ✅ `n4io_to_spec` | ✅ `nirs4all_io.to_spec` | 🟡 `to_spec` (spec-dict only, fs-free) |
 | `validate` | ✅ `validate` | ✅ `validate` | ✅ `n4io_validate` | ✅ `nirs4all_io.validate` | ✅ `validate` |
-| `load` → assembled | ✅ `load` | ✅ `load(target="assembled")` / `load_summary` | ❌ | ❌ | ✅ fs-free `assembleDataset(files, records, specJson)` |
+| `load` → assembled | ✅ `load` | ✅ `load(target="assembled")` / `load_summary` | ✅ `n4io_load_summary` / `nio_load` | ❌ | ✅ fs-free `assembleDataset(files, records, specJson)` |
 | `load` → SpectroDataset | ❌ | ✅ `load(target="spectrodataset")` (lazy adapter) | ❌ | ❌ | ❌ |
 | `emit-dag-ml-data` | ✅ bridge crate `emit-dagml` (main CLI points there) | ❌ | ❌ | ❌ | ❌ |
 | ABI / version | — | `__version__` | `n4io_abi_version` | `nirs4all_io.abi_version` | `version` |
@@ -39,9 +39,10 @@ Notes:
   `nirs4all-io` CLI keeps a discovery subcommand that bails with a pointer to that
   bridge so the main CLI does not grow a hard `dag-ml-data` dependency. No language
   binding exposes the emit in v0.
-- **R / MATLAB / Octave** are C-ABI-first and v0-scoped to the JSON surface
-  (`infer` / `to_spec` / `validate` + the version probe); they have no array
-  `load`.
+- **R** is C-ABI-first and exposes the JSON surface
+  (`infer` / `to_spec` / `validate` / bytes-free `load_summary` + the version probe).
+  It has no array/SpectroDataset load. **MATLAB / Octave** remain scoped to
+  `infer` / `to_spec` / `validate` + the version probe.
 - **WASM/JS** is fs-free: `to_spec` here only **normalizes a spec/config dict**
   (it cannot resolve paths). Inference / iterative proposals / materialization run
   on **in-memory** named byte buffers and decoded `nirs4all-formats` records, not
@@ -67,8 +68,9 @@ Notes:
   spectro_dataset_cls=None)` and `to_spectrodataset(full, *,
   spectro_dataset_cls=None)`.
 - **R** (`bindings/r/R/n4io.R`): `n4io_to_spec(input_json, conventions_json=NULL)`,
-  `n4io_infer(input_json, conventions_json=NULL)`, `n4io_validate(spec_json)`,
-  `n4io_abi_version()`.
+  `n4io_infer(input_json, conventions_json=NULL)`,
+  `n4io_load_summary(input_json, conventions_json=NULL)`,
+  `n4io_validate(spec_json)`, `n4io_abi_version()`.
 - **MATLAB / Octave** (`bindings/matlab/+nirs4all_io`): `to_spec(input_json,
   conventions_json)`, `infer(input_json, conventions_json)`,
   `validate(spec_json)`, `abi_version()` — one `n4io` MEX dispatches on a command
@@ -125,6 +127,7 @@ ds   = nio.load("/data/run", target="spectrodataset")  # nirs4all SpectroDataset
 # R — JSON in, canonical JSON out
 n4io_to_spec('"/data/run"')
 n4io_infer('["a.csv","b.csv"]')
+n4io_load_summary(specJson)
 ```
 
 ```js

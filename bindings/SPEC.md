@@ -16,7 +16,7 @@ io exposes one engine through several language bindings. Two layers:
   classes). Hand-written, shared, conformance-tested. No per-call codegen.
 
 The v0 surface that crosses the C ABI is **strings (JSON)**: `infer`, `to_spec`,
-`validate`. The `dag-ml-data` emit lives in the Rust bridge crate
+`validate`, and the bytes-free assembled structural summary. The `dag-ml-data` emit lives in the Rust bridge crate
 `nirs4all-io-dagml` (`emit-dagml`), outside the C ABI bindings in v0. **No
 materialized arrays cross the C ABI in v0** (D-R7).
 
@@ -99,8 +99,9 @@ returns canonical JSON by value instead.
   The lazy `SpectroDataset` import is the **only** nirs4all touch-point and MUST
   stay lazy (import-boundary test).
 - **R / MATLAB / Octave / C = C-ABI-first** (methods model). v0 scope: the C-ABI
-  JSON surface (`infer`/`to_spec`/`validate`); `dag-ml-data` emit remains in the
-  Rust bridge CLI, not these bindings. No array `load()` for these hosts in v0.
+  JSON surface (`infer`/`to_spec`/`validate` plus the assembled structural
+  summary); `dag-ml-data` emit remains in the Rust bridge CLI, not these
+  bindings. No array `load()` for these hosts in v0.
 - **WASM/JS = wasm-bindgen-native**: `infer`/`plan` over bytes/JSON, no fs.
 
 ## 9. Conformance gates
