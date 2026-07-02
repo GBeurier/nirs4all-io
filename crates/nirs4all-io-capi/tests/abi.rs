@@ -56,7 +56,7 @@ fn abi_version_round_trips() {
     unsafe {
         let p = n4io_abi_version();
         assert!(!p.is_null());
-        assert_eq!(CStr::from_ptr(p).to_str().unwrap(), "0.1.0");
+        assert_eq!(CStr::from_ptr(p).to_str().unwrap(), "0.2.0");
         n4io_string_free(p);
     }
 }
@@ -65,9 +65,10 @@ fn abi_version_round_trips() {
 fn abi_compatibility_matrix() {
     assert_eq!(n4io_check_abi_compatibility(0, 0), n4io_status_t::N4IO_OK);
     assert_eq!(n4io_check_abi_compatibility(0, 1), n4io_status_t::N4IO_OK);
+    assert_eq!(n4io_check_abi_compatibility(0, 2), n4io_status_t::N4IO_OK);
     // header wants a newer minor than the library exposes
     assert_eq!(
-        n4io_check_abi_compatibility(0, 2),
+        n4io_check_abi_compatibility(0, 3),
         n4io_status_t::N4IO_ERR_VERSION_INCOMPATIBLE
     );
     // major mismatch
@@ -128,6 +129,21 @@ fn infer_path_returns_plan() {
         assert_eq!(st, n4io_status_t::N4IO_OK, "err: {}", last_error(ctx));
         let plan = plan.expect("plan output");
         assert!(plan.contains("\"resolved_spec\""));
+        n4io_context_destroy(ctx);
+    }
+}
+
+#[test]
+fn load_summary_returns_assembled_summary() {
+    unsafe {
+        let mut ctx: *mut n4io_context_t = std::ptr::null_mut();
+        n4io_context_create(&mut ctx);
+        let path_json = serde_json::to_string(&corpus_case("x_y_separate")).unwrap();
+        let (st, summary) = call2(n4io_load_summary, ctx, &path_json);
+        assert_eq!(st, n4io_status_t::N4IO_OK, "err: {}", last_error(ctx));
+        let summary = summary.expect("summary output");
+        assert!(summary.contains("\"blocks\""));
+        assert!(summary.ends_with('\n'), "canonical JSON ends with newline");
         n4io_context_destroy(ctx);
     }
 }

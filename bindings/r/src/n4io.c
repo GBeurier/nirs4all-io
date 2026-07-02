@@ -61,6 +61,10 @@ SEXP r_n4io_infer(SEXP input_json, SEXP conventions_json) {
     return call_json(n4io_infer, input_json, conventions_json);
 }
 
+SEXP r_n4io_load_summary(SEXP input_json, SEXP conventions_json) {
+    return call_json(n4io_load_summary, input_json, conventions_json);
+}
+
 SEXP r_n4io_validate(SEXP spec_json) {
     const char *spec = req_cstr(spec_json, "spec_json");
     n4io_context_t *ctx = NULL;
@@ -89,6 +93,7 @@ SEXP r_n4io_abi_version(void) {
 static const R_CallMethodDef call_methods[] = {
     {"r_n4io_to_spec", (DL_FUNC)&r_n4io_to_spec, 2},
     {"r_n4io_infer", (DL_FUNC)&r_n4io_infer, 2},
+    {"r_n4io_load_summary", (DL_FUNC)&r_n4io_load_summary, 2},
     {"r_n4io_validate", (DL_FUNC)&r_n4io_validate, 1},
     {"r_n4io_abi_version", (DL_FUNC)&r_n4io_abi_version, 0},
     {NULL, NULL, 0}};

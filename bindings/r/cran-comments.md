@@ -146,9 +146,10 @@ This is a new submission.
 nirs4allio is a thin R binding for the Rust-first nirs4all-io dataset-assembly
 bridge for the nirs4all NIRS / spectroscopy ecosystem. It exposes the stable
 n4io_* C ABI to R: normalize arbitrary inputs into a canonical DatasetSpec,
-infer a DatasetPlan, and validate a DatasetSpec. The low-level surface is JSON
-in / JSON out; an idiomatic nio_* layer accepts native R inputs and returns
-typed S3 objects. License: CeCILL-2.1 | AGPL-3.
+infer a DatasetPlan, validate a DatasetSpec, and materialize a bytes-free
+assembled structural summary. The low-level surface is JSON in / JSON out; an
+idiomatic nio_* layer accepts native R inputs and returns typed S3 objects.
+License: CeCILL-2.1 | AGPL-3.
 
 Self-contained source tarball: the package vendors the nirs4all-io Rust core and
 its crates.io transitive dependencies (shipped compressed as vendor.tar.xz) and

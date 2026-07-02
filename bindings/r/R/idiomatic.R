@@ -110,6 +110,23 @@ nio_to_spec <- function(input, conventions = NULL) {
   structure(.nio_parse(json), class = "n4io_spec")
 }
 
+#' Materialize a native R input into an assembled structural summary.
+#'
+#' Native-R wrapper over [n4io_load_summary()]: \code{input} is JSON-encoded
+#' internally and the assembled summary is parsed back into a plain R list.
+#'
+#' @param input A path (character scalar), a vector of files (character vector),
+#'   or a config \code{list} / \code{n4io_spec}.
+#' @param conventions Optional character vector of convention names, or
+#'   \code{NULL}.
+#' @return The parsed assembled summary as a list.
+#' @seealso [n4io_load_summary()] for the raw JSON surface.
+#' @export
+nio_load <- function(input, conventions = NULL) {
+  json <- n4io_load_summary(.nio_input_json(input), .nio_conventions_json(conventions))
+  .nio_parse(json)
+}
+
 #' Validate a DatasetSpec.
 #'
 #' Native-R wrapper over [n4io_validate()] that accepts an \code{n4io_spec}, a

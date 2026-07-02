@@ -12,15 +12,15 @@
 
 use std::ffi::{c_char, CStr, CString};
 
-use nirs4all_io::api::{to_spec, Input};
+use nirs4all_io::api::{load_assembled, to_spec, Input};
 use nirs4all_io::canonical_json;
 use nirs4all_io::core::spec::{validate_spec, DatasetSpec};
 use serde_json::Value;
 
 /// ABI version string. Independent of crate semver (D-R6); bump on ABI change.
-pub const N4IO_ABI_VERSION: &str = "0.1.0";
+pub const N4IO_ABI_VERSION: &str = "0.2.0";
 const ABI_MAJOR: u32 = 0;
-const ABI_MINOR: u32 = 1;
+const ABI_MINOR: u32 = 2;
 
 /// Status code returned by every fallible call. `N4IO_OK == 0`.
 #[repr(C)]
@@ -302,6 +302,57 @@ pub unsafe extern "C" fn n4io_infer(
     };
     match plan {
         Ok(plan) => match canonical_json(&plan.to_value()) {
+            Ok(s) => write_out(ctx, out, s),
+            Err(e) => {
+                set_error(ctx, &e.to_string());
+                n4io_status_t::N4IO_ERR_INTERNAL
+            }
+        },
+        Err(e) => {
+            set_error(ctx, &e.message);
+            n4io_status_t::N4IO_ERR_SPEC
+        }
+    }
+}
+
+/// Materialize an input and write the assembled-dataset structural summary JSON
+/// to `*out` (owned).
+///
+/// # Safety
+/// All pointers must be valid for the call; `out` writable.
+#[no_mangle]
+pub unsafe extern "C" fn n4io_load_summary(
+    ctx: *mut n4io_context_t,
+    input_json: *const c_char,
+    conventions_json: *const c_char,
+    out: *mut *mut c_char,
+) -> n4io_status_t {
+    clear_error(ctx);
+    if out.is_null() {
+        set_error(ctx, "out pointer is null");
+        return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
+    }
+    *out = std::ptr::null_mut();
+    let Some(input_json) = cstr_to_str(input_json) else {
+        set_error(ctx, "input_json is null or not UTF-8");
+        return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
+    };
+    let conv = match parse_conventions(conventions_json) {
+        Ok(c) => c,
+        Err(e) => {
+            set_error(ctx, &e);
+            return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
+        }
+    };
+    let input = match input_from_json(input_json) {
+        Ok(i) => i,
+        Err(e) => {
+            set_error(ctx, &e);
+            return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
+        }
+    };
+    match load_assembled(&input, conv.as_deref(), None) {
+        Ok(assembled) => match canonical_json(&assembled.to_summary_value()) {
             Ok(s) => write_out(ctx, out, s),
             Err(e) => {
                 set_error(ctx, &e.to_string());

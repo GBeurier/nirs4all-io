@@ -12,6 +12,7 @@ library(nirs4allio)
 # Idiomatic layer: native R inputs in, typed S3 objects out.
 spec <- nio_to_spec("/data/run")     # n4io_spec (parsed canonical DatasetSpec)
 plan <- nio_infer("/data/run")       # n4io_plan (parsed scored DatasetPlan)
+summary <- nio_load(spec)            # assembled structural summary
 nio_validate(spec)                   # invisible TRUE; informative error otherwise
 print(plan)                          # readable summary of scored decisions
 as.data.frame(plan)                  # one row per scored decision (value/score/...)
@@ -20,6 +21,7 @@ nio_resolved_spec(plan)              # the editable n4io_spec inside the plan
 # Low-level JSON surface (the stable C ABI contract) is still exported:
 n4io_to_spec('"/data/run"')          # canonical DatasetSpec (JSON string)
 n4io_infer('"/data/run"')            # scored DatasetPlan (JSON string)
+n4io_load_summary(specJson)          # assembled summary (JSON string)
 n4io_validate(specJson)              # errors if invalid; returns invisible(NULL)
 n4io_abi_version()                   # C ABI version string
 ```
@@ -33,6 +35,7 @@ internally with `jsonlite` and the result is parsed back into a typed S3 object.
 |---|---|---|
 | `nio_to_spec` | `nio_to_spec(input, conventions = NULL)` | an `n4io_spec` (parsed canonical `DatasetSpec`) |
 | `nio_infer` | `nio_infer(input, conventions = NULL)` | an `n4io_plan` (parsed scored `DatasetPlan`) |
+| `nio_load` | `nio_load(input, conventions = NULL)` | the parsed assembled structural summary as a list |
 | `nio_validate` | `nio_validate(spec)` | invisibly `TRUE`; informative error if invalid. Accepts an `n4io_spec`, a `list`, or a JSON string |
 | `nio_resolved_spec` | `nio_resolved_spec(plan)` | the editable `n4io_spec` carried in `plan$resolved_spec` |
 
@@ -47,6 +50,7 @@ a character vector of convention names.
 |---|---|---|
 | `n4io_to_spec` | `n4io_to_spec(input_json, conventions_json = NULL)` | canonical `DatasetSpec` as a JSON string |
 | `n4io_infer` | `n4io_infer(input_json, conventions_json = NULL)` | scored `DatasetPlan` as a JSON string |
+| `n4io_load_summary` | `n4io_load_summary(input_json, conventions_json = NULL)` | assembled structural summary as a JSON string |
 | `n4io_validate` | `n4io_validate(spec_json)` | `invisible(NULL)`; raises an R error if the spec is invalid |
 | `n4io_abi_version` | `n4io_abi_version()` | the C ABI version string |
 

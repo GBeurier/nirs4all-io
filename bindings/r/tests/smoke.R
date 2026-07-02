@@ -33,6 +33,10 @@ n4io_validate(spec)
 plan <- n4io_infer(flist_json)
 stopifnot(grepl('"resolved_spec"', plan, fixed = TRUE))
 
+# n4io_load_summary runs the materialize path and returns the assembled summary.
+summary_json <- n4io_load_summary(flist_json)
+stopifnot(grepl('"blocks"', summary_json, fixed = TRUE), endsWith(summary_json, "\n"))
+
 # A bad spec is rejected (error).
 bad <- tryCatch({
   n4io_validate('{"partitions": {"by": "random"}}')
@@ -53,9 +57,12 @@ rs <- nio_resolved_spec(fl_plan)
 stopifnot(inherits(rs, "n4io_spec"))
 stopifnot(isTRUE(nio_validate(rs)))
 
-# Public R surface parity guard: the current R package does not expose
-# load/assemble yet, but it must preserve native loading controls used by the
-# Python and WASM surfaces when callers marshal specs through nio_*.
+summary <- nio_load(c(xcsv, ycsv))
+stopifnot(is.list(summary), length(summary$blocks) >= 1L)
+
+# Public R surface parity guard: load_summary is bytes-free JSON, so specs must
+# preserve the same loading controls used by the Python and WASM surfaces when
+# callers marshal them through nio_*.
 policy_spec <- as.list(nio_to_spec(c(xcsv, ycsv)))
 policy_spec$params <- list(
   na = list(policy = "replace", fill = list(method = "value", fill_value = 0.0)),

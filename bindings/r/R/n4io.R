@@ -21,6 +21,17 @@ n4io_infer <- function(input_json, conventions_json = NULL) {
   .Call("r_n4io_infer", input_json, conventions_json)
 }
 
+#' Materialize an input and return the assembled structural summary (JSON string).
+#'
+#' @param input_json A JSON value: a spec object, a path string (e.g.
+#'   \code{'"/data/run"'}), or a file-list array (e.g. \code{'["a.csv","b.csv"]'}).
+#' @param conventions_json Optional JSON array of convention names, or NULL.
+#' @return The assembled dataset summary as a JSON string.
+#' @export
+n4io_load_summary <- function(input_json, conventions_json = NULL) {
+  .Call("r_n4io_load_summary", input_json, conventions_json)
+}
+
 #' Validate a DatasetSpec JSON string; raises an error if invalid.
 #'
 #' @param spec_json A DatasetSpec as a JSON string.
