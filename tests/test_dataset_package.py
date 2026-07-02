@@ -158,3 +158,50 @@ def test_reference_dataset_adapter_uses_to_io_spec(tmp_path):
     np.testing.assert_allclose(block.X[0], [[0.1, 0.3], [0.2, 0.4]], rtol=1e-6)
     np.testing.assert_allclose(block.y, [[5.0], [6.0]], rtol=1e-6)
     assert block.metadata["site"].tolist() == ["north", "south"]
+
+
+def test_reference_dataset_adapter_accepts_bare_spec_with_absolute_paths(tmp_path):
+    x_path = tmp_path / "X.parquet"
+    variables_path = tmp_path / "variables.parquet"
+    pd.DataFrame({"observation_id": ["o1", "o2"], "sample_id": ["s1", "s2"], "1100": [0.1, 0.2], "1102": [0.3, 0.4]}).to_parquet(x_path)
+    pd.DataFrame({"sample_id": ["s1", "s2"], "protein": [5.0, 6.0], "site": ["north", "south"]}).to_parquet(variables_path)
+
+    # Matches nirs4all-datasets.NirsDataset.to_io_spec(): it returns a bare
+    # JSON-ready spec dict whose source inputs are already canonical file paths.
+    class ReferenceDatasetDouble:
+        def to_io_spec(self):
+            return {
+                "name": "reference_abs",
+                "sample_index": {"by": "id", "key": "sample_id", "observation_id": "observation_id"},
+                "sources": [
+                    {
+                        "id": "X",
+                        "role": "mixed",
+                        "input": str(x_path),
+                        "key": "sample_id",
+                        "columns": [
+                            {"role": "ignore", "select": ["observation_id", "sample_id"]},
+                            {"role": "features", "select": ["1100", "1102"]},
+                        ],
+                    },
+                    {
+                        "id": "variables",
+                        "role": "mixed",
+                        "input": str(variables_path),
+                        "key": "sample_id",
+                        "columns": [
+                            {"role": "targets", "select": ["protein"]},
+                            {"role": "metadata", "select": ["site"]},
+                        ],
+                        "join": {"to": "X", "on": "sample_id", "how": "m:1", "coverage": "warn"},
+                    },
+                ],
+            }
+
+    package = nio.load(ReferenceDatasetDouble(), target="dataset_package")
+
+    assert package.name == "reference_abs"
+    block = package.to_assembled().blocks["train"]
+    np.testing.assert_allclose(block.X[0], [[0.1, 0.3], [0.2, 0.4]], rtol=1e-6)
+    np.testing.assert_allclose(block.y, [[5.0], [6.0]], rtol=1e-6)
+    assert block.metadata["site"].tolist() == ["north", "south"]
