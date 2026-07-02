@@ -532,11 +532,11 @@ def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: l
     block = PartitionBlock(n_samples=len(combined))
     # multi-source X: each feature source contributes its own array (aligned to combined rows)
     for ft in feature_tables:
-        cols = [c for c in combined.columns if role_cols.get(c) == ("features", ft.source_id)]
+        cols, headers = _source_feature_columns(combined, role_cols, ft)
         if not cols:
             continue
         block.X.append(coerce_numeric(combined[cols]))
-        block.feature_headers.append(cols)
+        block.feature_headers.append(headers)
         block.header_units.append(ft.header_unit)
         block.signal_types.append(ft.signal_type)
         # variations: re-align each pre-loaded array to the combined frame using
@@ -626,10 +626,45 @@ def _collect_roles(combined: pd.DataFrame, tables: dict[str, SourceTable]) -> di
             if col in combined.columns and col not in role_cols:
                 role_cols[col] = (role, t.source_id)
             else:
-                ns = f"{col}__{t.source_id}"
-                if ns in combined.columns:
-                    role_cols[ns] = (role, t.source_id)
+                for ns in (f"{col}__{t.source_id}", f"{t.source_id}__{col}"):
+                    if ns in combined.columns:
+                        role_cols[ns] = (role, t.source_id)
+                        break
     return role_cols
+
+
+def _source_feature_columns(combined: pd.DataFrame, role_cols: dict[str, tuple[str, str]], source: SourceTable) -> tuple[list[str], list[str]]:
+    """Return combined-frame columns plus source-native headers for one feature source.
+
+    Relational joins namespace duplicate right-hand columns as ``<col>__<source>``;
+    row-order feature concatenation namespaces them as ``<source>__<col>``. The
+    package keeps feature sources separate, so headers should remain the source's
+    native axis labels while ``cols`` points at the actual combined-frame columns.
+    """
+    cols: list[str] = []
+    headers: list[str] = []
+    for col in combined.columns:
+        if role_cols.get(col) != ("features", source.source_id):
+            continue
+        cols.append(col)
+        headers.append(_source_feature_header(col, source))
+    return cols, headers
+
+
+def _source_feature_header(combined_col: str, source: SourceTable) -> str:
+    if source.roles.get(combined_col) == "features":
+        return combined_col
+    suffix = f"__{source.source_id}"
+    if combined_col.endswith(suffix):
+        bare = combined_col[: -len(suffix)]
+        if source.roles.get(bare) == "features":
+            return bare
+    prefix = f"{source.source_id}__"
+    if combined_col.startswith(prefix):
+        bare = combined_col[len(prefix) :]
+        if source.roles.get(bare) == "features":
+            return bare
+    return combined_col
 
 
 def _slice_block(block: PartitionBlock, mask: np.ndarray) -> PartitionBlock:

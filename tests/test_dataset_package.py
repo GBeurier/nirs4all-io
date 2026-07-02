@@ -184,3 +184,43 @@ def test_reference_dataset_adapter_uses_to_io_spec(tmp_path):
     np.testing.assert_allclose(block.X[0], [[0.1, 0.3], [0.2, 0.4]], rtol=1e-6)
     np.testing.assert_allclose(block.y, [[5.0], [6.0]], rtol=1e-6)
     assert block.metadata["site"].tolist() == ["north", "south"]
+
+
+def test_reference_dataset_adapter_preserves_row_aligned_multisource_headers(tmp_path):
+    _csv(tmp_path / "X1.csv", pd.DataFrame({"sample_id": ["s1", "s2"], "1100": [0.1, 0.2], "1102": [0.3, 0.4]}))
+    _csv(tmp_path / "X2.csv", pd.DataFrame({"sample_id": ["s1", "s2"], "1100": [1.1, 1.2], "1102": [1.3, 1.4]}))
+
+    class ReferenceDatasetDouble:
+        def to_io_spec(self):
+            return (
+                {
+                    "name": "multi-reference",
+                    "sample_index": {"by": "id", "key": "sample_id"},
+                    "sources": [
+                        {
+                            "id": "X1",
+                            "role": "mixed",
+                            "input": "X1.csv",
+                            "key": "sample_id",
+                            "columns": [{"role": "features", "select": ["1100", "1102"]}],
+                        },
+                        {
+                            "id": "X2",
+                            "role": "mixed",
+                            "input": "X2.csv",
+                            "key": "sample_id",
+                            "columns": [{"role": "features", "select": ["1100", "1102"]}],
+                            "join": {"to": "X1", "how": "1:1"},
+                        },
+                    ],
+                },
+                tmp_path,
+            )
+
+    package = nio.to_dataset_package(ReferenceDatasetDouble())
+
+    block = package.to_assembled().blocks["train"]
+    assert len(block.X) == 2
+    assert block.feature_headers == [["1100", "1102"], ["1100", "1102"]]
+    np.testing.assert_allclose(block.X[0], [[0.1, 0.3], [0.2, 0.4]], rtol=1e-6)
+    np.testing.assert_allclose(block.X[1], [[1.1, 1.3], [1.2, 1.4]], rtol=1e-6)
