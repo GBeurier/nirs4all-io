@@ -1244,11 +1244,9 @@ fn join_onto(
 
 /// column -> (role, owning_source_id), mirroring `_collect_roles` verbatim.
 ///
-/// Edge case (reproduced from Python for parity): if a non-primary source's role
-/// column name collides with a bare (unassigned/key) column already in
-/// `combined`, the bare name is recorded even though the join suffixed the
-/// source's column to `name__<source>`. This can mis-own the column — but it is
-/// the Python behavior, so it stays for byte/parity fidelity; do not "fix" here.
+/// Joins namespace duplicate right-hand columns as `name__source`, while
+/// row-order feature concatenation namespaces them as `source__name`. Both forms
+/// must be recognized so secondary feature sources are not silently dropped.
 fn collect_roles(
     combined: &Frame,
     tables: &IndexMap<&String, &SourceTable>,
@@ -1259,14 +1257,45 @@ fn collect_roles(
             if combined.has_column(col) && !role_cols.contains_key(col) {
                 role_cols.insert(col.clone(), (role.clone(), t.source_id.clone()));
             } else {
-                let ns = format!("{col}__{}", t.source_id);
-                if combined.has_column(&ns) {
-                    role_cols.insert(ns, (role.clone(), t.source_id.clone()));
+                for ns in [
+                    format!("{col}__{}", t.source_id),
+                    format!("{}__{col}", t.source_id),
+                ] {
+                    if combined.has_column(&ns) {
+                        role_cols.insert(ns, (role.clone(), t.source_id.clone()));
+                        break;
+                    }
                 }
             }
         }
     }
     role_cols
+}
+
+fn source_has_feature_role(source: &SourceTable, col: &str) -> bool {
+    source
+        .roles
+        .iter()
+        .any(|(name, role)| name == col && role == "features")
+}
+
+fn source_feature_header(combined_col: &str, source: &SourceTable) -> String {
+    if source_has_feature_role(source, combined_col) {
+        return combined_col.to_string();
+    }
+    let suffix = format!("__{}", source.source_id);
+    if let Some(bare) = combined_col.strip_suffix(&suffix) {
+        if source_has_feature_role(source, bare) {
+            return bare.to_string();
+        }
+    }
+    let prefix = format!("{}__", source.source_id);
+    if let Some(bare) = combined_col.strip_prefix(&prefix) {
+        if source_has_feature_role(source, bare) {
+            return bare.to_string();
+        }
+    }
+    combined_col.to_string()
 }
 
 fn assemble_block(
@@ -1313,8 +1342,9 @@ fn assemble_block(
         if cols.is_empty() {
             continue;
         }
+        let headers: Vec<String> = cols.iter().map(|c| source_feature_header(c, ft)).collect();
         block.x.push(combined.coerce_numeric(&cols));
-        block.feature_headers.push(cols);
+        block.feature_headers.push(headers);
         block.header_units.push(ft.header_unit.clone());
         block.signal_types.push(ft.signal_type.clone());
         let mut src_proc: Vec<(String, Matrix)> = Vec::new();

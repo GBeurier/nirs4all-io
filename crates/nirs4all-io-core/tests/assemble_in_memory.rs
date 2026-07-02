@@ -377,6 +377,69 @@ fn records_path_full_value_carries_x_y_metadata() {
 }
 
 #[test]
+fn row_aligned_multisource_duplicate_headers_remain_separate_blocks() {
+    let spec = DatasetSpec::from_value(&json!({
+        "name": "multi-reference",
+        "sample_index": {"by": "id", "key": "sample_id"},
+        "sources": [
+            {
+                "id": "X1",
+                "role": "mixed",
+                "input": "X1.csv",
+                "key": "sample_id",
+                "columns": [{"role": "features", "select": ["1100", "1102"]}],
+            },
+            {
+                "id": "X2",
+                "role": "mixed",
+                "input": "X2.csv",
+                "key": "sample_id",
+                "columns": [{"role": "features", "select": ["1100", "1102"]}],
+                "join": {"to": "X1", "how": "1:1"},
+            },
+        ],
+    }))
+    .expect("spec");
+    validate_spec(&spec).expect("valid spec");
+
+    let sources = vec![
+        InMemorySource {
+            name: "X1.csv".into(),
+            payload: SourcePayload::Bytes(
+                csv(&[
+                    ("sample_id", strs(&["s1", "s2"])),
+                    ("1100", fnum(&[0.1, 0.2])),
+                    ("1102", fnum(&[0.3, 0.4])),
+                ])
+                .into_bytes(),
+            ),
+        },
+        InMemorySource {
+            name: "X2.csv".into(),
+            payload: SourcePayload::Bytes(
+                csv(&[
+                    ("sample_id", strs(&["s1", "s2"])),
+                    ("1100", fnum(&[1.1, 1.2])),
+                    ("1102", fnum(&[1.3, 1.4])),
+                ])
+                .into_bytes(),
+            ),
+        },
+    ];
+
+    let assembled =
+        assemble_in_memory(&spec, &sources, &HashMap::new(), None).expect("assemble multi-source");
+    let block = &assembled.blocks["train"];
+    assert_eq!(block.x.len(), 2);
+    assert_eq!(
+        block.feature_headers,
+        vec![vec!["1100", "1102"], vec!["1100", "1102"]]
+    );
+    assert_eq!(block.x[0].data, vec![0.1, 0.3, 0.2, 0.4]);
+    assert_eq!(block.x[1].data, vec![1.1, 1.3, 1.2, 1.4]);
+}
+
+#[test]
 fn frame_payload_applies_source_na_policy_after_projection() {
     let spec = DatasetSpec::from_value(&json!({
         "name": "frame-na",
