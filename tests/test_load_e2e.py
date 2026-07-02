@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import nirs4all_io as nio
 
@@ -183,6 +184,11 @@ def test_load_in_memory_xy():
 def test_load_in_memory_x_only_is_predict():
     asm = nio.load(np.random.rand(4, 3), target="assembled")
     assert "predict" in asm.blocks
+
+
+def test_load_dag_ml_data_target_points_to_rust_bridge():
+    with pytest.raises(NotImplementedError, match="nirs4all-io-dagml"):
+        nio.load(np.random.rand(4, 3), target="dag-ml-data")
 
 
 # --------------------------------------------------------------------------- #
