@@ -26,15 +26,31 @@ from ._native import __version__, assembled_full, load_summary
 from ._native import infer as _native_infer
 from ._native import to_spec as _native_to_spec
 from ._native import validate as _native_validate
+from ._package import (
+    DatasetPackage,
+    PayloadManifest,
+    PayloadManifestEntry,
+    PayloadStorageKind,
+    RowPositionFallback,
+    repr_ids,
+)
 
 __all__ = [
     "infer",
     "to_spec",
     "validate",
     "load",
+    "to_dataset_package",
+    "describe_dataset_package",
     "to_spectrodataset",
     "DatasetPlan",
     "DatasetSpec",
+    "DatasetPackage",
+    "PayloadManifest",
+    "PayloadManifestEntry",
+    "PayloadStorageKind",
+    "RowPositionFallback",
+    "repr_ids",
     "__version__",
 ]
 
@@ -93,25 +109,26 @@ def _absolutize_dataset_spec_refs(spec: dict[str, Any], base_dir: Path) -> None:
         folds["file"] = _absolutize_input_ref(folds["file"], base_dir)
 
 
-def _adapt_to_io_spec(input: Any) -> Any:
+def _adapt_to_io_spec(input: Any, *, base_dir: str | Path | None = None) -> Any:
     adapter = getattr(input, "to_io_spec", None)
     if not callable(adapter):
-        return input
-
-    raw = adapter()
-    base_dir: Path | None = None
+        raw = input
+        explicit_base = Path(base_dir) if base_dir is not None else None
+    else:
+        raw = adapter()
+        explicit_base = Path(base_dir) if base_dir is not None else None
     if isinstance(raw, tuple):
         if len(raw) != 2:
             raise ValueError("to_io_spec() must return a spec dict or a (spec, base_dir) pair")
         raw, base = raw
-        base_dir = Path(base) if base is not None else None
+        explicit_base = Path(base_dir or base) if base is not None else explicit_base
 
     if not isinstance(raw, dict):
-        raise TypeError(f"to_io_spec() returned {type(raw).__name__}, expected dict or (dict, base_dir)")
+        return raw
 
     spec = _plain_data(raw)
-    if base_dir is not None:
-        _absolutize_dataset_spec_refs(spec, base_dir)
+    if explicit_base is not None:
+        _absolutize_dataset_spec_refs(spec, explicit_base)
     return spec
 
 
@@ -232,6 +249,7 @@ def load(
     target: str = "assembled",
     conventions: list[str] | None = None,
     name: str | None = None,
+    base_dir: str | Path | None = None,
     spectro_dataset_cls: type | None = None,
 ) -> Any:
     """Materialize ``input``.
@@ -249,10 +267,53 @@ def load(
     Returns:
         The assembled summary ``dict`` or a ``SpectroDataset``.
     """
-    native_input = _normalize_input(_adapt_to_io_spec(input))
+    if isinstance(input, DatasetPackage):
+        if target in {"dataset_package", "package"}:
+            return input
+        if target == "spectrodataset":
+            return to_spectrodataset(input._full, spectro_dataset_cls=spectro_dataset_cls)
+        if target == "assembled":
+            return input.to_assembled()
+    native_input = _normalize_input(_adapt_to_io_spec(input, base_dir=base_dir))
     if target == "assembled":
         return load_summary(native_input, conventions, name)
+    if target in {"dataset_package", "package"}:
+        return DatasetPackage(assembled_full(native_input, conventions, name))
     if target == "spectrodataset":
         full = assembled_full(native_input, conventions, name)
         return to_spectrodataset(full, spectro_dataset_cls=spectro_dataset_cls)
-    raise ValueError(f"unknown target {target!r}; expected 'assembled' | 'spectrodataset'")
+    if target in {"dag-ml-data", "dag_ml_data"}:
+        raise NotImplementedError(
+            "target 'dag-ml-data' is not exposed by the Python pyo3 binding; use the Rust bridge crate "
+            "`crates/nirs4all-io-dagml` (`to_dag_ml_data` / `emit-dagml`)"
+        )
+    raise ValueError(f"unknown target {target!r}; expected 'assembled' | 'spectrodataset' | 'dataset_package' | 'package'")
+
+
+def to_dataset_package(
+    input: Any,
+    *,
+    conventions: list[str] | None = None,
+    base_dir: str | Path | None = None,
+    name: str | None = None,
+) -> DatasetPackage:
+    """Materialize ``input`` into a target-agnostic :class:`DatasetPackage`."""
+    if isinstance(input, DatasetPackage):
+        return input
+    package = load(input, target="dataset_package", conventions=conventions, base_dir=base_dir, name=name)
+    if not isinstance(package, DatasetPackage):
+        raise TypeError(f"target 'dataset_package' returned {type(package).__name__}, expected DatasetPackage")
+    return package
+
+
+def describe_dataset_package(
+    input: Any,
+    *,
+    conventions: list[str] | None = None,
+    base_dir: str | Path | None = None,
+    name: str | None = None,
+    canonical: bool = False,
+) -> dict[str, Any] | str:
+    """Return a bytes-free package summary for ``input``."""
+    package = to_dataset_package(input, conventions=conventions, base_dir=base_dir, name=name)
+    return package.to_canonical_summary() if canonical else package.to_summary_dict()
