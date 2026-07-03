@@ -926,6 +926,19 @@ mod tests {
         a
     }
 
+    fn uri_ref(name: &str, dtype: &str, shape: Vec<usize>, axes: Vec<&str>) -> UriRef {
+        let bytes = format!("{name}:{dtype}:{shape:?}");
+        UriRef {
+            uri: format!("s3://bucket/{name}.bin"),
+            dtype: dtype.into(),
+            shape,
+            axes: axes.into_iter().map(str::to_string).collect(),
+            content_hash: sha256_hex(bytes.as_bytes()),
+            byte_len: bytes.len() as u64,
+            codec: Some("raw".into()),
+        }
+    }
+
     #[test]
     fn from_assembled_round_trips_losslessly() {
         let a = assembled(base_block());
@@ -1121,5 +1134,131 @@ mod tests {
         assert!(summary.contains("s3://bucket/cube.npy"));
         assert!(summary.contains("\"uri\""));
         assert!(!summary.contains("\"data\""));
+    }
+
+    #[test]
+    fn spectral_record_set_manifest_hashes_inline_records() {
+        let records = PayloadBlock::SpectralRecordSet(SpectralRecordSet {
+            records: vec![
+                json!({
+                    "metadata": {"sample_id": "s1"},
+                    "signals": {"absorbance": {"values": [0.1, 0.2]}}
+                }),
+                json!({
+                    "metadata": {"sample_id": "s2"},
+                    "signals": {"absorbance": {"values": [0.3, 0.4]}}
+                }),
+            ],
+        });
+        let entry = records.manifest_entry("train", "train/records");
+        assert_eq!(entry.role, "features");
+        assert_eq!(entry.payload_kind, "spectral_record_set");
+        assert_eq!(entry.dtype, "records");
+        assert_eq!(entry.shape, vec![2]);
+        assert_eq!(entry.axes, vec!["sample"]);
+        assert_eq!(entry.storage, PayloadStorageKind::Inline);
+        assert!(entry.byte_len > 0);
+
+        let tampered = PayloadBlock::SpectralRecordSet(SpectralRecordSet {
+            records: vec![json!({
+                "metadata": {"sample_id": "s1"},
+                "signals": {"absorbance": {"values": [0.1, 0.9]}}
+            })],
+        });
+        let tampered_entry = tampered.manifest_entry("train", "train/records");
+        assert_ne!(entry.content_hash, tampered_entry.content_hash);
+    }
+
+    #[test]
+    fn uri_backed_declared_variants_have_distinct_manifest_shapes() {
+        let sequence_uri = uri_ref(
+            "series",
+            "float32",
+            vec![2, 10, 3],
+            vec!["sample", "time", "channel"],
+        );
+        let genotype_uri = uri_ref("dosage", "uint8", vec![2, 4], vec!["sample", "variant"]);
+        let mask_uri = uri_ref(
+            "mask",
+            "bool",
+            vec![2, 64, 64],
+            vec!["sample", "height", "width"],
+        );
+        let bare_uri = uri_ref(
+            "cube",
+            "uint16",
+            vec![2, 8, 8, 16],
+            vec!["sample", "height", "width", "band"],
+        );
+
+        let cases = vec![
+            (
+                PayloadBlock::SequenceBlock(SequenceBlock {
+                    representation_id: "series_mv".into(),
+                    dtype: "float32".into(),
+                    n_channels: 3,
+                    lengths: vec![10, 10],
+                    uri: sequence_uri.clone(),
+                }),
+                "sequence_block",
+                Some("series_mv"),
+                "features",
+                vec![2, 10, 3],
+                vec!["sample", "time", "channel"],
+                sequence_uri,
+            ),
+            (
+                PayloadBlock::GenotypeMatrix(GenotypeMatrix {
+                    representation_id: "dosage_matrix".into(),
+                    n_variants: 4,
+                    n_samples: 2,
+                    encoding: "dosage".into(),
+                    uri: genotype_uri.clone(),
+                }),
+                "genotype_matrix",
+                Some("dosage_matrix"),
+                "features",
+                vec![2, 4],
+                vec!["sample", "variant"],
+                genotype_uri,
+            ),
+            (
+                PayloadBlock::MaskBlock(MaskBlock {
+                    representation_id: "segmentation_mask".into(),
+                    dtype: "bool".into(),
+                    shape: vec![2, 64, 64],
+                    uri: mask_uri.clone(),
+                }),
+                "mask_block",
+                Some("segmentation_mask"),
+                "mask",
+                vec![2, 64, 64],
+                vec!["sample", "height", "width"],
+                mask_uri,
+            ),
+            (
+                PayloadBlock::UriBackedPayload(bare_uri.clone()),
+                "uri_backed",
+                None,
+                "features",
+                vec![2, 8, 8, 16],
+                vec!["sample", "height", "width", "band"],
+                bare_uri,
+            ),
+        ];
+
+        for (payload, kind, repr, role, shape, axes, uri) in cases {
+            let entry = payload.manifest_entry("train", kind);
+            assert_eq!(entry.payload_kind, kind);
+            assert_eq!(entry.representation_id.as_deref(), repr);
+            assert_eq!(entry.role, role);
+            assert_eq!(entry.shape, shape);
+            assert_eq!(entry.axes, axes);
+            assert_eq!(entry.storage, PayloadStorageKind::Uri);
+            assert_eq!(entry.uri.as_deref(), Some(uri.uri.as_str()));
+            assert_eq!(entry.content_hash, uri.content_hash);
+            assert_eq!(entry.byte_len, uri.byte_len);
+            assert_eq!(entry.codec, uri.codec);
+        }
     }
 }
