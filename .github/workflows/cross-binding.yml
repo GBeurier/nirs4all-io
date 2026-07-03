@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
-# EPIC 12.4 — cross-binding behavioral parity: the CLI, WASM, and R bindings must
-# normalize the same spec into byte-identical canonical DatasetSpec JSON.
+# EPIC 12.4 — cross-binding behavioral parity: every locally-available binding
+# harnessed by tests/cross_binding/verify.sh must normalize the same spec into
+# byte-identical canonical DatasetSpec JSON.
 name: Cross-binding parity
 on:
   push:
@@ -22,5 +23,5 @@ jobs:
         with:
           node-version: "22"
       - uses: r-lib/actions/setup-r@v2
-      - name: Cross-binding parity (CLI ≡ WASM ≡ R)
+      - name: Cross-binding parity (available bindings)
         run: bash tests/cross_binding/verify.sh
