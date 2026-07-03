@@ -18,6 +18,10 @@ joins, signal/task-type inference, and a declarative convention system. It
 matches the expressiveness of `nirs4all`'s `DatasetConfig`/`DatasetLoader` and
 adds a score-based inference engine.
 
+Part of the [open-source NIRS tools](https://nirs4all.org/open-source-nirs-tools.html)
+ecosystem: file readers, datasets, methods, browser modelling, reproducible pipelines,
+papers, benchmarks, and release dashboards for near-infrared spectroscopy.
+
 ```
 any input ──► RESOLVE ──► INFER ──► CONFIGURE ──► MATERIALIZE ──► SpectroDataset / DatasetPackage
               (InputSet)  (DatasetPlan, scored)   (DatasetSpec)    or dag-ml-data envelope (Rust bridge)
