@@ -95,10 +95,27 @@ fn is_glob(text: &str) -> bool {
 }
 
 fn canonical_string(path: &Path) -> String {
-    std::fs::canonicalize(path)
+    let raw = std::fs::canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
-        .into_owned()
+        .into_owned();
+    strip_windows_verbatim_prefix(&raw)
+}
+
+fn strip_windows_verbatim_prefix(text: &str) -> String {
+    const VERBATIM: &str = "\\\\?\\";
+    const VERBATIM_UNC: &str = "\\\\?\\UNC\\";
+
+    if let Some(rest) = text.strip_prefix(VERBATIM_UNC) {
+        return format!("\\\\{rest}");
+    }
+    if let Some(rest) = text.strip_prefix(VERBATIM) {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3 && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/') {
+            return rest.to_string();
+        }
+    }
+    text.to_string()
 }
 
 /// Python `Path.stem`: filename minus the final suffix.
@@ -308,5 +325,21 @@ mod tests {
         assert_eq!(iset.names(), vec!["X.csv"]);
         assert_eq!(iset.origin["kind"], "files");
         assert_eq!(iset.origin["missing"], serde_json::json!(["nope.csv"]));
+    }
+
+    #[test]
+    fn canonical_string_strips_windows_verbatim_prefixes() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\C:\tmp\n4io_smoke\X.csv"),
+            r"C:\tmp\n4io_smoke\X.csv"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\X.csv"),
+            r"\\server\share\X.csv"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\not-a-drive-root"),
+            r"\\?\not-a-drive-root"
+        );
     }
 }
