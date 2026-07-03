@@ -419,18 +419,18 @@ dependencies = [
 
 [[package]]
 name = "dag-ml-data"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04b43c8e50fa73976f504c2b94d2761fbb3f1e8b8e389f280d781134300d9fb4"
+checksum = "62013ef44c3e798f4007bc28eecc494708ac875e752a6ba63dcb3c8013ab398e"
 dependencies = [
  "dag-ml-data-core",
 ]
 
 [[package]]
 name = "dag-ml-data-core"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0d1a9ddf109ec2c2a265721e7ab7da9580d6bffed5721847d62e4aeda8f6e14"
+checksum = "9e093b4095029f14aa63940b5017cf02c33b5892363a8ac1daf55fc68b10469d"
 dependencies = [
  "serde",
  "serde_json",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-capi"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cbindgen",
  "nirs4all-io",
@@ -798,7 +798,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "csv",
  "indexmap",
