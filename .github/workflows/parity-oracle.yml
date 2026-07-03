@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 # EPIC 12.1 — direct parity oracle: the pyo3 binding's Rust→SpectroDataset must
 # equal nirs4all's own DatasetConfigs (tests/test_parity.py). Needs the sibling
-# nirs4all; SKIPs cleanly if unavailable so it is green on the standalone repo and
-# runs for real in the ecosystem tree.
+# nirs4all + dag-ml; this gate must run for real on main.
 name: Parity oracle
 on:
   push:
@@ -20,17 +19,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Fetch sibling nirs4all (best-effort)
-        run: git clone --depth 1 https://github.com/GBeurier/nirs4all.git ../nirs4all || true
+      - name: Fetch parity oracle repos
+        run: |
+          git clone --depth 1 https://github.com/GBeurier/nirs4all.git ../nirs4all
+          git clone --depth 1 https://github.com/GBeurier/dag-ml.git ../dag-ml
       - name: Build the binding wheel + run the parity oracle
         run: |
-          if [ ! -f ../nirs4all/pyproject.toml ]; then
-            echo "SKIP: sibling nirs4all unavailable; parity oracle not run."
-            exit 0
-          fi
           pip install maturin pytest
           maturin build -m bindings/python/Cargo.toml --interpreter python3 --out dist
           # The binding (nirs4all_io) + real nirs4all — no pure-Python MVP here.
           pip install dist/*.whl
+          mkdir -p ../dag-ml/dist
+          maturin build -m ../dag-ml/crates/dag-ml-py/Cargo.toml --interpreter python3 --out ../dag-ml/dist
+          pip install ../dag-ml/dist/*.whl
           pip install -e ../nirs4all
           python -m pytest tests/test_parity.py -m parity -v
