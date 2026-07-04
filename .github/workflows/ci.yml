@@ -39,7 +39,7 @@ jobs:
         # are not on PyPI; a clean runner only has this repo. Install the
         # available runtime + data extras + tooling, and skip the parity oracle
         # (the only `parity`/`formats`-marked tests; `importorskip`-guarded too).
-        run: pip install -e ".[parquet,excel]" scipy pytest ruff mypy
+        run: pip install -e ".[parquet,excel]" scipy pytest ruff mypy pydantic python-dotenv matplotlib requests typer
       - name: Ruff
         run: ruff check .
       - name: Mypy
