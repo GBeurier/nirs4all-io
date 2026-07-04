@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,26 @@ import numpy as np
 import nirs4all_io as nio
 
 SCENARIO_ID = "e2e-formats-io-datasets-methods-language-bindings"
-REFERENCE_DATASET_IDS = (
-    "cgl_nir_grain_eigenvector",
-    "ohpl_beer_nir",
+REFERENCE_CASES: tuple[tuple[str, dict[str, Any]], ...] = (
+    (
+        "io_single_source_split",
+        {
+            "blocks": ("X",),
+            "sample_of": {"o1": "s1", "o2": "s2", "o3": "s3"},
+            "targets": {"Moisture": "numeric"},
+            "extra_meta": ("site",),
+            "split": {"o1": "cal", "o2": "val", "o3": "test"},
+        },
+    ),
+    (
+        "io_multi_source",
+        {
+            "blocks": ("X1", "X2"),
+            "sample_of": {"o1": "s1", "o2": "s2", "o3": "s3"},
+            "targets": {"Moisture": "numeric"},
+            "extra_meta": ("site", "batch"),
+        },
+    ),
 )
 
 
@@ -38,6 +56,115 @@ def _import_nirs4all_datasets() -> Any:
     import nirs4all_datasets as n4ad
 
     return n4ad
+
+
+def _write_v2_leaf(
+    leaf: Path,
+    *,
+    blocks: Sequence[str],
+    sample_of: dict[str, str],
+    targets: dict[str, str],
+    extra_meta: Sequence[str] = (),
+    split: dict[str, str] | None = None,
+) -> None:
+    """Write a small schema-2.0 leaf, then let nirs4all-datasets canonicalize it."""
+    leaf.mkdir(parents=True, exist_ok=True)
+    observations = tuple(sample_of)
+
+    spectral_blocks = []
+    for block_index, block_id in enumerate(blocks):
+        rows = []
+        for row_index, observation_id in enumerate(observations):
+            base = 0.1 * (block_index + 1) + 0.01 * row_index
+            rows.append(f"{observation_id};{base:.6f};{base + 0.1:.6f};{base + 0.2:.6f}")
+        (leaf / f"{block_id}.csv").write_text(
+            "observation_id;1100;1102;1104\n" + "\n".join(rows) + "\n",
+            encoding="utf-8",
+        )
+        spectral_blocks.append(
+            {
+                "block_id": block_id,
+                "x_file": f"{block_id}.csv",
+                "instrument_name": f"inst_{block_id}",
+                "axis_unit": "nm",
+                "axis_min": "1100",
+                "axis_max": "1104",
+                "n_rows": len(observations),
+                "n_spectral_variables": 3,
+            }
+        )
+
+    y_header = ["observation_id", *targets]
+    y_rows = []
+    for row_index, observation_id in enumerate(observations):
+        cells = [observation_id]
+        for target_type in targets.values():
+            if target_type != "numeric":
+                raise ValueError("this E2E fixture only emits numeric targets")
+            cells.append(f"{10.0 + row_index:.6f}")
+        y_rows.append(";".join(cells))
+    (leaf / "Y.csv").write_text(";".join(y_header) + "\n" + "\n".join(y_rows) + "\n", encoding="utf-8")
+
+    metadata_columns = ["dataset_id", "observation_id", "sample_id"]
+    if split is not None:
+        metadata_columns.append("split_original")
+    metadata_columns.extend(extra_meta)
+    metadata_rows = []
+    for row_index, observation_id in enumerate(observations):
+        cells = [leaf.name, observation_id, sample_of[observation_id]]
+        if split is not None:
+            cells.append(split[observation_id])
+        for column_index, _name in enumerate(extra_meta):
+            cells.append(f"m{column_index + 1}_{row_index + 1}")
+        metadata_rows.append(";".join(cells))
+    (leaf / "M.csv").write_text(";".join(metadata_columns) + "\n" + "\n".join(metadata_rows) + "\n", encoding="utf-8")
+
+    card = {
+        "dataset_id": leaf.name,
+        "dataset_name": leaf.name.replace("_", " ").title(),
+        "spectral_organization": {
+            "organization_type": "multi_block" if len(blocks) > 1 else "single_block",
+            "alignment_level": "sample",
+            "n_blocks": len(blocks),
+        },
+        "spectral_blocks": spectral_blocks,
+        "target_summary": {
+            "target_variables": list(targets),
+            "target_types": {name: "regression" for name in targets},
+        },
+        "metadata_fields_summary": {"m_fields": metadata_columns},
+        "split_summary": {
+            "original_split_available": split is not None,
+            "split_should_be_preserved_not_applied": True,
+        },
+        "license_summary": {
+            "public_release_allowed": True,
+            "license_name": "CC-BY-4.0",
+            "rights_notes": "synthetic deterministic E2E fixture",
+        },
+        "source_summary": {"source_name": "NIRS4ALL E2E fixture", "source_url": "https://example.invalid/nirs4all-e2e"},
+        "detected_sources": [{"url": "https://example.invalid/nirs4all-e2e"}],
+        "associated_publications": [{"doi": "10.5281/zenodo.1", "title": "NIRS4ALL E2E fixture"}],
+    }
+    (leaf / "dataset_card.json").write_text(json.dumps(card, sort_keys=True), encoding="utf-8")
+
+
+def _build_reference_dataset(n4ad: Any, registry_root: Path, name: str, options: dict[str, Any]) -> Any:
+    from nirs4all_datasets.bootstrap import build_descriptor_from_card
+    from nirs4all_datasets.dataset import NirsDataset
+    from nirs4all_datasets.organize import organize
+
+    source_leaf = registry_root / "sources" / name
+    _write_v2_leaf(source_leaf, **options)
+    descriptor, _ = build_descriptor_from_card(source_leaf)
+    result = organize(source_leaf, descriptor, registry_root / "datasets")
+    assert result.dataset_id == name
+    assert (result.dataset_dir / "canonical" / "dataset.json").exists()
+
+    # Smoke the public entry point too; a catalog-free NirsDataset is then used
+    # below so the IO bridge remains independent from catalog lookup policy.
+    assert hasattr(n4ad, "NirsDataset")
+    return NirsDataset(result.dataset_dir, descriptor)
 
 
 def _expected_metadata(reference: Any) -> tuple[list[str], np.ndarray | None]:
@@ -121,11 +248,11 @@ def _validate_reference_dataset(reference: Any) -> dict[str, Any]:
 
 def test_assemble_reference_datasets(artifacts_dir: Path) -> None:
     n4ad = _import_nirs4all_datasets()
-    datasets_root = _datasets_root()
+    registry_root = artifacts_dir / "generated-nirs4all-datasets"
 
     validated = [
-        _validate_reference_dataset(n4ad.get(dataset_id, root=datasets_root))
-        for dataset_id in REFERENCE_DATASET_IDS
+        _validate_reference_dataset(_build_reference_dataset(n4ad, registry_root, name, options))
+        for name, options in REFERENCE_CASES
     ]
 
     out = artifacts_dir / "assembled-datasets.json"
@@ -134,7 +261,8 @@ def test_assemble_reference_datasets(artifacts_dir: Path) -> None:
             {
                 "scenario": SCENARIO_ID,
                 "workspace_root": str(_workspace_root()),
-                "datasets_root": str(datasets_root),
+                "datasets_code_root": str(_datasets_root()),
+                "generated_registry_root": str(registry_root),
                 "datasets": validated,
             },
             ensure_ascii=True,
