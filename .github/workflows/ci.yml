@@ -29,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout datasets sibling
+        run: git clone --depth 1 https://github.com/GBeurier/nirs4all-datasets ../nirs4all-datasets
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
