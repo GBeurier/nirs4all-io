@@ -21,6 +21,6 @@ the docs and the code cannot drift.
    the spec schema because the ABI changed, or vice-versa.
 2. **Goldens are append-only.** A canonical-JSON or schema bump re-blesses the
    golden corpus in the same PR that bumps the constant.
-3. **Crate semver ≠ ABI version.** The cargo workspace version
-   (`0.1.0-alpha.0`) tracks the Rust crates; the C ABI tracks
+3. **Crate semver != ABI version.** The cargo workspace version
+   (`0.1.6`) tracks the Rust crates; the C ABI tracks
    `N4IO_ABI_VERSION`. They move independently.

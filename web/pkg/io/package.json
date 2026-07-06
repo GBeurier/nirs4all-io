@@ -1,15 +1,16 @@
 {
-  "name": "nirs4all-io-wasm",
+  "name": "@nirs4all/io-wasm",
   "type": "module",
   "collaborators": [
-    "Gregory Beurier <beurier@cirad.fr>"
+    "Gregory Beurier <gregory.beurier@cirad.fr>"
   ],
   "description": "wasm-bindgen binding for nirs4all-io: the fs-free JSON surface (to_spec / validate over a spec dict). Excluded from the cargo workspace; built with wasm-pack.",
-  "version": "0.1.0-alpha.0",
-  "license": "CeCILL-2.1 OR AGPL-3.0-or-later",
+  "version": "0.1.6",
+  "license": "CECILL-2.1 OR AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GBeurier/nirs4all-io"
+    "url": "https://github.com/GBeurier/nirs4all-io.git",
+    "directory": "bindings/wasm"
   },
   "files": [
     "nirs4all_io_wasm_bg.wasm",
