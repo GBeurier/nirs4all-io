@@ -20,7 +20,8 @@
 #               Used by the root Cargo.toml [workspace.dependencies]
 #               nirs4all-io-core / nirs4all-io internal-dep `version` (required
 #               so the published crates resolve each other from crates.io),
-#               bindings/python/Cargo.toml, and bindings/wasm/Cargo.toml.
+#               bindings/python/Cargo.toml, bindings/wasm/Cargo.toml, and every
+#               workspace-member package via `version.workspace = true`.
 #               The npm package.json (bindings/wasm/pkg/) is a gitignored
 #               wasm-pack build artifact, NOT a sync target — release-npm.yml
 #               injects the SoT version into it at build time.
@@ -253,6 +254,25 @@ update_with_sed \
     "${CARGO_VERSION}" \
     "^version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
     "s/^(version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
+
+for rel in \
+    "crates/nirs4all-io-core/Cargo.toml" \
+    "crates/nirs4all-io/Cargo.toml" \
+    "crates/nirs4all-io-capi/Cargo.toml" \
+    "crates/nirs4all-io-cli/Cargo.toml" \
+    "crates/nirs4all-io-dagml/Cargo.toml"
+do
+    if ! grep -Eq "^version\\.workspace[[:space:]]*=[[:space:]]*true" "${ROOT}/${rel}"; then
+        if [[ "${MODE}" == "check" ]]; then
+            echo "  DRIFT: ${rel} must use version.workspace = true" >&2
+            DRIFTED+=("${rel}")
+            EXIT_CODE=1
+        else
+            sed -i -E 's/^version[[:space:]]*=[[:space:]]*"[^"]+"/version.workspace = true/' "${ROOT}/${rel}"
+            echo "  updated ${rel}: version.workspace = true"
+        fi
+    fi
+done
 
 # NOTE: bindings/wasm/pkg/package.json is a wasm-pack BUILD ARTIFACT — the whole
 # pkg/ directory is gitignored (bindings/wasm/pkg/.gitignore is `*`), so it is

@@ -13,8 +13,9 @@ wasm-pack build bindings/wasm --target web --release
 wasm-pack build bindings/wasm --target nodejs --release --out-dir pkg-node
 ```
 
-This emits the `nirs4all-formats-wasm` package (JS glue + `.wasm` + TypeScript
-typings) under `pkg/` (or `pkg-node/`).
+This emits the JS glue, `.wasm` binary, and TypeScript typings under `pkg/`
+(or `pkg-node/`). Tagged releases publish that surface as
+`@nirs4all/formats-wasm` on npm.
 
 ## Surface
 
@@ -25,7 +26,7 @@ import init, {
 
 await init();
 
-version();   // "0.1.0-alpha.0"
+version();   // "0.2.2"
 features();  // { hdf5: true, matlab: true, parquet: true }
 readerCatalog(); // [{ reader: "nirs4all_formats::readers::jcamp" }, ...]
 

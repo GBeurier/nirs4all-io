@@ -26,6 +26,11 @@ const wasmBundles = {
     wasm: readBase64("pkg/io/nirs4all_io_wasm_bg.wasm"),
   },
 };
+const brandAssets = {
+  iconSvg: `data:image/svg+xml;base64,${readBase64("brand/icon.svg")}`,
+  favicon: `data:image/x-icon;base64,${readBase64("brand/favicon.ico")}`,
+  icon180: `data:image/png;base64,${readBase64("brand/icon-180.png")}`,
+};
 
 const manifest = JSON.parse(readText("samples/manifest.json"));
 const sampleFiles = manifest.files.map((entry) => ({
@@ -105,6 +110,15 @@ standalone = replaceOne(
   /\s*<script type="module" src="\.\/app\.js"><\/script>\n\s*<script type="module" src="\.\/builder\.js"><\/script>\n/,
   `\n  <script type="module">\n${scriptSafe(standaloneBootstrap)}\n  </script>\n  <script type="module">\n${scriptSafe(appJs)}\n  </script>\n  <script type="module">\n${scriptSafe(builderJs)}\n  </script>\n`,
   "app + builder scripts"
+);
+standalone = standalone
+  .replaceAll('href="brand/icon.svg"', `href="${brandAssets.iconSvg}"`)
+  .replaceAll('href="brand/favicon.ico"', `href="${brandAssets.favicon}"`)
+  .replaceAll('href="brand/icon-180.png"', `href="${brandAssets.icon180}"`)
+  .replaceAll('src="brand/icon.svg"', `src="${brandAssets.iconSvg}"`);
+standalone = standalone.replace(
+  /\s*<!-- GoatCounter privacy-friendly analytics \(no cookies\) -->\n\s*<script data-goatcounter="https:\/\/nirs4all\.goatcounter\.com\/count" data-goatcounter-settings='\{"path": "\/io"\}' async src="\/\/gc\.zgo\.at\/count\.js"><\/script>\n/,
+  "\n",
 );
 standalone = standalone.replace(
   /<title>nirs4all-io · WASM dataset builder<\/title>/,
