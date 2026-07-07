@@ -22,6 +22,26 @@ def golden(name: str) -> str:
     return (CONTRACT / name).read_text()
 
 
+def _normalize_contract_paths(payload: str, base: str | Path = CONTRACT) -> str:
+    base_text = str(base)
+    escaped_base = base_text.replace("\\", "\\\\")
+    for prefix in (escaped_base, base_text):
+        payload = payload.replace(f"{prefix}\\\\", "<CORPUS>/")
+        payload = payload.replace(f"{prefix}/", "<CORPUS>/")
+        payload = payload.replace(prefix, "<CORPUS>")
+    return payload.replace("\\\\", "/")
+
+
+def test_contract_path_normalization_handles_windows_json_escapes():
+    base = r"D:\a\nirs4all-io\nirs4all-io\tests\goldens\contract"
+    payload = (
+        '{"ref": "'
+        r"D:\\a\\nirs4all-io\\nirs4all-io\\tests\\goldens\\contract\\corpus\\single_combined"
+        '"}'
+    )
+    assert _normalize_contract_paths(payload, base) == '{"ref": "<CORPUS>/corpus/single_combined"}'
+
+
 def test_to_spec_dir_is_byte_identical_to_golden():
     # Directory inputs produce relative filenames (no abspath), so no path
     # normalization is needed — a direct byte comparison.
@@ -34,12 +54,11 @@ def test_to_spec_dir_is_byte_identical_to_golden():
 
 
 def test_infer_dir_is_byte_identical_to_golden():
-    base = str(CONTRACT)  # the resolved abspath prefix the goldens normalize to <CORPUS>
     for case, gold in [
         ("single_combined", "inf_single_combined.infer.canonical"),
         ("train_test", "inf_train_test.infer.canonical"),
         ("x_y_separate", "inf_x_y_separate.infer.canonical"),
     ]:
         plan = nio.infer(str(CORPUS / case))
-        produced = canonical(plan).replace(f"{base}/", "<CORPUS>/").replace(base, "<CORPUS>")
+        produced = _normalize_contract_paths(canonical(plan))
         assert produced == golden(gold), f"infer parity drift for {case}"
