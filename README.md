@@ -77,7 +77,7 @@ contract). See [`COMPAT.md`](COMPAT.md) for the full operation matrix.
 - **CLI** — `nirs4all-io` (`infer` / `to-spec` / `validate` / `load`; `emit-dag-ml-data` points to the bridge crate).
 - **dag-ml-data bridge** — `crates/nirs4all-io-dagml` (`to_dag_ml_data` / `emit-dagml`), validated by the cross-CLI conformance gate.
 - **Python** (pyo3/maturin) — [`bindings/python`](bindings/python/README.md); the only surface that builds a real `SpectroDataset`.
-- **R** (`.Call` over the C ABI) — [`bindings/r`](bindings/r/README.md). Install the prebuilt binary from R-universe:
+- **R** (`.Call` over the C ABI) — [`bindings/r`](bindings/r/README.md). R-universe can lag the latest RC tag until its rebuild catches up; use the GitHub Release source tarball for exact-version validation, or install the current R-universe build with:
   ```r
   install.packages("nirs4allio", repos = c("https://gbeurier.r-universe.dev", getOption("repos")))
   ```

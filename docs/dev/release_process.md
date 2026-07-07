@@ -20,7 +20,7 @@ per-surface workflows are `release-crates.yml`, `release-npm.yml`,
 ## Single source of truth
 
 The canonical version is the **`[workspace.package] version` in the root
-`Cargo.toml`** (Cargo SemVer, currently `0.1.6`).
+`Cargo.toml`** (Cargo SemVer, currently `0.1.9`).
 `scripts/bump_version.sh` propagates it to every binding manifest, translating
 the spelling each ecosystem requires:
 
@@ -55,7 +55,7 @@ the `n4io_` exported-symbol surface is diffed by `.github/workflows/abi-check.ym
 | Binding | Package | Registry | Automation | Trigger |
 |---------|---------|----------|------------|---------|
 | Python | `nirs4all-io` | PyPI | **Automated** — `release.yml` (`python-wheels` maturin matrix all-3-OS + `python-sdist`) publishes via Trusted Publishing | push tag `v*` (non-pre-release) → PyPI |
-| R | `nirs4allio` | **R-universe / GitHub Release** (CRAN deferred) | **Build CI-automated** — `release-r.yml` installs + smokes across the matrix, `R CMD build` attaches the tarball. **R-universe is a one-time registry entry. CRAN is a deferred follow-up** (the binding links a prebuilt cdylib; see *R → CRAN*). | tag push attaches the tarball |
+| R | `nirs4allio` | **R-universe / GitHub Release** (CRAN deferred) | **Build CI-automated** — `release-r.yml` installs + smokes across the matrix, then builds a self-contained vendored source tarball. **R-universe is a one-time registry entry; CRAN is a deferred manual web-form step** (see *R → CRAN*). | tag push attaches the tarball |
 | JS / WASM | `@nirs4all/io-wasm` | npm | **Automated** — `release-npm.yml` (wasm-pack nodejs build, scoped name + provenance, node smoke) publishes via `npm publish` | push tag `v*` (non-pre-release) + `NPM_TOKEN` |
 | MATLAB / Octave | `nirs4all-io-matlab-octave-<version>.zip` | GitHub Release | **Automated** — `release-matlab.yml` (`git archive HEAD:bindings/matlab`) | push tag `v*` (non-pre-release) |
 | Rust crates | `nirs4all-io-core`, `nirs4all-io`, `nirs4all-io-capi`, `nirs4all-io-cli` | crates.io | **Automated** — `release-crates.yml` publishes leaf-first | push tag `v*` (non-pre-release) + `CARGO_REGISTRY_TOKEN` |
@@ -137,10 +137,8 @@ default (`dry_run` input), and the npm publish gates on `inputs.publish == true`
 > The `publish-pypi` job runs in the GitHub `pypi` environment, so the OIDC
 > token carries an `environment: pypi` claim — the Trusted Publisher MUST be
 > created with **Environment = `pypi`**. A publisher whose Environment field
-> differs (blank or anything else) fails with `invalid-publisher`. Because the
-> project does not exist on PyPI yet, create this as a **pending publisher**
-> (same form, at the URL above). **One convention across the whole ecosystem:
-> Environment = `pypi`** (identical to `nirs4all-formats` / `nirs4all-methods`).
+> differs (blank or anything else) fails with `invalid-publisher`. Existing
+> project publishers must still use **Environment = `pypi`**.
 
 ### Rust → crates.io
 
@@ -190,32 +188,20 @@ no submission. Users then
 - **Verify**: watch <https://gbeurier.r-universe.dev> (it *shows* the
   `R CMD check` result but, unlike CRAN, does not block on a NOTE/WARNING).
 
-> **Caveat:** the io R binding links the **prebuilt** `nirs4all-io-capi` cdylib,
-> so R-universe's from-Git build needs the cdylib available on its builders.
-> R-universe is the lower-friction target; if its build cannot locate the
-> prebuilt library, the binding must be reworked (see *R → CRAN*).
+> **Caveat:** R-universe builds from Git by running the same vendoring prepare
+> step as `release-r.yml`. Its published binary can lag the current tag until
+> that from-Git rebuild catches up.
 
-### R → CRAN (submission) — deferred follow-up
+### R → CRAN (submission) — deferred maintainer step
 
-> **The io R binding is NOT CRAN-submittable in its current form.** It is a C
-> shim (`bindings/r/src/n4io.c`) that links the **prebuilt**
-> `libnirs4all_io_capi` via `N4IO_INCLUDE` / `N4IO_CAPI_DIR` (see
-> `bindings/r/src/Makevars`). CRAN's build farm has no such prebuilt library and
-> the package does not vendor or compile the Rust core at install time, so a
-> plain `R CMD build bindings/r` tarball **cannot install on CRAN**. The
-> `nirs4allio_<version>.tar.gz` produced by `release-r.yml` is an **R-universe /
-> GitHub-Release asset only**.
->
-> **CRAN self-containment is a tracked follow-up.** A CRAN-submittable io R
-> package requires **reworking the binding** to bundle and compile the Rust core
-> offline at install time (extendr-static, or a vendored cdylib build mirroring
-> `nirs4all-formats`' `./configure` vendor mode: copy the workspace core crates
-> into `src/rust/vendored/`, `cargo vendor` the crates.io closure into
-> `vendor.tar.xz`, and build offline from `src/Makevars(.win)`). Until that
-> lands, ship the R binding via **R-universe + the GitHub Release**.
+`release-r.yml` and `bindings/r/.prepare` create a self-contained source tarball:
+`N4IO_R_VENDOR=1 ./configure` copies the workspace crates into
+`src/rust/vendored/`, vendors the crates.io closure into `vendor.tar.xz`, and
+builds the C ABI static library offline from `src/Makevars(.win)`. Do not submit
+a plain checkout tarball that has not run this vendoring step.
 
-When the CRAN-ready variant exists, CRAN submission is a **manual web form** with
-human review. Get the self-contained source tarball, then upload **only**
+CRAN submission is still a **manual web form** with human review. Get the
+self-contained source tarball from the release workflow, then upload **only**
 `nirs4allio_<version>.tar.gz` at <https://cran.r-project.org/submit.html>:
 
 | Field | Value |
