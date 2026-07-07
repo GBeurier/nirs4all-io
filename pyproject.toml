@@ -36,8 +36,8 @@ dependencies = [
 parquet = ["pyarrow>=14.0.0"]
 excel = ["openpyxl>=3.1.0"]
 matlab = ["scipy>=1.10.0", "h5py>=3.8.0"]
-# Vendor spectroscopy files (OPUS/JCAMP/ASD/...) are read through the renamed
-# reader library. Not yet on PyPI -> install editable from the sibling repo.
+# Vendor spectroscopy files (OPUS/JCAMP/ASD/...) are read through the
+# separately published reader library.
 formats = ["nirs4all-formats"]
 all = ["nirs4all-io[parquet,excel,matlab,formats]"]
 dev = [

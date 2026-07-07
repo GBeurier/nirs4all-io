@@ -9,17 +9,17 @@ pip install nirs4all-io
 ```
 
 The PyPI package is a self-contained wheel built from the Rust core (pyo3
-binding). It ships `numpy` and `pandas` as its only runtime dependencies, so it
-can resolve, infer, configure and assemble datasets — and build the assembled
-structural summary — out of the box. The current wheel reads the **CSV family**
-of tabular inputs.
+binding). It ships `numpy` and `pandas` as runtime dependencies, so it can
+resolve, infer, configure, assemble datasets, build `DatasetPackage` payload
+summaries, and materialize `SpectroDataset` objects when `nirs4all` is installed.
 
 ```{note}
 By design `nirs4all-io` **never decodes vendor bytes itself**: reading **vendor
 spectroscopy files** (OPUS, JCAMP, ASD, …) is delegated to the
 [`nirs4all-formats`](https://nirs4all-formats.readthedocs.io/en/latest/) reader
-library. That vendor-read path, and additional tabular backends, land with the
-broader load path — the published wheel currently handles the CSV family.
+library. That vendor-read path is available through the optional `formats` extra
+or an explicit `nirs4all-formats` install. Without it, the wheel still covers
+the native tabular/spec assembly path.
 ```
 
 ## Materializing a `SpectroDataset`
