@@ -16,7 +16,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 # Rust crates are dual-licensed because they port nirs4all-derived logic
 # (D-R5); see COPY_PROVENANCE.md.
@@ -31,8 +31,8 @@ readme = "README.md"
 # A `version` is REQUIRED for crates.io publishing: cargo strips the `path` at
 # publish time and resolves the dep from crates.io via this version. It MUST
 # track [workspace.package] version — scripts/bump_version.sh keeps it in sync.
-nirs4all-io-core = { path = "crates/nirs4all-io-core", version = "0.1.7" }
-nirs4all-io = { path = "crates/nirs4all-io", version = "0.1.7" }
+nirs4all-io-core = { path = "crates/nirs4all-io-core", version = "0.1.8" }
+nirs4all-io = { path = "crates/nirs4all-io", version = "0.1.8" }
 dag-ml-data = "0.2.4"
 # Third-party. serde_json enables `preserve_order` so that *input* object order
 # mirrors Python dict insertion order (load-bearing for legacy-config
