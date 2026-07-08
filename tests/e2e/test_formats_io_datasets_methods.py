@@ -235,6 +235,12 @@ def _validate_reference_dataset(reference: Any) -> dict[str, Any]:
 
     expected_payload_count = len(block.X) + 1 + (0 if block.metadata is None else 1) + (0 if block.weights is None else 1)
     assert len(manifest.entries) == expected_payload_count
+    dense_x = np.concatenate([np.asarray(matrix, dtype=np.float64) for matrix in block.X], axis=1)
+    y = np.asarray(block.y, dtype=np.float64)
+    assert y.ndim == 2 and y.shape[1] >= 1
+    assert dense_x.shape[0] == y.shape[0] == block.n_samples
+    assert np.isfinite(dense_x).all()
+    assert np.isfinite(y[:, 0]).all()
 
     return {
         "dataset_id": reference.id,
@@ -243,6 +249,19 @@ def _validate_reference_dataset(reference: Any) -> dict[str, Any]:
         "payload_ids": [entry.id for entry in manifest.entries],
         "target_headers": list(block.y_headers),
         "metadata_columns": [] if block.metadata is None else block.metadata.columns.tolist(),
+        "web_core_fixture": {
+            "schema": "n4a.io.web_core_fixture.v1",
+            "dataset_id": reference.id,
+            "feature_policy": "single_source" if len(block.X) == 1 else "dense_fused_sources",
+            "source_count": len(block.X),
+            "feature_block_shapes": [[int(matrix.shape[0]), int(matrix.shape[1])] for matrix in block.X],
+            "manifest_root": manifest.root,
+            "rows": int(dense_x.shape[0]),
+            "cols": int(dense_x.shape[1]),
+            "target_header": str(block.y_headers[0]),
+            "X": dense_x.tolist(),
+            "y": y[:, 0].tolist(),
+        },
     }
 
 
