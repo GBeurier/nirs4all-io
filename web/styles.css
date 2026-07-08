@@ -154,6 +154,36 @@ svg { width: 1em; height: 1em; }
   white-space: nowrap;
 }
 
+.nav-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 15px;
+  border-radius: 100px;
+  flex: 0 0 auto;
+  color: #fff;
+  text-decoration: none;
+  font-family: var(--display);
+  font-size: .82rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  background: linear-gradient(120deg, var(--teal, #0d9488), var(--cyan, #06b6d4));
+  border: 1px solid rgba(13, 148, 136, .3);
+  box-shadow: 0 12px 26px -14px rgba(13, 148, 136, .8);
+  transition: transform .15s ease, box-shadow .15s ease, filter .15s ease;
+}
+.nav-cta svg { width: 17px; height: 17px; }
+.nav-cta:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+  box-shadow: 0 16px 30px -14px rgba(13, 148, 136, .95);
+}
+.nav-cta:active { transform: translateY(0); }
+@media (max-width: 640px) {
+  .nav-cta span, .nav-cta { font-size: .78rem; }
+}
+
 .runtime {
   display: inline-flex;
   align-items: center;
