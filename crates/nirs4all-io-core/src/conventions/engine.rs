@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::profiles::{role_key_map, Profile, DEFAULT_EXTENSIONS, FOLDS_ROLE_KEY};
 use crate::spec::enums::{Partition, Role};
 
-const DELIMITERS: [u8; 4] = [b'.', b'_', b'-', b' '];
+const DELIMITERS: [u8; 4] = *b"._- ";
 
 fn is_delim(b: u8) -> bool {
     DELIMITERS.contains(&b)
