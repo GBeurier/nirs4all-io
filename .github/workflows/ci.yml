@@ -11,7 +11,7 @@ jobs:
     name: Rust green gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -28,10 +28,10 @@ jobs:
     name: Python green gate + contract goldens
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - name: Checkout datasets sibling
         run: git clone --depth 1 https://github.com/GBeurier/nirs4all-datasets ../nirs4all-datasets
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6.3.0
         with:
           python-version: "3.11"
       - name: Install
@@ -51,9 +51,9 @@ jobs:
     name: Published Python wheel gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6.3.0
         with:
           python-version: "3.11"
       - name: Build abi3 wheel

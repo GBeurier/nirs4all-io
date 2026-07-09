@@ -11,14 +11,15 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: jetli/wasm-pack-action@v0.4.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6.4.0
         with:
           node-version: "22"
+          package-manager-cache: false
       - name: Build (nodejs target)
         run: wasm-pack build bindings/wasm --target nodejs --out-dir pkg
       - name: Node smoke
