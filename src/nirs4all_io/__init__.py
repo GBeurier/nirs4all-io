@@ -7,7 +7,7 @@ Pipeline: **Resolve -> Infer -> Configure -> Materialize**.
 - ``DatasetPlan``  -- a confidence-scored recommendation produced by ``infer``.
 - ``infer(input)`` -- inspect any input and propose a ``DatasetPlan``.
 - ``load(input)``  -- materialize a spec/plan/input into a target (default: SpectroDataset).
-- ``to_dataset_package(input)`` -- materialize into the v2 target-agnostic package.
+- ``to_dataset_package(input)`` -- materialize into the v3 target-agnostic package.
 
 This package is **self-contained**: it has no runtime dependency on ``nirs4all``.
 The only touch-point is a lazy import of the ``SpectroDataset`` class at

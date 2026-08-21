@@ -16,6 +16,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ._assembled import require_assembled_dataset_v2
+
 _PARTITION_ORDER = ("train", "test", "val", "predict")
 _WEIGHT_COL = "__sample_weight__"
 
@@ -34,6 +36,7 @@ def _one_or_list(values: list[Any]) -> Any:
 
 def to_spectrodataset(full: dict, *, spectro_dataset_cls: type | None = None) -> Any:
     """Build a SpectroDataset from the full-precision assembled dict."""
+    require_assembled_dataset_v2(full)
     if spectro_dataset_cls is None:
         from nirs4all.data import SpectroDataset  # lazy: the only nirs4all touch-point
 

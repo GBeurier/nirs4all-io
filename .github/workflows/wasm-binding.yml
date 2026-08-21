@@ -16,11 +16,17 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          # Keep the build action's wasm-pack aligned with the release workflow:
+          # unpinned wasm-pack releases have shipped incompatible wasm-opt.
+          version: 'v0.15.0'
       - uses: actions/setup-node@v6.4.0
         with:
           node-version: "22"
           package-manager-cache: false
+      - name: Verify WASM Cargo lock
+        run: cargo metadata --manifest-path bindings/wasm/Cargo.toml --locked --format-version 1 > /dev/null
       - name: Build (nodejs target)
-        run: wasm-pack build bindings/wasm --target nodejs --out-dir pkg
+        run: wasm-pack build bindings/wasm --target nodejs --out-dir pkg --locked
       - name: Node smoke
         run: node bindings/wasm/tests/node_smoke.cjs

@@ -12,6 +12,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ._assembled import require_assembled_dataset_v2
+
 __all__ = [
     "DatasetPackage",
     "PayloadManifest",
@@ -114,6 +116,7 @@ class RowPositionFallback:
 @dataclass
 class _PartitionBlock:
     n_samples: int
+    source_ids: list[str]
     X: list[np.ndarray]
     feature_headers: list[list[str]]
     header_units: list[str]
@@ -135,6 +138,8 @@ class _AssembledDataset:
     n_sources: int
     blocks: dict[str, _PartitionBlock]
     folds: list[tuple[list[int], list[int]]]
+    fold_provenance: list[dict[str, list[str]]]
+    identity: dict[str, Any]
     repetition: str | None
     aggregate: dict[str, Any] | None
 
@@ -148,6 +153,7 @@ class DatasetPackage:
     """
 
     def __init__(self, full: dict[str, Any]) -> None:
+        require_assembled_dataset_v2(full)
         self._full = full
         self.name = str(full.get("name") or "dataset")
         self.task_type = str(full.get("task_type") or "auto")
@@ -156,6 +162,9 @@ class DatasetPackage:
         self.repetition = full.get("repetition")
         self.aggregate = full.get("aggregate")
         self.folds = [(list(train), list(val)) for train, val in full.get("folds", [])]
+        self.fold_provenance = [dict(fold) for fold in full.get("fold_provenance", [])]
+        identity = full.get("identity") or {}
+        self.identity = dict(identity.get("provenance") or {})
         self.row_position_fallback = _row_position_fallback(full)
 
     def manifest(self) -> PayloadManifest:
@@ -167,20 +176,27 @@ class DatasetPackage:
 
     def to_summary_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "name": self.name,
             "task_type": self.task_type,
             "signal_type": self.signal_type,
             "n_sources": self.n_sources,
             "repetition": self.repetition,
             "folds": [[list(train), list(val)] for train, val in self.folds],
+            "fold_provenance": [dict(fold) for fold in self.fold_provenance],
             "aggregate": self.aggregate,
             "partitions": {
-                str(name): {"n_samples": int(block.get("n_samples") or 0)}
+                str(name): {
+                    "n_samples": int(block.get("n_samples") or 0),
+                    "source_ids": list(block.get("source_ids") or []),
+                }
                 for name, block in self._full.get("blocks", {}).items()
             },
             "manifest": self.manifest().to_dict(),
-            "identity": {"row_position_fallback": self.row_position_fallback.to_dict()},
+            "identity": {
+                "provenance": dict(self.identity),
+                "row_position_fallback": self.row_position_fallback.to_dict(),
+            },
         }
 
     def to_canonical_summary(self) -> str:
@@ -198,6 +214,8 @@ class DatasetPackage:
             n_sources=self.n_sources,
             blocks=blocks,
             folds=self.folds,
+            fold_provenance=self.fold_provenance,
+            identity=self.identity,
             repetition=self.repetition,
             aggregate=self.aggregate,
         )
@@ -423,27 +441,29 @@ def _manifest_entries(partition: str, block: dict[str, Any], *, task_type: str) 
 
 def _row_position_fallback(full: dict[str, Any]) -> RowPositionFallback:
     partitions = list(full.get("blocks", {}))
-    repetition = full.get("repetition")
-    if repetition:
-        has_repetition = all(
+    identity = full.get("identity") or {}
+    provenance = identity.get("provenance") or {}
+    sample_id = provenance.get("sample_id")
+    if isinstance(sample_id, str):
+        has_sample_id = all(
             block.get("metadata") is not None
-            and repetition in {str(column.get("name")) for column in block["metadata"].get("columns", [])}
+            and sample_id in {str(column.get("name")) for column in block["metadata"].get("columns", [])}
             and any(
-                str(column.get("name")) == repetition
+                str(column.get("name")) == sample_id
                 and len(column.get("values", [])) == int(block.get("n_samples") or 0)
                 for column in block["metadata"].get("columns", [])
             )
             for block in full.get("blocks", {}).values()
         )
-        if has_repetition:
+        if has_sample_id:
             used = False
-            reason = f"sample identity derived from repetition key '{repetition}'"
+            reason = f"stable sample-id key '{sample_id}' is aligned in every partition"
         else:
             used = True
-            reason = f"repetition key '{repetition}' is absent or not aligned in every partition; sample identity falls back to row position"
+            reason = f"sample-id key '{sample_id}' is absent or not aligned in every partition; sample identity falls back to row position"
     else:
         used = True
-        reason = "no repetition key declared; sample identity falls back to row position"
+        reason = "no stable sample-id key declared; sample identity falls back to row position"
     fingerprint = _sha256_json({"used": used, "reason": reason, "partitions": partitions})
     return RowPositionFallback(used=used, reason=reason, partitions=partitions, fingerprint=fingerprint)
 
@@ -451,6 +471,7 @@ def _row_position_fallback(full: dict[str, Any]) -> RowPositionFallback:
 def _block_from_full(block: dict[str, Any]) -> _PartitionBlock:
     return _PartitionBlock(
         n_samples=int(block.get("n_samples") or 0),
+        source_ids=list(block.get("source_ids") or []),
         X=[_matrix(matrix) for matrix in block.get("x") or []],
         feature_headers=[list(headers) for headers in block.get("feature_headers", [])],
         header_units=list(block.get("header_units", [])),

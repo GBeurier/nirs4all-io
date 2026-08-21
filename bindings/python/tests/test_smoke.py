@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import pytest
+from nirs4all_io._adapter import to_spectrodataset
+from nirs4all_io._package import DatasetPackage
 
 import nirs4all_io as nio
 
@@ -25,6 +27,21 @@ def test_to_spec_returns_validatable_spec():
 def test_load_assembled_summary():
     assembled = nio.load(str(CORPUS / "x_y_separate"), target="assembled")
     assert "blocks" in assembled
+    assert type(assembled["assembled_schema_version"]) is int
+    assert assembled["assembled_schema_version"] == 2
+
+
+@pytest.mark.parametrize("wire_version", [None, 2.0, True, "2"])
+def test_public_assembled_paths_reject_non_integer_or_retired_wire(monkeypatch, wire_version):
+    """Fresh-wheel public readers accept only an exact integer v2 marker."""
+    full = {"assembled_schema_version": wire_version, "blocks": {}}
+    monkeypatch.setattr(nio, "load_summary", lambda *_args: full)
+    with pytest.raises(ValueError, match="assembled_schema_version=2"):
+        nio.load("legacy.csv", target="assembled")
+    with pytest.raises(ValueError, match="assembled_schema_version=2"):
+        DatasetPackage(full)
+    with pytest.raises(ValueError, match="assembled_schema_version=2"):
+        nio.to_spectrodataset(full, spectro_dataset_cls=_RecordingDataset)
 
 
 def test_validate_rejects_invalid_spec():
@@ -82,3 +99,8 @@ def test_spectrodataset_adapter_drives_the_builder():
     assert {m["partition"] for m in ds.add_samples_calls} == {"train", "test"}
     assert ds.targets >= 1
 
+
+def test_spectrodataset_adapter_rejects_retired_unversioned_wire():
+    """Wheel-level guard: direct adapter calls cannot revive v1 fallback."""
+    with pytest.raises(ValueError, match="assembled_schema_version=2"):
+        to_spectrodataset({}, spectro_dataset_cls=_RecordingDataset)

@@ -10,6 +10,8 @@ use nirs4all_io::canonical_json;
 use nirs4all_io::core::spec::validate_spec;
 use nirs4all_io::infer::infer_path;
 use nirs4all_io::materialize::assemble;
+use nirs4all_io::materialize::ASSEMBLED_DATASET_VERSION;
+use serde_json::Value;
 
 fn contract_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -17,6 +19,17 @@ fn contract_dir() -> PathBuf {
         .and_then(|p| p.parent())
         .expect("repo root")
         .join("tests/goldens/contract")
+}
+
+fn read_v2_golden(path: PathBuf) -> String {
+    let value: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("read golden"))
+        .expect("assembled golden must be JSON");
+    assert_eq!(
+        value["assembled_schema_version"],
+        Value::from(ASSEMBLED_DATASET_VERSION),
+        "assembled golden uses the retired unversioned v1 wire; re-bless it as v2"
+    );
+    canonical_json(&value).expect("canonical golden")
 }
 
 #[test]
@@ -29,8 +42,7 @@ fn assembled_cases_match_goldens() {
         validate_spec(&spec).expect("valid spec");
         let assembled = assemble(&spec, Path::new(".")).expect("assemble");
         let produced = canonical_json(&assembled.to_summary_value()).unwrap();
-        let golden =
-            std::fs::read_to_string(dir.join(format!("{case}.assembled.canonical"))).unwrap();
+        let golden = read_v2_golden(dir.join(format!("{case}.assembled.canonical")));
         assert_eq!(produced, golden, "assembled drift for {case}");
     }
 }

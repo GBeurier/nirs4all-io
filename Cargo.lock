@@ -830,6 +830,7 @@ dependencies = [
  "dag-ml-data",
  "nirs4all-io",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

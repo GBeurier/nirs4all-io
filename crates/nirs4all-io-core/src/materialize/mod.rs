@@ -16,7 +16,8 @@ pub mod loaders;
 pub mod package;
 
 pub use assemble::{
-    assemble_in_memory, AssembledDataset, InMemorySource, PartitionBlock, SourcePayload,
+    assemble_in_memory, AssembledDataset, FoldProvenance, IdentityProvenance, InMemorySource,
+    PartitionBlock, SourcePayload, ASSEMBLED_DATASET_VERSION,
 };
 pub use folds::{parse_fold_str, Fold};
 pub use frame::{Cell, Column, Frame, Matrix};

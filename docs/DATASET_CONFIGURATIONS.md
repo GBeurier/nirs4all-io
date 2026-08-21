@@ -100,6 +100,24 @@ validation: { check_file_existence: true, allow_train_only: true, allow_test_onl
 
 Identity is kept **distinct** from per-source alignment keys and join keys.
 
+`to_dag_ml_data()` is stricter than `load(target="assembled")`: it emits only
+when `sample_index.by: id` has a scalar, sample-aligned `key`. It carries that
+key plus the optional observation/repetition/group columns into the relation
+table verbatim; it never creates row-number IDs. Repeated sample IDs additionally
+require `observation_id`. Source ids, sample metadata, target labels, weights,
+and partition/fold provenance are retained in the envelope. The full schema is
+stored under `metadata.io.dataset_schema` because the coordinator envelope's
+native schema field is fingerprint-only; augmentation `origin_id` remains `None`
+because v1 assembly has no origin relation. Fold assignments are provenance
+metadata, not a `dag-ml-data` provider/FoldSet.
+`DatasetPackage` wire summaries use version 3 for this contract: their single
+`identity` object contains both `provenance` and `row_position_fallback`.
+`AssembledDataset` JSON summaries/full exports use explicit
+`assembled_schema_version: 2`; this replaces the former unversioned v1 artifact
+because identity, source ids, and stable fold provenance are now required.
+Consumers must reject the old artifact instead of assuming v3/package semantics
+are backwards compatible.
+
 ```yaml
 sample_index:
   by: row            # row (default) | id

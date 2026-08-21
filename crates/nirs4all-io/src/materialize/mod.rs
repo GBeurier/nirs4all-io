@@ -15,7 +15,10 @@ pub mod frame;
 pub mod join;
 pub mod loaders;
 
-pub use assemble::{assemble, AssembledDataset, PartitionBlock};
+pub use assemble::{
+    assemble, AssembledDataset, FoldProvenance, IdentityProvenance, PartitionBlock,
+    ASSEMBLED_DATASET_VERSION,
+};
 pub use folds::{parse_fold_file, Fold};
 pub use frame::{Cell, Column, Frame, Matrix};
 pub use join::{concat_features, concat_samples, join_tables, merge_by_key, JoinAudit};

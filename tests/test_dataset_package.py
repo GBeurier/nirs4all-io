@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
 import nirs4all_io as nio
 from nirs4all_io.materialize import DatasetPackage, PayloadStorageKind, repr_ids
+from nirs4all_io.materialize.assemble import AssembledDataset, PartitionBlock
 
 
 def _csv(path, df):
@@ -67,18 +70,24 @@ def test_to_dataset_package_exposes_manifest_and_summary(tmp_path):
 
     fallback = package.row_position_fallback
     assert fallback.used is False
-    assert "repetition key 'rep'" in fallback.reason
+    assert "sample-id key 'sample_id'" in fallback.reason
     assert len(fallback.fingerprint) == 64
 
     summary = package.to_summary_dict()
-    assert summary["schema_version"] == 2
-    assert summary["partitions"] == {"train": {"n_samples": 3}}
+    assert summary["schema_version"] == 3
+    assert summary["partitions"] == {"train": {"n_samples": 3, "source_ids": ["data"]}}
     assert summary["manifest"]["root"] == manifest.root
+    assert summary["identity"].keys() == {"provenance", "row_position_fallback"}
+    assert summary["identity"]["provenance"]["sample_id"] == "sample_id"
+
+    restored = package.to_assembled()
+    assert restored.identity == package.identity
+    assert restored.blocks["train"].source_ids == ["data"]
 
     canonical = package.to_canonical_summary()
     assert canonical.endswith("\n")
-    assert '"schema_version": 2' in canonical
-    assert '"data"' not in canonical
+    assert '"schema_version": 3' in canonical
+    assert '"data": [' not in canonical, "summary must not embed raw matrix data"
 
 
 def test_load_dataset_package_target_and_describe_accept_in_memory_input():
@@ -271,3 +280,53 @@ def test_reference_dataset_adapter_accepts_bare_spec_with_absolute_paths(tmp_pat
     np.testing.assert_allclose(block.X[0], [[0.1, 0.3], [0.2, 0.4]], rtol=1e-6)
     np.testing.assert_allclose(block.y, [[5.0], [6.0]], rtol=1e-6)
     assert block.metadata["site"].tolist() == ["north", "south"]
+
+
+def test_v3_cross_language_canonical_wire_golden():
+    """The Python MVP must emit the same v3 wire as Rust and the binding."""
+    assembled = AssembledDataset(
+        name="demo",
+        task_type="regression",
+        signal_type="absorbance",
+        n_sources=1,
+        folds=[([0], [1])],
+        fold_provenance=[
+            {
+                "train_observation_ids": ["O1"],
+                "validation_observation_ids": ["O2"],
+            }
+        ],
+        identity={
+            "source_ids": ["spectra"],
+            "sample_id": "sample_id",
+            "observation_id": "observation_id",
+            "repetition_id": "rep",
+            "group_id": "batch",
+        },
+    )
+    assembled.blocks["train"] = PartitionBlock(
+        n_samples=2,
+        source_ids=["spectra"],
+        X=[np.arange(6, dtype=np.float32).reshape(2, 3)],
+        feature_headers=[["1000", "1010", "1020"]],
+        header_units=["nm"],
+        signal_types=["absorbance"],
+        processings=[[]],
+        y=np.arange(2, dtype=np.float32).reshape(2, 1),
+        y_headers=["protein"],
+        metadata=pd.DataFrame(
+            {
+                "batch": ["a", "b"],
+                "rep": ["r1", "r2"],
+                "sample_id": ["S1", "S2"],
+                "observation_id": ["O1", "O2"],
+            }
+        ),
+        weights=np.array([1.0, 2.0], dtype=np.float32),
+        weights_header="w",
+    )
+
+    expected = (
+        Path(__file__).parent / "goldens/dataset_package_v3.cross_language.canonical"
+    ).read_text(encoding="utf-8")
+    assert DatasetPackage.from_assembled(assembled).to_canonical_summary() == expected

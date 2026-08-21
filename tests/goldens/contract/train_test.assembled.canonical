@@ -1,4 +1,5 @@
 {
+  "assembled_schema_version": 2,
   "aggregate": null,
   "blocks": {
     "test": {
@@ -28,6 +29,9 @@
       ],
       "signal_types": [
         null
+      ],
+      "source_ids": [
+        "test_x"
       ],
       "weights_header": null,
       "x": [
@@ -129,6 +133,9 @@
       ],
       "signal_types": [
         null
+      ],
+      "source_ids": [
+        "train_x"
       ],
       "weights_header": null,
       "x": [
@@ -255,7 +262,20 @@
       ]
     }
   },
+  "fold_provenance": [],
   "folds": [],
+  "identity": {
+    "provenance": {
+      "group_id": null,
+      "observation_id": null,
+      "repetition_id": null,
+      "sample_id": null,
+      "source_ids": [
+        "train_x",
+        "test_x"
+      ]
+    }
+  },
   "n_sources": 2,
   "name": "dataset",
   "repetition": null,

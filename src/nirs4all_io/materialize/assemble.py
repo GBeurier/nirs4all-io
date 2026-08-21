@@ -33,6 +33,11 @@ _FEATURE_PARTITION_DEFAULT = "train"
 # combined frame after joins/reordering. Stripped before exposing to the user.
 _ROW_IDX_PREFIX = "__src_row_idx__"
 
+# Version of the JSON-compatible AssembledDataset summaries/full exports emitted
+# by the Rust facade. Version 1 was unversioned and lacked scientific identity,
+# source ids and stable fold provenance; consumers must not treat it as v2.
+ASSEMBLED_DATASET_VERSION = 2
+
 
 def _row_idx_col(source_id: str) -> str:
     return f"{_ROW_IDX_PREFIX}{source_id}__"
@@ -60,6 +65,7 @@ class SourceTable:
 @dataclass
 class PartitionBlock:
     n_samples: int
+    source_ids: list[str] = field(default_factory=list)
     X: list[np.ndarray] = field(default_factory=list)
     feature_headers: list[list[str]] = field(default_factory=list)
     header_units: list[str] = field(default_factory=list)
@@ -86,7 +92,9 @@ class AssembledDataset:
     n_sources: int
     blocks: dict[str, PartitionBlock] = field(default_factory=dict)
     folds: list[tuple[list[int], list[int]]] = field(default_factory=list)
+    fold_provenance: list[dict[str, list[str]]] = field(default_factory=list)
     repetition: str | None = None
+    identity: dict[str, object] = field(default_factory=dict)
     aggregate: AggregateSpec | None = None
     warnings: list[str] = field(default_factory=list)
     audits: list[dict] = field(default_factory=list)
@@ -260,8 +268,13 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
         derived = df[si.derive_from].astype(str)
         df[si.key] = derived.str.replace(si.derive_pattern, "", regex=True) if si.derive_pattern else derived
     roles = _split_roles(source, df, infer_dtypes(df))
-    if isinstance(si.key, str):
-        roles.pop(si.key, None)  # the sample identity column is never a feature/target/metadata role
+    for identity_column in (si.key, si.observation_id, si.repetition_id, si.group_id):
+        if isinstance(identity_column, str):
+            roles.pop(identity_column, None)
+            if identity_column in df.columns:
+                # Preserve declared identity as sample-aligned metadata while
+                # preventing it from becoming an X/y role.
+                roles[identity_column] = "metadata"
     # stamp a per-source positional row index AFTER role-splitting so it does
     # not shift positional selectors (e.g. `-1` keeps pointing at the last user
     # column, not at the row-idx sentinel). The column survives joins as any
@@ -487,6 +500,13 @@ def assemble(spec: DatasetSpec, base_dir: str | Path = ".") -> AssembledDataset:
         signal_type=spec.signal_type.value,
         n_sources=sum(1 for t in tables.values() if t.kind != SourceKind.LOOKUP.value and _has_role(t, "features")),
         repetition=spec.repetition or (spec.sample_index.repetition_id if spec.sample_index.repetition_id and spec.sample_index.repetition_id != "auto" else None),
+        identity={
+            "source_ids": [t.source_id for t in tables.values() if t.kind != SourceKind.LOOKUP.value and _has_role(t, "features")],
+            "sample_id": spec.sample_index.key if spec.sample_index.by.value == "id" and isinstance(spec.sample_index.key, str) else None,
+            "observation_id": spec.sample_index.observation_id,
+            "repetition_id": spec.sample_index.repetition_id,
+            "group_id": spec.sample_index.group_id,
+        },
         aggregate=spec.aggregate,
     )
 
@@ -535,6 +555,7 @@ def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: l
         cols, headers = _source_feature_columns(combined, role_cols, ft)
         if not cols:
             continue
+        block.source_ids.append(ft.source_id)
         block.X.append(coerce_numeric(combined[cols]))
         block.feature_headers.append(headers)
         block.header_units.append(ft.header_unit)
@@ -669,6 +690,7 @@ def _source_feature_header(combined_col: str, source: SourceTable) -> str:
 
 def _slice_block(block: PartitionBlock, mask: np.ndarray) -> PartitionBlock:
     out = PartitionBlock(n_samples=int(mask.sum()))
+    out.source_ids = list(block.source_ids)
     out.X = [x[mask] for x in block.X]
     out.feature_headers = list(block.feature_headers)
     out.header_units = list(block.header_units)
@@ -709,3 +731,26 @@ def _attach_folds(spec: DatasetSpec, base_dir: Path, assembled: AssembledDataset
         from .folds import parse_fold_file
 
         assembled.folds = parse_fold_file(base_dir / spec.folds.file, spec.folds.format.value)
+
+    identity_column = spec.sample_index.observation_id or (
+        spec.sample_index.key if spec.sample_index.by.value == "id" and isinstance(spec.sample_index.key, str) else None
+    )
+    if combined_df is not None and identity_column in combined_df.columns:
+        values = combined_df[identity_column]
+        def translate(indices: list[int]) -> list[str] | None:
+            out: list[str] = []
+            for index in indices:
+                if index < 0 or index >= len(values) or pd.isna(values.iloc[index]):
+                    return None
+                value = str(values.iloc[index])
+                if not value.strip():
+                    return None
+                out.append(value)
+            return out
+        provenance = [
+            {"train_observation_ids": train, "validation_observation_ids": validation}
+            for train_idx, validation_idx in assembled.folds
+            if (train := translate(train_idx)) is not None and (validation := translate(validation_idx)) is not None
+        ]
+        if len(provenance) == len(assembled.folds):
+            assembled.fold_provenance = provenance

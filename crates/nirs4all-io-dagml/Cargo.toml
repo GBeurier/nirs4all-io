@@ -17,5 +17,6 @@ path = "src/bin/emit_dagml.rs"
 nirs4all-io = { path = "../nirs4all-io" }
 dag-ml-data.workspace = true
 serde_json = "1.0"
+sha2.workspace = true
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

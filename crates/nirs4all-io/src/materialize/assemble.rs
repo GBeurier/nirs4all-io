@@ -25,7 +25,9 @@ use serde_json::Value;
 use super::folds::{parse_fold_file, Fold};
 use super::loaders::read_parquet_frame;
 
-pub use nirs4all_io_core::materialize::{AssembledDataset, PartitionBlock};
+pub use nirs4all_io_core::materialize::{
+    AssembledDataset, FoldProvenance, IdentityProvenance, PartitionBlock, ASSEMBLED_DATASET_VERSION,
+};
 
 fn is_glob(text: &str) -> bool {
     text.chars().any(|c| matches!(c, '*' | '?' | '['))

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
-//! `DatasetPackage` — the target-agnostic v2 package (`IO-002` / `IO-MM-002`).
+//! `DatasetPackage` — the target-agnostic v3 package (`IO-002` / `IO-MM-002`).
 //!
-//! `AssembledDataset` (v1) forces every payload into an inline dense `f32`
+//! `AssembledDataset` stores its matrix payloads inline as dense `f32`
 //! [`Matrix`]. That is fine for 1-D spectra but wrong for images / cubes (wrong
-//! dtype, wrong rank, pathological JSON size). [`DatasetPackage`] is the v2
+//! dtype, wrong rank, pathological JSON size). [`DatasetPackage`] is versioned
 //! contract the `LOCK-IO` spec ratifies: a container of **typed payload blocks**
 //! ([`PayloadBlock`]) plus a **payload manifest** ([`PayloadManifest`]) whose rows
 //! carry a `content_hash`, a representation-ID hint and either inline bytes or a
@@ -11,11 +11,11 @@
 //! canonical summary. Identity's **row-position fallback** is recorded explicitly
 //! and fingerprinted ([`RowPositionFallback`]), not left silent.
 //!
-//! This is additive and net-new: it does not touch the v1 `AssembledDataset`
-//! serialization or any v1 golden. [`DatasetPackage::from_assembled`] represents
-//! the current `AssembledDataset` **losslessly** (proven by round-tripping back
-//! through [`DatasetPackage::to_assembled`]), so the bridge extends — rather than
-//! replaces — the existing `io → dag-ml-data` path.
+//! `DatasetPackage` v3 is distinct from the explicitly versioned
+//! `AssembledDataset` v2 summary/full wire. [`DatasetPackage::from_assembled`]
+//! preserves every v2-expressible payload (proven by round-tripping through
+//! [`DatasetPackage::to_assembled`]); URI/tensor variants remain package-only.
+//! Neither wire silently accepts its retired predecessor.
 //!
 //! Like the rest of `nirs4all-io-core`, this module is pure logic: no file IO,
 //! no `nirs4all-formats`, no `dag-ml-data` dependency. The representation-ID
@@ -28,16 +28,18 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::assemble::{AssembledDataset, PartitionBlock};
+use super::assemble::{
+    identity_provenance_value, AssembledDataset, FoldProvenance, IdentityProvenance, PartitionBlock,
+};
 use super::folds::Fold;
 use super::frame::{Cell, Frame, Matrix};
 use crate::canonical_json::canonical_json;
 use crate::spec::dataset_spec::AggregateSpec;
 
-/// `DatasetPackage` wire-schema version. Distinct from the v1
-/// `DATASET_SPEC_SCHEMA_VERSION` (1) — the package is a separate, additive
-/// contract, so it carries its own version and does not bump the spec schema.
-pub const DATASET_PACKAGE_VERSION: u32 = 2;
+/// `DatasetPackage` wire-schema version. Distinct from
+/// `DATASET_SPEC_SCHEMA_VERSION` (1): this is a separate v3 wire and does not
+/// imply compatibility with package v2.
+pub const DATASET_PACKAGE_VERSION: u32 = 3;
 
 /// Frozen representation-ID strings — a verbatim mirror of the published
 /// `dag-ml-data` `builtin_models.rs` registry (`DMD-001`). Kept here as plain
@@ -444,12 +446,14 @@ impl PayloadBlock {
 pub struct PackagePartition {
     /// Sample count for this partition.
     pub n_samples: usize,
+    /// Feature-source ids aligned with `feature_matrix` payloads.
+    pub source_ids: Vec<String>,
     /// `(payload id, block)` pairs.
     pub payloads: Vec<(String, PayloadBlock)>,
 }
 
 /// An explicit, fingerprinted record of whether sample identity fell back to row
-/// position. `used = true` means no aligned repetition key existed, so identity
+/// position. `used = true` means no aligned sample-id key existed, so identity
 /// was derived from row order — a leakage/traceability hazard that must never be
 /// silent (`LOCK-IO` / IO-MM-003).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -464,7 +468,7 @@ pub struct RowPositionFallback {
     pub fingerprint: String,
 }
 
-/// The target-agnostic v2 dataset package (`AssembledDataset v2`).
+/// The target-agnostic v3 dataset package (`AssembledDataset v2`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DatasetPackage {
     /// Dataset name.
@@ -477,10 +481,14 @@ pub struct DatasetPackage {
     pub n_sources: usize,
     /// Repetition/leakage key column, when declared.
     pub repetition: Option<String>,
+    /// Scientific identity column names retained from `sample_index`.
+    pub identity: IdentityProvenance,
     /// Aggregation policy, carried for lossless round-trip.
     pub aggregate: Option<AggregateSpec>,
     /// Cross-validation folds, carried for lossless round-trip.
     pub folds: Vec<Fold>,
+    /// Stable observation IDs for folds, captured before partition reordering.
+    pub fold_provenance: Vec<FoldProvenance>,
     /// Assembly warnings, carried for lossless round-trip.
     pub warnings: Vec<String>,
     /// Assembly audits, carried for lossless round-trip.
@@ -492,11 +500,11 @@ pub struct DatasetPackage {
 }
 
 impl DatasetPackage {
-    /// Represent an [`AssembledDataset`] as a v2 package, losslessly. Each `X`
+    /// Represent an [`AssembledDataset`] as a v3 package, losslessly. Each `X`
     /// source becomes a [`FeatureMatrix`] (carrying its processings), `y` a
     /// [`TargetTable`], metadata a [`MetadataTable`], weights a [`WeightsVector`].
     /// The row-position fallback decision is computed with the same rule the
-    /// bridge uses for identity (aligned repetition key in every partition).
+    /// bridge uses for identity (aligned sample-id key in every partition).
     pub fn from_assembled(assembled: &AssembledDataset) -> DatasetPackage {
         let row_position_fallback = compute_row_position_fallback(assembled);
         let mut partitions: IndexMap<String, PackagePartition> = IndexMap::new();
@@ -544,6 +552,7 @@ impl DatasetPackage {
                 part.clone(),
                 PackagePartition {
                     n_samples: b.n_samples,
+                    source_ids: b.source_ids.clone(),
                     payloads,
                 },
             );
@@ -554,8 +563,10 @@ impl DatasetPackage {
             signal_type: assembled.signal_type.clone(),
             n_sources: assembled.n_sources,
             repetition: assembled.repetition.clone(),
+            identity: assembled.identity.clone(),
             aggregate: assembled.aggregate.clone(),
             folds: assembled.folds.clone(),
+            fold_provenance: assembled.fold_provenance.clone(),
             warnings: assembled.warnings.clone(),
             audits: assembled.audits.clone(),
             partitions,
@@ -564,13 +575,14 @@ impl DatasetPackage {
     }
 
     /// Reconstruct the [`AssembledDataset`] this package was built from. The
-    /// inverse of [`from_assembled`](Self::from_assembled) over the v1-expressible
+    /// inverse of [`from_assembled`](Self::from_assembled) over the v2-expressible
     /// payloads — the losslessness proof.
     pub fn to_assembled(&self) -> AssembledDataset {
         let mut blocks: IndexMap<String, PartitionBlock> = IndexMap::new();
         for (part, p) in &self.partitions {
             let mut block = PartitionBlock {
                 n_samples: p.n_samples,
+                source_ids: p.source_ids.clone(),
                 ..Default::default()
             };
             for (_id, payload) in &p.payloads {
@@ -594,7 +606,7 @@ impl DatasetPackage {
                         block.weights = Some(w.values.clone());
                         block.weights_header = w.header.clone();
                     }
-                    // Net-new payloads have no v1 `PartitionBlock` slot.
+                    // Package-only payloads have no `PartitionBlock` slot.
                     _ => {}
                 }
             }
@@ -607,7 +619,9 @@ impl DatasetPackage {
             n_sources: self.n_sources,
             blocks,
             folds: self.folds.clone(),
+            fold_provenance: self.fold_provenance.clone(),
             repetition: self.repetition.clone(),
+            identity: self.identity.clone(),
             aggregate: self.aggregate.clone(),
             warnings: self.warnings.clone(),
             audits: self.audits.clone(),
@@ -639,7 +653,10 @@ impl DatasetPackage {
     pub fn to_summary_value(&self) -> Value {
         let mut parts = Map::new();
         for (name, p) in &self.partitions {
-            parts.insert(name.clone(), json!({ "n_samples": p.n_samples }));
+            parts.insert(
+                name.clone(),
+                json!({ "n_samples": p.n_samples, "source_ids": p.source_ids }),
+            );
         }
         let aggregate = self.aggregate.as_ref().map(|a| {
             json!({
@@ -650,7 +667,7 @@ impl DatasetPackage {
             })
         });
         let manifest = serde_json::to_value(self.manifest()).expect("manifest serializes");
-        let identity =
+        let row_position_fallback =
             serde_json::to_value(&self.row_position_fallback).expect("fallback serializes");
         json!({
             "schema_version": DATASET_PACKAGE_VERSION,
@@ -659,11 +676,18 @@ impl DatasetPackage {
             "signal_type": self.signal_type,
             "n_sources": self.n_sources,
             "repetition": self.repetition,
+            "identity": {
+                "provenance": identity_provenance_value(&self.identity),
+                "row_position_fallback": row_position_fallback,
+            },
             "folds": self.folds.iter().map(|(tr, vl)| vec![tr.clone(), vl.clone()]).collect::<Vec<_>>(),
+            "fold_provenance": self.fold_provenance.iter().map(|fold| json!({
+                "train_observation_ids": fold.train_observation_ids,
+                "validation_observation_ids": fold.validation_observation_ids,
+            })).collect::<Vec<_>>(),
             "aggregate": aggregate,
             "partitions": Value::Object(parts),
             "manifest": manifest,
-            "identity": { "row_position_fallback": identity },
         })
     }
 
@@ -825,38 +849,39 @@ fn target_representation_id(
 }
 
 /// Decide + describe the row-position fallback with the bridge's identity rule:
-/// identity is key-based iff a repetition key is declared and aligned (present,
+/// identity is key-based iff a stable sample-id key is declared and aligned (present,
 /// length == `n_samples`) in every partition; otherwise it falls back to row
 /// position.
 fn compute_row_position_fallback(a: &AssembledDataset) -> RowPositionFallback {
     let partitions: Vec<String> = a.blocks.keys().cloned().collect();
-    let rep = a.repetition.as_deref();
-    let use_rep = rep.is_some_and(|col| {
+    let sample_id = a.identity.sample_id.as_deref();
+    let has_sample_id = sample_id.is_some_and(|col| {
         a.blocks.values().all(|b| {
             b.metadata
                 .as_ref()
                 .is_some_and(|f| f.has_column(col) && f.str_column(col).len() == b.n_samples)
         })
     });
-    let (used, reason) = if use_rep {
+    let (used, reason) = if has_sample_id {
         (
             false,
             format!(
-                "sample identity derived from repetition key '{}'",
-                rep.expect("use_rep implies a key")
+                "stable sample-id key '{}' is aligned in every partition",
+                sample_id.expect("has_sample_id implies a key")
             ),
         )
-    } else if let Some(col) = rep {
+    } else if let Some(col) = sample_id {
         (
             true,
             format!(
-                "repetition key '{col}' is absent or not aligned in every partition; sample identity falls back to row position"
+                "sample-id key '{col}' is absent or not aligned in every partition; sample identity falls back to row position"
             ),
         )
     } else {
         (
             true,
-            "no repetition key declared; sample identity falls back to row position".to_string(),
+            "no stable sample-id key declared; sample identity falls back to row position"
+                .to_string(),
         )
     };
     let descriptor = json!({ "used": used, "reason": reason, "partitions": partitions });
@@ -889,6 +914,7 @@ mod tests {
     fn base_block() -> PartitionBlock {
         PartitionBlock {
             n_samples: 2,
+            source_ids: vec!["spectra".into()],
             x: vec![matrix(2, 3)],
             feature_headers: vec![vec!["1000".into(), "1010".into(), "1020".into()]],
             header_units: vec!["nm".into()],
@@ -917,7 +943,9 @@ mod tests {
             n_sources: 1,
             blocks: IndexMap::new(),
             folds: vec![],
+            fold_provenance: vec![],
             repetition: None,
+            identity: IdentityProvenance::default(),
             aggregate: None,
             warnings: vec![],
             audits: vec![],
@@ -943,7 +971,7 @@ mod tests {
     fn from_assembled_round_trips_losslessly() {
         let a = assembled(base_block());
         let pkg = DatasetPackage::from_assembled(&a);
-        // The v1-expressible payload is reconstructed byte-for-byte.
+        // The v2-expressible payload is reconstructed byte-for-byte.
         assert_eq!(pkg.to_assembled().to_full_value(), a.to_full_value());
     }
 
@@ -1071,8 +1099,8 @@ mod tests {
     fn row_position_fallback_is_recorded_when_no_key() {
         let pkg = DatasetPackage::from_assembled(&assembled(base_block()));
         let f = &pkg.row_position_fallback;
-        assert!(f.used, "no repetition key ⇒ row-position fallback");
-        assert!(f.reason.contains("no repetition key"));
+        assert!(f.used, "no sample-id key ⇒ row-position fallback");
+        assert!(f.reason.contains("no stable sample-id key"));
         assert_eq!(f.fingerprint.len(), 64);
         assert_eq!(f.partitions, vec!["train"]);
     }
@@ -1080,13 +1108,90 @@ mod tests {
     #[test]
     fn row_position_fallback_off_when_key_aligned() {
         let mut a = assembled(base_block());
-        a.repetition = Some("rep".into()); // aligned metadata column of len 2
+        a.identity.sample_id = Some("rep".into()); // aligned metadata column of len 2
         let pkg = DatasetPackage::from_assembled(&a);
         assert!(!pkg.row_position_fallback.used);
         assert!(pkg
             .row_position_fallback
             .reason
-            .contains("repetition key 'rep'"));
+            .contains("sample-id key 'rep'"));
+    }
+
+    #[test]
+    fn summary_has_one_versioned_identity_object_and_round_trips_provenance() {
+        let mut a = assembled(base_block());
+        a.identity = IdentityProvenance {
+            source_ids: vec!["spectra".into()],
+            sample_id: Some("sample_id".into()),
+            observation_id: Some("scan_id".into()),
+            repetition_id: Some("rep".into()),
+            group_id: Some("batch".into()),
+        };
+        a.fold_provenance = vec![FoldProvenance {
+            train_observation_ids: vec!["O1".into()],
+            validation_observation_ids: vec!["O2".into()],
+        }];
+        let package = DatasetPackage::from_assembled(&a);
+        let value = package.to_summary_value();
+        assert_eq!(value["schema_version"], Value::from(3));
+        assert_eq!(
+            package.to_assembled().to_full_value()["assembled_schema_version"],
+            Value::from(2),
+            "the binding-facing assembled wire is explicitly versioned"
+        );
+        assert_eq!(value["identity"].as_object().unwrap().len(), 2);
+        assert_eq!(
+            value["identity"]["provenance"]["sample_id"],
+            Value::String("sample_id".into())
+        );
+        assert_eq!(
+            package.to_assembled().identity,
+            a.identity,
+            "package round-trip keeps identity provenance"
+        );
+        assert_eq!(package.to_assembled().fold_provenance, a.fold_provenance);
+    }
+
+    #[test]
+    fn v3_cross_language_canonical_summary_matches_golden() {
+        let mut a = assembled(base_block());
+        a.identity = IdentityProvenance {
+            source_ids: vec!["spectra".into()],
+            sample_id: Some("sample_id".into()),
+            observation_id: Some("observation_id".into()),
+            repetition_id: Some("rep".into()),
+            group_id: Some("batch".into()),
+        };
+        a.folds = vec![(vec![0], vec![1])];
+        a.fold_provenance = vec![FoldProvenance {
+            train_observation_ids: vec!["O1".into()],
+            validation_observation_ids: vec!["O2".into()],
+        }];
+        let metadata = a.blocks["train"].metadata.as_mut().unwrap();
+        metadata.columns.push(Column::from_cells(
+            "sample_id",
+            vec![Cell::Str("S1".into()), Cell::Str("S2".into())],
+        ));
+        metadata.columns.push(Column::from_cells(
+            "observation_id",
+            vec![Cell::Str("O1".into()), Cell::Str("O2".into())],
+        ));
+
+        assert_eq!(
+            DatasetPackage::from_assembled(&a).to_canonical_summary(),
+            include_str!("../../../../tests/goldens/dataset_package_v3.cross_language.canonical")
+        );
+    }
+
+    #[test]
+    fn repetition_does_not_disable_row_position_fallback() {
+        let mut a = assembled(base_block());
+        a.repetition = Some("rep".into());
+        assert!(
+            DatasetPackage::from_assembled(&a)
+                .row_position_fallback
+                .used
+        );
     }
 
     #[test]
