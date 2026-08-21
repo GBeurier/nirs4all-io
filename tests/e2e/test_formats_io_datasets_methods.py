@@ -205,7 +205,14 @@ def _validate_reference_dataset(reference: Any) -> dict[str, Any]:
     block = assembled.blocks["train"]
     sample_order = [str(value) for value in reference.sample_ids().tolist()]
     assert block.n_samples == len(sample_order)
-    assert summary["partitions"] == {"train": {"n_samples": len(sample_order)}}
+    # DatasetPackage v3 deliberately extends each partition descriptor with the
+    # ordered source ids. This is an incompatible canonical-wire change from v2,
+    # not a fallback-compatible omission: relations and feature blocks need the
+    # same source identity on both sides of this E2E bridge.
+    assert summary["schema_version"] == 3
+    assert summary["partitions"] == {
+        "train": {"n_samples": len(sample_order), "source_ids": list(reference.sources())}
+    }
     assert len(block.X) == len(reference.sources())
 
     for index, source_id in enumerate(reference.sources()):
@@ -230,8 +237,30 @@ def _validate_reference_dataset(reference: Any) -> dict[str, Any]:
         assert block.metadata is None
     else:
         assert block.metadata is not None
-        assert block.metadata.columns.tolist() == expected_metadata_columns
-        np.testing.assert_array_equal(block.metadata.to_numpy(), expected_metadata_values)
+        # v2 assembled artifacts preserve declared identity as aligned metadata;
+        # check the catalog's original values, not a row-position reconstruction.
+        provenance = summary["identity"]["provenance"]
+        assert provenance["sample_id"] == "sample_id"
+        assert provenance["observation_id"] == "observation_id"
+        identity_columns: list[str] = []
+        identity_value_columns: list[np.ndarray] = []
+        for source_index, source_id in enumerate(reference.sources()):
+            # Joined secondary blocks retain their source-qualified identity
+            # columns; only the primary block owns the unqualified names.
+            prefix = "" if source_index == 0 else f"{source_id}__"
+            identity_columns.extend([f"{prefix}sample_id", f"{prefix}observation_id"])
+            identity_value_columns.extend(
+                [
+                    reference.sample_ids(source_id).astype(str),
+                    reference.observation_ids(source_id).astype(str),
+                ]
+            )
+        identity_values = np.column_stack(identity_value_columns)
+        assert block.metadata.columns.tolist() == identity_columns + expected_metadata_columns
+        np.testing.assert_array_equal(
+            block.metadata.to_numpy(),
+            np.column_stack([identity_values, expected_metadata_values]),
+        )
 
     expected_payload_count = len(block.X) + 1 + (0 if block.metadata is None else 1) + (0 if block.weights is None else 1)
     assert len(manifest.entries) == expected_payload_count

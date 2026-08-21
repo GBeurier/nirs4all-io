@@ -58,9 +58,18 @@ fn row_idx_col(source_id: &str) -> String {
 /// `(frame, header_unit, signal_type, origins)` from a source's load.
 type LoadedSource = (Frame, String, Option<String>, Option<Vec<String>>);
 
+/// Version of the JSON-compatible `AssembledDataset` summary/full wire.
+///
+/// Version 1 was unversioned and did not preserve source ids, scientific
+/// identity, or stable fold provenance. Consumers must reject it rather than
+/// silently interpreting it as this version.
+pub const ASSEMBLED_DATASET_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Default)]
 pub struct PartitionBlock {
     pub n_samples: usize,
+    /// Feature-source ids aligned with `x` and its per-source layout fields.
+    pub source_ids: Vec<String>,
     pub x: Vec<Matrix>,
     pub feature_headers: Vec<Vec<String>>,
     pub header_units: Vec<String>,
@@ -74,6 +83,32 @@ pub struct PartitionBlock {
     pub weights_header: Option<String>,
 }
 
+/// Column-level scientific identity provenance retained from `sample_index`.
+///
+/// The assembled matrices do not otherwise retain the `DatasetSpec`, so the
+/// dag-ml bridge needs these names to recover the corresponding, sample-aligned
+/// metadata values without guessing from row order. `sample_id` is only set for
+/// a scalar `sample_index.key`; composite keys are deliberately left unsupported
+/// at this v1 seam rather than serialised into an invented identifier.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IdentityProvenance {
+    /// Ordered feature-source ids contributing to every assembled row.
+    pub source_ids: Vec<String>,
+    pub sample_id: Option<String>,
+    pub observation_id: Option<String>,
+    pub repetition_id: Option<String>,
+    pub group_id: Option<String>,
+}
+
+/// Fold membership translated to stable observation ids before partitioning can
+/// reorder assembled rows. Empty provenance with non-empty positional folds
+/// means the v1 assembler could not establish that translation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FoldProvenance {
+    pub train_observation_ids: Vec<String>,
+    pub validation_observation_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AssembledDataset {
     pub name: String,
@@ -82,7 +117,10 @@ pub struct AssembledDataset {
     pub n_sources: usize,
     pub blocks: IndexMap<String, PartitionBlock>,
     pub folds: Vec<Fold>,
+    pub fold_provenance: Vec<FoldProvenance>,
     pub repetition: Option<String>,
+    /// Scientific identity columns carried from `DatasetSpec.sample_index`.
+    pub identity: IdentityProvenance,
     pub aggregate: Option<AggregateSpec>,
     pub warnings: Vec<String>,
     pub audits: Vec<Value>,
@@ -90,7 +128,10 @@ pub struct AssembledDataset {
 
 impl AssembledDataset {
     /// A canonical structural summary (shapes, headers, partitions, rounded
-    /// X/y values, folds) for cross-language golden comparison. Mirrors
+    /// X/y values, folds) for cross-language golden comparison. The explicit
+    /// `assembled_schema_version` makes this public CLI/C-ABI artifact distinct
+    /// from the `DatasetSpec` schema and rejects the former unversioned wire.
+    /// Mirrors
     /// `tests/test_assembled_goldens.py`.
     pub fn to_summary_value(&self) -> Value {
         use crate::pyfmt::py_round;
@@ -114,6 +155,7 @@ impl AssembledDataset {
                 part.clone(),
                 serde_json::json!({
                     "n_samples": b.n_samples,
+                    "source_ids": b.source_ids,
                     "x_shapes": b.x.iter().map(|m| vec![m.n_rows, m.n_cols]).collect::<Vec<_>>(),
                     "x": b.x.iter().map(mat_rows).collect::<Vec<_>>(),
                     "feature_headers": b.feature_headers,
@@ -138,12 +180,18 @@ impl AssembledDataset {
             })
         });
         serde_json::json!({
+            "assembled_schema_version": ASSEMBLED_DATASET_VERSION,
             "name": self.name,
             "task_type": self.task_type,
             "signal_type": self.signal_type,
             "n_sources": self.n_sources,
             "blocks": Value::Object(blocks),
             "folds": self.folds.iter().map(|(tr, vl)| vec![tr.clone(), vl.clone()]).collect::<Vec<_>>(),
+            "fold_provenance": self.fold_provenance.iter().map(|fold| serde_json::json!({
+                "train_observation_ids": fold.train_observation_ids,
+                "validation_observation_ids": fold.validation_observation_ids,
+            })).collect::<Vec<_>>(),
+            "identity": { "provenance": identity_provenance_value(&self.identity) },
             "repetition": self.repetition,
             "aggregate": aggregate,
         })
@@ -161,6 +209,7 @@ impl AssembledDataset {
                 part.clone(),
                 serde_json::json!({
                     "n_samples": b.n_samples,
+                    "source_ids": b.source_ids,
                     "x": b.x.iter().map(matrix_full).collect::<Vec<_>>(),
                     "feature_headers": b.feature_headers,
                     "header_units": b.header_units,
@@ -188,12 +237,18 @@ impl AssembledDataset {
             })
         });
         serde_json::json!({
+            "assembled_schema_version": ASSEMBLED_DATASET_VERSION,
             "name": self.name,
             "task_type": self.task_type,
             "signal_type": self.signal_type,
             "n_sources": self.n_sources,
             "blocks": Value::Object(blocks),
             "folds": self.folds.iter().map(|(tr, vl)| vec![tr.clone(), vl.clone()]).collect::<Vec<_>>(),
+            "fold_provenance": self.fold_provenance.iter().map(|fold| serde_json::json!({
+                "train_observation_ids": fold.train_observation_ids,
+                "validation_observation_ids": fold.validation_observation_ids,
+            })).collect::<Vec<_>>(),
+            "identity": { "provenance": identity_provenance_value(&self.identity) },
             "repetition": self.repetition,
             "aggregate": aggregate,
         })
@@ -205,6 +260,16 @@ fn matrix_full(m: &Matrix) -> Value {
         "data": m.data.iter().map(|&v| v as f64).collect::<Vec<f64>>(),
         "n_rows": m.n_rows,
         "n_cols": m.n_cols,
+    })
+}
+
+pub fn identity_provenance_value(identity: &IdentityProvenance) -> Value {
+    serde_json::json!({
+        "source_ids": identity.source_ids,
+        "sample_id": identity.sample_id,
+        "observation_id": identity.observation_id,
+        "repetition_id": identity.repetition_id,
+        "group_id": identity.group_id,
     })
 }
 
@@ -955,8 +1020,24 @@ fn build_source_table(
         }
     }
     let mut roles = split_roles(source, &df)?;
-    if let Some(key) = si.key.as_str() {
-        roles.retain(|(c, _)| c != key);
+    // Identity is never a feature/target role. It is retained separately as
+    // aligned metadata for scientific traceability.
+    for identity_column in [
+        si.key.as_str(),
+        si.observation_id.as_deref(),
+        si.repetition_id.as_deref(),
+        si.group_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        roles.retain(|(column, _)| column != identity_column);
+        // Keep the actual values in the assembled frame as metadata. They are
+        // needed to construct stable downstream identity and must never be
+        // reconstructed from row position.
+        if df.has_column(identity_column) {
+            roles.push((identity_column.to_string(), "metadata".to_string()));
+        }
     }
     let row_idx_name = row_idx_col(&source.id);
     if df.has_column(&row_idx_name) {
@@ -1118,6 +1199,19 @@ pub fn assemble_in_memory(
             .clone()
             .filter(|r| r != "auto")
     });
+    let identity = IdentityProvenance {
+        source_ids: tables
+            .values()
+            .filter(|table| table.kind != SourceKind::Lookup.value() && has_role(table, "features"))
+            .map(|table| table.source_id.clone())
+            .collect(),
+        sample_id: (spec.sample_index.by.value() == "id")
+            .then(|| spec.sample_index.key.as_str().map(str::to_string))
+            .flatten(),
+        observation_id: spec.sample_index.observation_id.clone(),
+        repetition_id: spec.sample_index.repetition_id.clone(),
+        group_id: spec.sample_index.group_id.clone(),
+    };
     let mut assembled = AssembledDataset {
         name: spec.name.clone().unwrap_or_else(|| "dataset".into()),
         task_type: spec.task_type.value().to_string(),
@@ -1125,7 +1219,9 @@ pub fn assemble_in_memory(
         n_sources,
         blocks: IndexMap::new(),
         folds: vec![],
+        fold_provenance: vec![],
         repetition,
+        identity,
         aggregate: spec.aggregate.clone(),
         warnings: vec![],
         audits: vec![],
@@ -1342,6 +1438,7 @@ fn assemble_block(
         if cols.is_empty() {
             continue;
         }
+        block.source_ids.push(ft.source_id.clone());
         let headers: Vec<String> = cols.iter().map(|c| source_feature_header(c, ft)).collect();
         block.x.push(combined.coerce_numeric(&cols));
         block.feature_headers.push(headers);
@@ -1433,7 +1530,7 @@ fn assemble_block(
         block.weights_header = Some(weight_cols[0].clone());
     }
 
-    let meta_cols: Vec<String> = combined_names
+    let mut meta_cols: Vec<String> = combined_names
         .iter()
         .filter(|c| {
             role_cols
@@ -1443,6 +1540,24 @@ fn assemble_block(
         })
         .cloned()
         .collect();
+    // Identity columns are exempt from ordinary roles so they can drive joins
+    // without leaking into X. Preserve them explicitly in the assembled IR:
+    // downstream scientific adapters must never recreate IDs from row position.
+    // Keep the source order stable and ignore unavailable columns here; the
+    // bridge performs a typed preflight and names the missing capability.
+    for column in [
+        spec.sample_index.key.as_str(),
+        spec.sample_index.observation_id.as_deref(),
+        spec.sample_index.repetition_id.as_deref(),
+        spec.sample_index.group_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if combined.has_column(column) && !meta_cols.iter().any(|name| name == column) {
+            meta_cols.push(column.to_string());
+        }
+    }
     if !meta_cols.is_empty() {
         block.metadata = Some(combined.select(&meta_cols));
     }
@@ -1513,6 +1628,7 @@ fn slice_block(block: &PartitionBlock, mask: &[bool]) -> PartitionBlock {
     };
     PartitionBlock {
         n_samples: mask.iter().filter(|&&b| b).count(),
+        source_ids: block.source_ids.clone(),
         x: block.x.iter().map(take).collect(),
         feature_headers: block.feature_headers.clone(),
         header_units: block.header_units.clone(),
@@ -1795,7 +1911,54 @@ fn attach_folds(
             })?
             .to_vec();
     }
+    // Fold indices refer to the unsplit combined frame. Capture stable IDs now:
+    // a subsequent partition split may reorder rows, so translating those raw
+    // indices in a downstream bridge would be scientifically wrong.
+    assembled.fold_provenance = combined_df
+        .and_then(|frame| fold_provenance_from_frame(spec, frame, &assembled.folds))
+        .unwrap_or_default();
     Ok(())
+}
+
+fn fold_provenance_from_frame(
+    spec: &DatasetSpec,
+    frame: &Frame,
+    folds: &[Fold],
+) -> Option<Vec<FoldProvenance>> {
+    let identity_column = spec.sample_index.observation_id.as_deref().or_else(|| {
+        (spec.sample_index.by.value() == "id")
+            .then(|| spec.sample_index.key.as_str())
+            .flatten()
+    })?;
+    let values = frame.column(identity_column)?;
+    if values.values.len() != frame.n_rows {
+        return None;
+    }
+    folds
+        .iter()
+        .map(|(train, validation)| {
+            let translate = |indices: &[i64]| -> Option<Vec<String>> {
+                indices
+                    .iter()
+                    .map(|index| {
+                        usize::try_from(*index)
+                            .ok()
+                            .and_then(|index| values.values.get(index))
+                            .and_then(|cell| match cell {
+                                Cell::Na => None,
+                                Cell::Float(value) if value.is_nan() => None,
+                                _ => Some(cell.to_str_scalar()),
+                            })
+                            .filter(|value| !value.trim().is_empty())
+                    })
+                    .collect()
+            };
+            Some(FoldProvenance {
+                train_observation_ids: translate(train)?,
+                validation_observation_ids: translate(validation)?,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

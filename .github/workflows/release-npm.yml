@@ -71,10 +71,13 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
+      - name: Verify WASM Cargo lock
+        run: cargo metadata --manifest-path bindings/wasm/Cargo.toml --locked --format-version 1 > /dev/null
+
       - name: Build the WASM module (wasm-pack, nodejs target)
         # --scope nirs4all primes the generated package.json with the @nirs4all
         # scope; the exact name + provenance are pinned in the next step.
-        run: wasm-pack build bindings/wasm --release --target nodejs --out-dir pkg-node --scope nirs4all
+        run: wasm-pack build bindings/wasm --release --target nodejs --out-dir pkg-node --scope nirs4all --locked
 
       - name: Derive the canonical version (Cargo workspace SoT)
         id: ver

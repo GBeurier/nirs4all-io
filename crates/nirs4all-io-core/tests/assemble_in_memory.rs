@@ -23,6 +23,7 @@ use nirs4all_io_core::infer::memory::{
 };
 use nirs4all_io_core::materialize::{
     assemble_in_memory, Cell, Column, Frame, InMemorySource, SourcePayload,
+    ASSEMBLED_DATASET_VERSION,
 };
 use nirs4all_io_core::spec::{validate_spec, DatasetSpec};
 use serde_json::{json, Value};
@@ -33,6 +34,17 @@ fn contract_dir() -> PathBuf {
         .and_then(|p| p.parent())
         .expect("repo root")
         .join("tests/goldens/contract")
+}
+
+fn read_v2_golden(path: PathBuf) -> String {
+    let value: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("read golden"))
+        .expect("assembled golden must be JSON");
+    assert_eq!(
+        value["assembled_schema_version"],
+        Value::from(ASSEMBLED_DATASET_VERSION),
+        "assembled golden uses the retired unversioned v1 wire; re-bless it as v2"
+    );
+    canonical_json(&value).expect("canonical golden")
 }
 
 /// Read every file in a corpus case directory into named byte buffers
@@ -78,8 +90,7 @@ fn bytes_path_reproduces_assembled_goldens() {
         let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None)
             .unwrap_or_else(|e| panic!("assemble_in_memory `{case}`: {}", e.message));
         let produced = canonical_json(&assembled.to_summary_value()).unwrap();
-        let golden =
-            std::fs::read_to_string(dir.join(format!("{case}.assembled.canonical"))).unwrap();
+        let golden = read_v2_golden(dir.join(format!("{case}.assembled.canonical")));
         assert_eq!(
             produced, golden,
             "in-memory assembled drift for `{case}` (Bytes path)"
@@ -475,4 +486,73 @@ fn frame_payload_applies_source_na_policy_after_projection() {
 
     assert_eq!(block.feature_headers, vec![vec!["1000", "1005"]]);
     assert_eq!(block.x[0].data, vec![1.0, 7.0, 2.0, 3.0]);
+}
+
+#[test]
+fn folds_capture_observation_ids_before_partition_reorders_rows() {
+    let spec = DatasetSpec::from_value(&json!({
+        "name": "fold-identity",
+        "sample_index": {
+            "by": "id",
+            "key": "sample_id",
+            "observation_id": "observation_id",
+            "repetition_id": "repetition_id",
+            "group_id": "group_id",
+        },
+        "sources": [{
+            "id": "data",
+            "role": "mixed",
+            "input": "data.csv",
+            "columns": [
+                {"role": "features", "select": ["sample_id", "observation_id", "repetition_id", "group_id", "1000"]},
+                {"role": "targets", "select": ["target"]},
+                {"role": "metadata", "select": ["set"]},
+            ],
+        }],
+        "partitions": {"by": "column", "column": "set", "train_values": ["cal"], "test_values": ["val"]},
+        "folds": {"inline": [{"train": [0, 2], "val": [1]}]},
+    }))
+    .expect("spec");
+    validate_spec(&spec).expect("valid spec");
+    let sources = vec![InMemorySource {
+        name: "data.csv".into(),
+        payload: SourcePayload::Bytes(
+            csv(&[
+                ("sample_id", strs(&["S0", "S1", "S2"])),
+                ("observation_id", strs(&["O0", "O1", "O2"])),
+                ("repetition_id", strs(&["R0", "R1", "R2"])),
+                ("group_id", strs(&["G0", "G1", "G2"])),
+                ("set", strs(&["cal", "val", "cal"])),
+                ("1000", fnum(&[1.0, 2.0, 3.0])),
+                ("target", fnum(&[10.0, 20.0, 30.0])),
+            ])
+            .into_bytes(),
+        ),
+    }];
+
+    let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None)
+        .expect("assemble identity folds");
+    // The train/test partition is [0, 2] / [1], so block row order no longer
+    // matches the original frame. Fold membership must remain in pre-split
+    // observation identity, not be interpreted as post-split row positions.
+    assert_eq!(assembled.folds, vec![(vec![0, 2], vec![1])]);
+    assert_eq!(
+        assembled.fold_provenance[0].train_observation_ids,
+        vec!["O0", "O2"]
+    );
+    assert_eq!(
+        assembled.fold_provenance[0].validation_observation_ids,
+        vec!["O1"]
+    );
+    for block in assembled.blocks.values() {
+        assert_eq!(block.x[0].n_cols, 1, "identity fields cannot enter X");
+        assert_eq!(block.y_headers, vec!["target"]);
+        let metadata = block.metadata.as_ref().expect("identity metadata");
+        for column in ["sample_id", "observation_id", "repetition_id", "group_id"] {
+            assert!(
+                metadata.has_column(column),
+                "missing identity column {column}"
+            );
+        }
+    }
 }

@@ -5,8 +5,10 @@
 //! io owns the assembled → envelope bridge. It maps the `AssembledDataset` onto a
 //! `DatasetSchema` (+ `SourceDescriptor`/`RepresentationSpec`/`AxisSpec`;
 //! nm→`Wavelength`, cm⁻¹→`Frequency`; signal_type→`tags`), a minimal `DataPlan`,
-//! and a `SampleRelationTable` (observation/sample/group/repetition identity from
-//! the repetition key, the only leakage unit io knows), then calls
+//! and a `SampleRelationTable` (explicit observation/sample/group/repetition
+//! identity). Fold preflight rejects shared sample ids and, when declared,
+//! shared groups across train/validation; repetition is provenance, not the
+//! sole leakage unit. It then calls
 //! `CoordinatorDataPlanEnvelope::from_parts` (it computes the three fingerprints
 //! and self-validates). io does **not** build dag-ml `FoldSet`/`DataBinding` —
 //! those are dag-ml's domain (folds/campaigns).
@@ -22,21 +24,26 @@ use dag_ml_data::{
     sample_metadata, signal_1d, signal_with_processings, target_categorical,
     target_categorical_matrix, target_numeric, target_numeric_matrix, AxisKind, AxisSpec,
     CoordinateDType, CoordinateSpec, CoordinateValues, CoordinatorDataPlanEnvelope, DataPlan,
-    DataPlanStep, DataPlanStepKind, DatasetSchema, FitScope, GroupId, MetadataFieldSpec,
-    MetadataSchema, MetadataValueKind, ObservationId, RepetitionId, RepresentationId,
-    RepresentationSpec, SampleId, SampleRelation, SampleRelationTable, SignalKind,
-    SourceDescriptor, SourceGranularity, SourceId, TargetId, REPRESENTATION_FEATURE_BLOCK_SET,
-    REPRESENTATION_SAMPLE_METADATA,
+    DataPlanStep, DataPlanStepKind, DatasetSchema, FitScope, FoldSpec, GroupId, GroupKind,
+    GroupSpec, MetadataFieldSpec, MetadataSchema, MetadataValueKind, ObservationId, RepetitionId,
+    RepresentationId, RepresentationSpec, SampleId, SampleRelation, SampleRelationTable,
+    SignalKind, SourceDescriptor, SourceGranularity, SourceId, TargetId,
+    REPRESENTATION_FEATURE_BLOCK_SET, REPRESENTATION_SAMPLE_METADATA,
 };
 use nirs4all_io::core::infer::{ColDtype, NumericKind};
 use nirs4all_io::core::materialize::package::DatasetPackage;
 use nirs4all_io::core::spec::SpecError;
-use nirs4all_io::materialize::AssembledDataset;
+use nirs4all_io::materialize::{AssembledDataset, Cell, PartitionBlock};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn err<E: std::fmt::Display>(e: E) -> SpecError {
     SpecError::new(e.to_string())
 }
+
+/// Canonical X-only identity used by the target-free native Methods PLS
+/// PREDICT provider. This is shared with DAG-ML and the public Python facade.
+pub const METHODS_PLS_PREDICT_CONTENT_PROFILE: &str = "n4a-matrix-f64-le.v1";
 
 /// Coerce an arbitrary label into a dag-ml-data identifier (ASCII alnum / `_-.`,
 /// 1..=128 bytes). Unsupported characters collapse to `_`; an all-`_` or empty
@@ -61,31 +68,513 @@ fn sanitize(raw: &str, fallback: &str) -> String {
     s
 }
 
-/// Map a raw repetition value to a stable, unique dag-ml-data sample identifier.
-/// The same raw always maps to the same id; distinct raw values that sanitize to
-/// the same id are disambiguated with a numeric suffix rather than silently
-/// merged (e.g. `A/B` and `A_B`, or two long ids sharing the first 128 bytes).
-fn unique_sample_id(
-    raw: &str,
-    assigned: &mut BTreeMap<String, String>,
-    taken: &mut BTreeSet<String>,
-) -> String {
-    if let Some(id) = assigned.get(raw) {
-        return id.clone();
+/// Preflight failures that indicate the assembled v1 IR cannot represent the
+/// requested scientific identity in a dag-ml envelope without inventing data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DagMlPreflightError {
+    MissingSampleId,
+    MissingIdentityColumn {
+        column: String,
+        partition: String,
+    },
+    UnalignedIdentityColumn {
+        column: String,
+        partition: String,
+    },
+    EmptyIdentityValue {
+        column: String,
+        partition: String,
+        row: usize,
+    },
+    InvalidIdentifier {
+        kind: &'static str,
+        value: String,
+    },
+    DuplicateObservationId {
+        observation_id: String,
+    },
+    RepeatedSampleNeedsObservationId {
+        sample_id: String,
+    },
+    UnalignedWeights {
+        partition: String,
+    },
+    NonFiniteWeight {
+        partition: String,
+        row: usize,
+    },
+    FoldIndexOutOfRange {
+        fold: usize,
+        index: i64,
+    },
+    FoldUnknownObservation {
+        fold: usize,
+        observation_id: String,
+    },
+    FoldProvenanceUnavailable {
+        fold_count: usize,
+    },
+    FoldDuplicateObservation {
+        fold: usize,
+        role: &'static str,
+        observation_id: String,
+    },
+    FoldTrainValidationOverlap {
+        fold: usize,
+        observation_id: String,
+    },
+    FoldSampleLeakage {
+        fold: usize,
+        sample_id: String,
+    },
+    FoldGroupLeakage {
+        fold: usize,
+        group_id: String,
+    },
+    UnalignedBlockSources {
+        partition: String,
+        matrices: usize,
+        source_ids: usize,
+    },
+    SourceLayoutConflict {
+        source_id: String,
+        partition: String,
+        detail: &'static str,
+    },
+    PartitionLayoutConflict {
+        partition: String,
+        detail: &'static str,
+    },
+}
+
+impl std::fmt::Display for DagMlPreflightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingSampleId => f.write_str(
+                "cannot emit dag-ml-data: stable sample identity is unavailable; declare sample_index: { by: id, key: <metadata column> }",
+            ),
+            Self::MissingIdentityColumn { column, partition } => write!(
+                f,
+                "cannot emit dag-ml-data: identity column '{column}' is absent from partition '{partition}'",
+            ),
+            Self::UnalignedIdentityColumn { column, partition } => write!(
+                f,
+                "cannot emit dag-ml-data: identity column '{column}' is not aligned to partition '{partition}'",
+            ),
+            Self::EmptyIdentityValue { column, partition, row } => write!(
+                f,
+                "cannot emit dag-ml-data: identity column '{column}' has an empty value in partition '{partition}' row {row}",
+            ),
+            Self::InvalidIdentifier { kind, value } => write!(
+                f,
+                "cannot emit dag-ml-data: {kind} '{value}' is not a dag-ml identifier (ASCII alphanumeric plus _-. only, max 128 bytes)",
+            ),
+            Self::DuplicateObservationId { observation_id } => write!(
+                f,
+                "cannot emit dag-ml-data: duplicate observation id '{observation_id}'",
+            ),
+            Self::RepeatedSampleNeedsObservationId { sample_id } => write!(
+                f,
+                "cannot emit dag-ml-data: repeated sample '{sample_id}' requires sample_index.observation_id",
+            ),
+            Self::UnalignedWeights { partition } => write!(
+                f,
+                "cannot emit dag-ml-data: sample weights are not aligned to partition '{partition}'",
+            ),
+            Self::NonFiniteWeight { partition, row } => write!(
+                f,
+                "cannot emit dag-ml-data: sample weight in partition '{partition}' row {row} is non-finite",
+            ),
+            Self::FoldIndexOutOfRange { fold, index } => write!(
+                f,
+                "cannot emit dag-ml-data: fold {fold} references row index {index}, outside the assembled observations",
+            ),
+            Self::FoldUnknownObservation {
+                fold,
+                observation_id,
+            } => write!(
+                f,
+                "cannot emit dag-ml-data: fold {fold} references unknown observation '{observation_id}'",
+            ),
+            Self::FoldProvenanceUnavailable { fold_count } => write!(
+                f,
+                "cannot emit dag-ml-data: {fold_count} fold(s) have positional indices but no stable pre-partition observation provenance",
+            ),
+            Self::FoldDuplicateObservation { fold, role, observation_id } => write!(
+                f,
+                "cannot emit dag-ml-data: fold {fold} has duplicate {role} observation '{observation_id}'",
+            ),
+            Self::FoldTrainValidationOverlap { fold, observation_id } => write!(
+                f,
+                "cannot emit dag-ml-data: fold {fold} has train/validation overlap at observation '{observation_id}'",
+            ),
+            Self::FoldSampleLeakage { fold, sample_id } => write!(
+                f,
+                "cannot emit dag-ml-data: fold {fold} leaks sample '{sample_id}' across train and validation",
+            ),
+            Self::FoldGroupLeakage { fold, group_id } => write!(
+                f,
+                "cannot emit dag-ml-data: fold {fold} leaks group '{group_id}' across train and validation",
+            ),
+            Self::UnalignedBlockSources { partition, matrices, source_ids } => write!(
+                f,
+                "cannot emit dag-ml-data: partition '{partition}' has {matrices} feature matrices but {source_ids} source ids",
+            ),
+            Self::SourceLayoutConflict { source_id, partition, detail } => write!(
+                f,
+                "cannot emit dag-ml-data: source '{source_id}' conflicts in partition '{partition}' ({detail})",
+            ),
+            Self::PartitionLayoutConflict { partition, detail } => write!(
+                f,
+                "cannot emit dag-ml-data: partition '{partition}' conflicts with the dataset contract ({detail})",
+            ),
+        }
     }
-    let base = sanitize(raw, "sample");
-    let mut candidate = base.clone();
-    let mut n = 1;
-    while taken.contains(&candidate) {
-        n += 1;
-        let suffix = format!("_{n}");
-        let mut head = base.clone();
-        head.truncate(128usize.saturating_sub(suffix.len()));
-        candidate = format!("{head}{suffix}");
+}
+
+impl std::error::Error for DagMlPreflightError {}
+
+fn preflight_err(error: DagMlPreflightError) -> SpecError {
+    SpecError::new(error.to_string())
+}
+
+#[derive(Debug, Clone)]
+struct IdentityRow {
+    partition: String,
+    sample_id: String,
+    observation_id: String,
+    group_id: Option<String>,
+    repetition_id: Option<String>,
+    source_ids: Vec<String>,
+    metadata: BTreeMap<String, Value>,
+}
+
+/// One IO-materialized, target-free feature cohort ready to be bound to a
+/// native Methods PLS PREDICT request by the host runtime.
+///
+/// This bridge deliberately does not depend on `dag-ml-core`: IO owns the
+/// rows/source identity and DAG-ML owns the scheduler/provider. The caller
+/// must pass all fields unchanged to its typed runtime adapter; no target
+/// matrix is carried here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MethodsPlsPredictCohort {
+    pub partition: String,
+    pub source_id: String,
+    pub sample_ids: Vec<String>,
+    pub values: Vec<f64>,
+    pub rows: usize,
+    pub cols: usize,
+    pub data_content_profile: String,
+    pub data_content_fingerprint: String,
+}
+
+fn methods_pls_predict_content_fingerprint(
+    rows: usize,
+    cols: usize,
+    values: &[f64],
+) -> Result<String, SpecError> {
+    if rows
+        .checked_mul(cols)
+        .is_none_or(|expected| expected != values.len())
+    {
+        return Err(SpecError::new(
+            "cannot emit Methods PLS PREDICT cohort: matrix dimensions are invalid",
+        ));
     }
-    taken.insert(candidate.clone());
-    assigned.insert(raw.to_string(), candidate.clone());
-    candidate
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(SpecError::new(
+            "cannot emit Methods PLS PREDICT cohort: feature matrix contains a non-finite value",
+        ));
+    }
+    let rows = u64::try_from(rows).map_err(err)?;
+    let cols = u64::try_from(cols).map_err(err)?;
+    let mut hasher = Sha256::new();
+    hasher.update(METHODS_PLS_PREDICT_CONTENT_PROFILE.as_bytes());
+    hasher.update([0]);
+    hasher.update(rows.to_le_bytes());
+    hasher.update(cols.to_le_bytes());
+    for value in values {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Materialize one exact source from one assembled partition for target-free
+/// Methods PLS prediction. Stable sample IDs are mandatory and source ordering
+/// is preserved; callers must use the returned fingerprint/profile unchanged
+/// in the corresponding DAG-ML envelope and runtime input.
+pub fn methods_pls_predict_cohort(
+    assembled: &AssembledDataset,
+    partition: &str,
+    source_id: &str,
+) -> Result<MethodsPlsPredictCohort, SpecError> {
+    let block = assembled.blocks.get(partition).ok_or_else(|| {
+        SpecError::new(format!(
+            "cannot emit Methods PLS PREDICT cohort: unknown partition `{partition}`"
+        ))
+    })?;
+    if block.x.len() != block.source_ids.len() {
+        return Err(preflight_err(DagMlPreflightError::UnalignedBlockSources {
+            partition: partition.to_string(),
+            matrices: block.x.len(),
+            source_ids: block.source_ids.len(),
+        }));
+    }
+    let source_index = block
+        .source_ids
+        .iter()
+        .position(|candidate| candidate == source_id)
+        .ok_or_else(|| {
+            SpecError::new(format!(
+                "cannot emit Methods PLS PREDICT cohort: partition `{partition}` has no source `{source_id}`"
+            ))
+        })?;
+    let matrix = &block.x[source_index];
+    if matrix.n_rows != block.n_samples {
+        return Err(SpecError::new(format!(
+            "cannot emit Methods PLS PREDICT cohort: source `{source_id}` row count differs from partition `{partition}`"
+        )));
+    }
+    let sample_column = assembled
+        .identity
+        .sample_id
+        .as_deref()
+        .ok_or_else(|| preflight_err(DagMlPreflightError::MissingSampleId))?;
+    let sample_ids = (0..block.n_samples)
+        .map(|row| identity_value(block, sample_column, partition, row))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(preflight_err)?;
+    for sample_id in &sample_ids {
+        ensure_identifier("sample id", sample_id).map_err(preflight_err)?;
+    }
+    if sample_ids.iter().collect::<BTreeSet<_>>().len() != sample_ids.len() {
+        return Err(SpecError::new(
+            "cannot emit Methods PLS PREDICT cohort: duplicate sample identities",
+        ));
+    }
+    let values = matrix
+        .data
+        .iter()
+        .map(|value| f64::from(*value))
+        .collect::<Vec<_>>();
+    let data_content_fingerprint =
+        methods_pls_predict_content_fingerprint(matrix.n_rows, matrix.n_cols, &values)?;
+    Ok(MethodsPlsPredictCohort {
+        partition: partition.to_string(),
+        source_id: source_id.to_string(),
+        sample_ids,
+        values,
+        rows: matrix.n_rows,
+        cols: matrix.n_cols,
+        data_content_profile: METHODS_PLS_PREDICT_CONTENT_PROFILE.to_string(),
+        data_content_fingerprint,
+    })
+}
+
+fn cell_value(cell: &Cell) -> Value {
+    match cell {
+        Cell::Bool(value) => Value::Bool(*value),
+        Cell::Int(value) => Value::from(*value),
+        Cell::Float(value) if value.is_finite() => Value::from(*value),
+        Cell::Str(value) => Value::String(value.clone()),
+        Cell::Float(_) | Cell::Na => Value::Null,
+    }
+}
+
+fn identity_value(
+    block: &PartitionBlock,
+    column: &str,
+    partition: &str,
+    row: usize,
+) -> Result<String, DagMlPreflightError> {
+    let frame =
+        block
+            .metadata
+            .as_ref()
+            .ok_or_else(|| DagMlPreflightError::MissingIdentityColumn {
+                column: column.to_string(),
+                partition: partition.to_string(),
+            })?;
+    let values =
+        frame
+            .column(column)
+            .ok_or_else(|| DagMlPreflightError::MissingIdentityColumn {
+                column: column.to_string(),
+                partition: partition.to_string(),
+            })?;
+    if values.values.len() != block.n_samples {
+        return Err(DagMlPreflightError::UnalignedIdentityColumn {
+            column: column.to_string(),
+            partition: partition.to_string(),
+        });
+    }
+    let value = values.values[row].to_str_scalar();
+    let missing = matches!(&values.values[row], Cell::Na)
+        || matches!(&values.values[row], Cell::Float(value) if value.is_nan());
+    if value.trim().is_empty() || missing {
+        return Err(DagMlPreflightError::EmptyIdentityValue {
+            column: column.to_string(),
+            partition: partition.to_string(),
+            row,
+        });
+    }
+    Ok(value)
+}
+
+fn ensure_identifier(kind: &'static str, value: &str) -> Result<(), DagMlPreflightError> {
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
+    if valid {
+        Ok(())
+    } else {
+        Err(DagMlPreflightError::InvalidIdentifier {
+            kind,
+            value: value.to_string(),
+        })
+    }
+}
+
+/// Validate and extract every relation row before schema construction.
+///
+/// This is intentionally public so hosts can fail before serialising an
+/// envelope. It never substitutes row positions, sanitized IDs, or fabricated
+/// observation labels for absent scientific provenance.
+pub fn preflight_identity(assembled: &AssembledDataset) -> Result<(), DagMlPreflightError> {
+    let rows = collect_identity_rows(assembled)?;
+    let first = assembled.blocks.values().next().ok_or_else(|| {
+        DagMlPreflightError::PartitionLayoutConflict {
+            partition: "<none>".to_string(),
+            detail: "dataset has no partitions",
+        }
+    })?;
+    validate_partition_contracts(assembled, first)?;
+    source_layouts(assembled)?;
+    fold_specs(assembled, &rows, None)?;
+    Ok(())
+}
+
+fn collect_identity_rows(
+    assembled: &AssembledDataset,
+) -> Result<Vec<IdentityRow>, DagMlPreflightError> {
+    let sample_column = assembled
+        .identity
+        .sample_id
+        .as_deref()
+        .ok_or(DagMlPreflightError::MissingSampleId)?;
+    let mut rows = Vec::new();
+    for (partition, block) in &assembled.blocks {
+        if let Some(weights) = &block.weights {
+            if weights.len() != block.n_samples {
+                return Err(DagMlPreflightError::UnalignedWeights {
+                    partition: partition.clone(),
+                });
+            }
+            for (row, weight) in weights.iter().enumerate() {
+                if !weight.is_finite() {
+                    return Err(DagMlPreflightError::NonFiniteWeight {
+                        partition: partition.clone(),
+                        row,
+                    });
+                }
+            }
+        }
+        for row in 0..block.n_samples {
+            let sample_id = identity_value(block, sample_column, partition, row)?;
+            ensure_identifier("sample id", &sample_id)?;
+            let observation_id = match assembled.identity.observation_id.as_deref() {
+                Some(column) => identity_value(block, column, partition, row)?,
+                // Reusing an explicit, stable sample key is lossless for the
+                // one-observation-per-sample case. Duplicates are rejected
+                // below rather than receiving a synthetic `.obsN` suffix.
+                None => sample_id.clone(),
+            };
+            ensure_identifier("observation id", &observation_id)?;
+            let group_id = assembled
+                .identity
+                .group_id
+                .as_deref()
+                .map(|column| identity_value(block, column, partition, row))
+                .transpose()?;
+            if let Some(value) = &group_id {
+                ensure_identifier("group id", value)?;
+            }
+            let repetition_id = assembled
+                .identity
+                .repetition_id
+                .as_deref()
+                .or(assembled.repetition.as_deref())
+                .map(|column| identity_value(block, column, partition, row))
+                .transpose()?;
+            if let Some(value) = &repetition_id {
+                ensure_identifier("repetition id", value)?;
+            }
+            let mut metadata = block
+                .metadata
+                .as_ref()
+                .map(|frame| {
+                    frame
+                        .columns
+                        .iter()
+                        .map(|column| (column.name.clone(), cell_value(&column.values[row])))
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .unwrap_or_default();
+            metadata.insert("io.partition".to_string(), Value::String(partition.clone()));
+            metadata.insert(
+                "io.source_ids".to_string(),
+                Value::Array(
+                    block
+                        .source_ids
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+            if let Some(weight) = block.weights.as_ref().map(|weights| weights[row]) {
+                metadata.insert("io.sample_weight".to_string(), Value::from(weight));
+                if let Some(column) = &block.weights_header {
+                    metadata.insert(
+                        "io.sample_weight_column".to_string(),
+                        Value::String(column.clone()),
+                    );
+                }
+            }
+            rows.push(IdentityRow {
+                partition: partition.clone(),
+                sample_id,
+                observation_id,
+                group_id,
+                repetition_id,
+                source_ids: block.source_ids.clone(),
+                metadata,
+            });
+        }
+    }
+    let mut samples = BTreeMap::<String, usize>::new();
+    for row in &rows {
+        let count = samples.entry(row.sample_id.clone()).or_default();
+        *count += 1;
+    }
+    if assembled.identity.observation_id.is_none() {
+        if let Some((sample_id, _)) = samples.iter().find(|(_, count)| **count > 1) {
+            return Err(DagMlPreflightError::RepeatedSampleNeedsObservationId {
+                sample_id: sample_id.clone(),
+            });
+        }
+    }
+    let mut observations = BTreeSet::new();
+    for row in &rows {
+        if !observations.insert(row.observation_id.clone()) {
+            return Err(DagMlPreflightError::DuplicateObservationId {
+                observation_id: row.observation_id.clone(),
+            });
+        }
+    }
+    Ok(rows)
 }
 
 /// Map an io header unit onto a spectral axis kind + canonical unit string.
@@ -196,20 +685,6 @@ fn signal_kind(raw: &str) -> SignalKind {
         "preprocessed" => SignalKind::Preprocessed,
         _ => SignalKind::Unknown,
     }
-}
-
-fn processing_names(assembled: &AssembledDataset, source_idx: usize) -> Vec<String> {
-    let mut names = vec!["native".to_string()];
-    for block in assembled.blocks.values() {
-        if let Some(source_processings) = block.processings.get(source_idx) {
-            for (name, _) in source_processings {
-                if !names.iter().any(|seen| seen == name) {
-                    names.push(name.clone());
-                }
-            }
-        }
-    }
-    names
 }
 
 fn source_representation(
@@ -397,6 +872,250 @@ fn emit_metadata(
     (metadata, schema)
 }
 
+#[derive(Clone)]
+struct SourceLayout {
+    id: String,
+    n_features: usize,
+    headers: Vec<String>,
+    unit: String,
+    signal: Option<String>,
+    processings: Vec<String>,
+}
+
+fn source_layouts(assembled: &AssembledDataset) -> Result<Vec<SourceLayout>, DagMlPreflightError> {
+    let mut layouts: Vec<SourceLayout> = Vec::new();
+    for (partition, block) in &assembled.blocks {
+        if block.x.len() != block.source_ids.len() {
+            return Err(DagMlPreflightError::UnalignedBlockSources {
+                partition: partition.clone(),
+                matrices: block.x.len(),
+                source_ids: block.source_ids.len(),
+            });
+        }
+        for (index, matrix) in block.x.iter().enumerate() {
+            let id = block.source_ids[index].clone();
+            ensure_identifier("source id", &id)?;
+            let headers = block
+                .feature_headers
+                .get(index)
+                .cloned()
+                .unwrap_or_default();
+            let unit = block.header_units.get(index).cloned().unwrap_or_default();
+            let signal = block.signal_types.get(index).cloned().flatten();
+            let mut processings = vec!["native".to_string()];
+            if let Some(values) = block.processings.get(index) {
+                processings.extend(values.iter().map(|(name, _)| name.clone()));
+            }
+            if headers.len() != matrix.n_cols {
+                return Err(DagMlPreflightError::SourceLayoutConflict {
+                    source_id: id,
+                    partition: partition.clone(),
+                    detail: "feature-header count differs from matrix width",
+                });
+            }
+            if matrix.n_rows != block.n_samples {
+                return Err(DagMlPreflightError::SourceLayoutConflict {
+                    source_id: id,
+                    partition: partition.clone(),
+                    detail: "feature matrix row count differs from partition sample count",
+                });
+            }
+            if let Some(processings) = block.processings.get(index) {
+                for (_, processing) in processings {
+                    if processing.n_rows != block.n_samples || processing.n_cols != matrix.n_cols {
+                        return Err(DagMlPreflightError::SourceLayoutConflict {
+                            source_id: id,
+                            partition: partition.clone(),
+                            detail: "processing matrix shape differs from native feature matrix",
+                        });
+                    }
+                }
+            }
+            let candidate = SourceLayout {
+                id: id.clone(),
+                n_features: matrix.n_cols,
+                headers,
+                unit,
+                signal,
+                processings,
+            };
+            if let Some(existing) = layouts.iter().find(|layout| layout.id == id) {
+                let detail = if existing.n_features != candidate.n_features {
+                    Some("feature width differs")
+                } else if existing.headers != candidate.headers {
+                    Some("feature headers differ")
+                } else if existing.unit != candidate.unit {
+                    Some("header unit differs")
+                } else if existing.signal != candidate.signal {
+                    Some("signal type differs")
+                } else if existing.processings != candidate.processings {
+                    Some("processing layout differs")
+                } else {
+                    None
+                };
+                if let Some(detail) = detail {
+                    return Err(DagMlPreflightError::SourceLayoutConflict {
+                        source_id: id,
+                        partition: partition.clone(),
+                        detail,
+                    });
+                }
+            } else {
+                layouts.push(candidate);
+            }
+        }
+    }
+    Ok(layouts)
+}
+
+fn validate_partition_contracts(
+    assembled: &AssembledDataset,
+    first_block: &PartitionBlock,
+) -> Result<(), DagMlPreflightError> {
+    for (partition, block) in &assembled.blocks {
+        if block.y.is_some() != first_block.y.is_some()
+            || block.y_headers != first_block.y_headers
+            || block.y_categorical != first_block.y_categorical
+        {
+            return Err(DagMlPreflightError::PartitionLayoutConflict {
+                partition: partition.clone(),
+                detail: "target layout differs",
+            });
+        }
+        let metadata_layout = |value: &Option<nirs4all_io::materialize::Frame>| {
+            value.as_ref().map(|frame| {
+                frame
+                    .columns
+                    .iter()
+                    .map(|column| (column.name.clone(), column.dtype, column.numeric_kind))
+                    .collect::<Vec<_>>()
+            })
+        };
+        if metadata_layout(&block.metadata) != metadata_layout(&first_block.metadata) {
+            return Err(DagMlPreflightError::PartitionLayoutConflict {
+                partition: partition.clone(),
+                detail: "metadata layout differs",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn fold_specs(
+    assembled: &AssembledDataset,
+    identity_rows: &[IdentityRow],
+    group: Option<&GroupSpec>,
+) -> Result<Vec<FoldSpec>, DagMlPreflightError> {
+    if assembled.folds.is_empty() {
+        return Ok(vec![]);
+    }
+    if assembled.folds.len() != assembled.fold_provenance.len() {
+        return Err(DagMlPreflightError::FoldProvenanceUnavailable {
+            fold_count: assembled.folds.len(),
+        });
+    }
+    let observations = identity_rows
+        .iter()
+        .map(|row| {
+            (
+                row.observation_id.as_str(),
+                (row.sample_id.as_str(), row.group_id.as_deref()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assembled
+        .fold_provenance
+        .iter()
+        .enumerate()
+        .map(|(fold_index, fold)| {
+            let validate_members = |role: &'static str,
+                                    values: &[String]|
+             -> Result<BTreeSet<String>, DagMlPreflightError> {
+                let mut seen = BTreeSet::new();
+                for value in values {
+                    if !observations.contains_key(value.as_str()) {
+                        return Err(DagMlPreflightError::FoldUnknownObservation {
+                            fold: fold_index,
+                            observation_id: value.clone(),
+                        });
+                    }
+                    if !seen.insert(value.clone()) {
+                        return Err(DagMlPreflightError::FoldDuplicateObservation {
+                            fold: fold_index,
+                            role,
+                            observation_id: value.clone(),
+                        });
+                    }
+                }
+                Ok(seen)
+            };
+            let train = validate_members("train", &fold.train_observation_ids)?;
+            let validation = validate_members("validation", &fold.validation_observation_ids)?;
+            if let Some(observation_id) = train.intersection(&validation).next() {
+                return Err(DagMlPreflightError::FoldTrainValidationOverlap {
+                    fold: fold_index,
+                    observation_id: observation_id.clone(),
+                });
+            }
+            let train_samples = train
+                .iter()
+                .map(|observation| observations[observation.as_str()].0)
+                .collect::<BTreeSet<_>>();
+            if let Some(sample_id) = validation
+                .iter()
+                .map(|observation| observations[observation.as_str()].0)
+                .find(|sample_id| train_samples.contains(sample_id))
+            {
+                return Err(DagMlPreflightError::FoldSampleLeakage {
+                    fold: fold_index,
+                    sample_id: sample_id.to_string(),
+                });
+            }
+            let train_groups = train
+                .iter()
+                .filter_map(|observation| observations[observation.as_str()].1.map(str::to_string))
+                .collect::<BTreeSet<_>>();
+            if let Some(group_id) = validation
+                .iter()
+                .filter_map(|observation| observations[observation.as_str()].1)
+                .find(|group_id| train_groups.contains(*group_id))
+            {
+                return Err(DagMlPreflightError::FoldGroupLeakage {
+                    fold: fold_index,
+                    group_id: group_id.to_string(),
+                });
+            }
+            let mut metadata = BTreeMap::new();
+            metadata.insert(
+                "io.train_observation_ids".to_string(),
+                Value::Array(
+                    fold.train_observation_ids
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+            metadata.insert(
+                "io.validation_observation_ids".to_string(),
+                Value::Array(
+                    fold.validation_observation_ids
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+            Ok(FoldSpec {
+                id: format!("io.fold.{fold_index}"),
+                group_id: group.map(|group| group.id.clone()),
+                split_column: Some("io.partition".to_string()),
+                metadata,
+            })
+        })
+        .collect()
+}
+
 fn build_dag_ml_data_parts(
     assembled: &AssembledDataset,
 ) -> Result<(DatasetSchema, DataPlan, Option<SampleRelationTable>), SpecError> {
@@ -410,115 +1129,67 @@ fn build_dag_ml_data_parts(
             "cannot emit dag-ml-data: dataset has no feature source",
         ));
     }
-    // Logical feature sources = X matrices per partition block, NOT
-    // `assembled.n_sources` (which counts partition source-tables — a train/test
-    // split is ONE logical source spread across blocks, and using the table count
-    // would emit a phantom 0-feature source + a bogus join).
-    let n_sources = b0.x.len();
+    validate_partition_contracts(assembled, b0).map_err(preflight_err)?;
+    // Source layouts are the validated union across blocks. Explicit train/test
+    // inputs need not contain the same table instances, so a global table list
+    // is neither required nor sufficient provenance.
+    let source_layouts = source_layouts(assembled).map_err(preflight_err)?;
+    if source_layouts.is_empty() {
+        return Err(SpecError::new(
+            "cannot emit dag-ml-data: dataset has no feature-source provenance",
+        ));
+    }
 
     // --- sample / observation identity across all partitions ---
-    // Use the repetition key (a leakage unit) iff it is present and aligned in
-    // every partition; otherwise each observation is its own 1:1 sample with no
-    // group_id (roadmap 10.2: group_id only when the key is a leakage unit).
-    let rep_col = assembled.repetition.as_deref();
-    let use_rep = rep_col.is_some_and(|col| {
-        assembled.blocks.values().all(|b| {
-            b.metadata
-                .as_ref()
-                .is_some_and(|f| f.has_column(col) && f.str_column(col).len() == b.n_samples)
-        })
-    });
-
+    // The bridge accepts only explicit scientific identity emitted by io's
+    // sample_index provenance. It never substitutes `s.<row>`/`obs.<row>` or
+    // a sanitized collision suffix for missing values.
+    let identity_rows = collect_identity_rows(assembled).map_err(preflight_err)?;
     let mut sample_ids: Vec<SampleId> = Vec::new();
     let mut sample_seen: BTreeSet<String> = BTreeSet::new();
-    let mut obs_per_sample: BTreeMap<String, usize> = BTreeMap::new();
-    // raw repetition value -> assigned (collision-disambiguated) sample id.
-    let mut sample_id_for_raw: BTreeMap<String, String> = BTreeMap::new();
-    let mut taken_sample_ids: BTreeSet<String> = BTreeSet::new();
-    let mut rows: Vec<SampleRelation> = Vec::new();
-    let mut global = 0usize;
-    for b in assembled.blocks.values() {
-        let rep_vals = if use_rep {
-            Some(
-                b.metadata
-                    .as_ref()
-                    .expect("checked")
-                    .str_column(rep_col.expect("checked")),
-            )
-        } else {
-            None
-        };
-        for r in 0..b.n_samples {
-            let (observation, sample, group, repetition) = if let Some(rv) = &rep_vals {
-                let key = unique_sample_id(&rv[r], &mut sample_id_for_raw, &mut taken_sample_ids);
-                let n = obs_per_sample.entry(key.clone()).or_insert(0);
-                let observation = format!("{key}.obs{n}");
-                let repetition = format!("rep.{n}");
-                *n += 1;
-                (observation, key.clone(), Some(key), Some(repetition))
-            } else {
-                let pair = (format!("obs.{global}"), format!("s.{global}"), None, None);
-                global += 1;
-                pair
-            };
-            if sample_seen.insert(sample.clone()) {
-                sample_ids.push(SampleId::new(&sample).map_err(err)?);
-            }
-            rows.push(SampleRelation {
-                observation_id: ObservationId::new(&observation).map_err(err)?,
-                sample_id: SampleId::new(&sample).map_err(err)?,
-                source_id: None,
-                target_id: None,
-                group_id: group.map(|g| GroupId::new(&g)).transpose().map_err(err)?,
-                origin_id: None,
-                repetition_id: repetition
-                    .map(|r| RepetitionId::new(&r))
-                    .transpose()
-                    .map_err(err)?,
-                augmented: false,
-                excluded: false,
-                metadata: BTreeMap::new(),
-                tags: vec![],
-                augmentation: None,
-            });
+    for row in &identity_rows {
+        if sample_seen.insert(row.sample_id.clone()) {
+            sample_ids.push(SampleId::new(&row.sample_id).map_err(err)?);
         }
     }
     let n_samples = sample_ids.len();
 
-    // --- sources (each X source → a standardized spectral representation) ---
-    let mut sources = Vec::with_capacity(n_sources);
-    for k in 0..n_sources {
-        let n_features = b0.x[k].n_cols;
-        let headers = b0.feature_headers.get(k).cloned().unwrap_or_default();
-        let unit = b0.header_units.get(k).cloned().unwrap_or_default();
-        let signal = b0.signal_types.get(k).and_then(Clone::clone);
-        let processings = processing_names(assembled, k);
+    // --- sources (validated union of each X source across partitions) ---
+    let mut sources = Vec::with_capacity(source_layouts.len());
+    for layout in &source_layouts {
         let native_representation = source_representation(
             n_samples,
-            n_features,
-            &headers,
-            &unit,
-            signal.as_deref(),
-            &processings,
+            layout.n_features,
+            &layout.headers,
+            &layout.unit,
+            layout.signal.as_deref(),
+            &layout.processings,
         );
         let mut tags = BTreeMap::new();
-        if let Some(sig) = &signal {
+        if let Some(sig) = &layout.signal {
             tags.insert("signal_type".to_string(), Value::String(sig.clone()));
         }
-        if processings.len() > 1 {
+        if layout.processings.len() > 1 {
             tags.insert(
                 "processing_layers".to_string(),
-                Value::Array(processings.iter().cloned().map(Value::String).collect()),
+                Value::Array(
+                    layout
+                        .processings
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
             );
         }
         sources.push(SourceDescriptor {
-            id: SourceId::new(sanitize(&format!("src_{k}"), "src")).map_err(err)?,
-            name: format!("source {k}"),
+            id: SourceId::new(&layout.id).map_err(err)?,
+            name: layout.id.clone(),
             type_id: native_representation.type_id.clone(),
             modality: "spectroscopy".into(),
             native_representation,
             sample_key: "sample_id".into(),
-            granularity: if use_rep {
+            granularity: if identity_rows.iter().any(|row| row.repetition_id.is_some()) {
                 SourceGranularity::PerSampleRepeated
             } else {
                 SourceGranularity::PerSample
@@ -539,6 +1210,58 @@ fn build_dag_ml_data_parts(
     // --- metadata (declared as sample_metadata when present) ---
     let (metadata, metadata_schema) = emit_metadata(b0, n_samples);
 
+    let rows = identity_rows
+        .iter()
+        .map(|row| -> Result<SampleRelation, SpecError> {
+            Ok(SampleRelation {
+                observation_id: ObservationId::new(&row.observation_id).map_err(err)?,
+                sample_id: SampleId::new(&row.sample_id).map_err(err)?,
+                source_id: (row.source_ids.len() == 1)
+                    .then(|| SourceId::new(&row.source_ids[0]))
+                    .transpose()
+                    .map_err(err)?,
+                target_id: None,
+                group_id: row
+                    .group_id
+                    .as_ref()
+                    .map(GroupId::new)
+                    .transpose()
+                    .map_err(err)?,
+                origin_id: None,
+                repetition_id: row
+                    .repetition_id
+                    .as_ref()
+                    .map(RepetitionId::new)
+                    .transpose()
+                    .map_err(err)?,
+                augmented: false,
+                excluded: false,
+                // `origin_id` is intentionally None: v1 assembly has no
+                // augmentation-origin relation. No synthetic origin is made.
+                metadata: row.metadata.clone(),
+                tags: vec![format!("partition:{}", row.partition)],
+                augmentation: None,
+            })
+        })
+        .collect::<Result<Vec<_>, SpecError>>()?;
+
+    let groups = assembled
+        .identity
+        .group_id
+        .as_ref()
+        .map(|column| {
+            Ok(GroupSpec {
+                id: GroupId::new("io.sample_group").map_err(err)?,
+                kind: GroupKind::Custom,
+                column: column.clone(),
+                source_id: None,
+                strict: true,
+                metadata: BTreeMap::new(),
+            })
+        })
+        .transpose()?;
+    let folds = fold_specs(assembled, &identity_rows, groups.as_ref()).map_err(preflight_err)?;
+
     let schema = DatasetSchema {
         dataset_id: sanitize(&assembled.name, "dataset"),
         sample_ids,
@@ -546,11 +1269,24 @@ fn build_dag_ml_data_parts(
         targets,
         metadata,
         metadata_schema,
-        groups: vec![],
-        folds: vec![],
+        groups: groups.into_iter().collect(),
+        folds,
     };
 
     // --- plan: materialize each source, join when multi-source ---
+    let mut materialize_metadata = BTreeMap::new();
+    materialize_metadata.insert(
+        "io.partitions".to_string(),
+        Value::Array(
+            assembled
+                .blocks
+                .keys()
+                .cloned()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+    materialize_metadata.insert("io.fold_count".to_string(), Value::from(schema.folds.len()));
     let mut steps: Vec<DataPlanStep> = schema
         .sources
         .iter()
@@ -562,7 +1298,7 @@ fn build_dag_ml_data_parts(
             output_representation: Some(s.native_representation.id.clone()),
             fit_scope: FitScope::Stateless,
             requires_user_choice: false,
-            metadata: BTreeMap::new(),
+            metadata: materialize_metadata.clone(),
         })
         .collect();
     let output_representation = if schema.sources.len() == 1 {
@@ -601,7 +1337,30 @@ pub fn to_dag_ml_data(
     assembled: &AssembledDataset,
 ) -> Result<CoordinatorDataPlanEnvelope, SpecError> {
     let (schema, plan, relations) = build_dag_ml_data_parts(assembled)?;
-    CoordinatorDataPlanEnvelope::from_parts(&schema, plan, relations.as_ref()).map_err(err)
+    let mut envelope =
+        CoordinatorDataPlanEnvelope::from_parts(&schema, plan, relations.as_ref()).map_err(err)?;
+    // `CoordinatorDataPlanEnvelope` fingerprints a schema but does not carry it
+    // as a first-class field. Retain the exact schema as an io namespaced
+    // snapshot so source ids, target labels, groups and fold declarations do
+    // not disappear behind an opaque hash at this bridge boundary.
+    envelope.metadata.insert(
+        "io.dataset_schema".to_string(),
+        serde_json::to_value(&schema).map_err(err)?,
+    );
+    envelope.metadata.insert(
+        "io.identity_contract".to_string(),
+        serde_json::json!({
+            "sample_id_column": &assembled.identity.sample_id,
+            "observation_id_column": &assembled.identity.observation_id,
+            "repetition_id_column": &assembled.identity.repetition_id,
+            "group_id_column": &assembled.identity.group_id,
+            "source_ids": &assembled.identity.source_ids,
+            "origin_id": Value::Null,
+            "fold_assignments": "schema.folds[].metadata.io.*_observation_ids",
+        }),
+    );
+    envelope.validate().map_err(err)?;
+    Ok(envelope)
 }
 
 /// Build the v2 [`DatasetPackage`] for an [`AssembledDataset`] — the typed-payload
@@ -647,7 +1406,15 @@ mod tests {
             n_sources: 1,
             blocks: Default::default(),
             folds: vec![],
+            fold_provenance: vec![],
             repetition: None,
+            identity: nirs4all_io::materialize::IdentityProvenance {
+                source_ids: vec!["spectra".into()],
+                sample_id: Some("sample_id".into()),
+                observation_id: Some("scan_id".into()),
+                repetition_id: Some("rep".into()),
+                group_id: Some("batch".into()),
+            },
             aggregate: None,
             warnings: vec![],
             audits: vec![],
@@ -659,6 +1426,7 @@ mod tests {
     fn base_block() -> PartitionBlock {
         PartitionBlock {
             n_samples: 2,
+            source_ids: vec!["spectra".into()],
             x: vec![matrix(2, 3)],
             feature_headers: vec![vec!["1000".into(), "1010".into(), "1020".into()]],
             header_units: vec!["nm".into()],
@@ -671,6 +1439,14 @@ mod tests {
                 vec![
                     Column::from_cells("batch", vec![Cell::Str("a".into()), Cell::Str("b".into())]),
                     Column::from_cells("rep", vec![Cell::Int(1), Cell::Int(2)]),
+                    Column::from_cells(
+                        "sample_id",
+                        vec![Cell::Str("S1".into()), Cell::Str("S2".into())],
+                    ),
+                    Column::from_cells(
+                        "scan_id",
+                        vec![Cell::Str("O1".into()), Cell::Str("O2".into())],
+                    ),
                 ],
                 "text",
             )),
@@ -680,23 +1456,54 @@ mod tests {
     }
 
     #[test]
-    fn unique_sample_id_disambiguates_sanitization_collisions() {
-        let mut assigned = BTreeMap::new();
-        let mut taken = BTreeSet::new();
-        // `A/B` sanitizes to `A_B`, which equals the sanitization of `A_B`.
-        let a = unique_sample_id("A/B", &mut assigned, &mut taken);
-        let b = unique_sample_id("A_B", &mut assigned, &mut taken);
-        assert_ne!(
-            a, b,
-            "distinct raw values must not merge into one sample id"
+    fn preflight_refuses_missing_stable_sample_identity() {
+        let mut assembled = assembled_with_block(base_block());
+        assembled.identity.sample_id = None;
+        assert_eq!(
+            preflight_identity(&assembled),
+            Err(DagMlPreflightError::MissingSampleId)
         );
-        // the same raw value is stable across calls
-        assert_eq!(a, unique_sample_id("A/B", &mut assigned, &mut taken));
+    }
+
+    #[test]
+    fn methods_predict_cohort_is_target_free_and_matches_the_cross_runtime_vector() {
+        let cohort =
+            methods_pls_predict_cohort(&assembled_with_block(base_block()), "train", "spectra")
+                .unwrap();
+        assert_eq!(cohort.sample_ids, vec!["S1", "S2"]);
+        assert_eq!(cohort.rows, 2);
+        assert_eq!(cohort.cols, 3);
+        assert_eq!(cohort.values, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(cohort.data_content_profile, "n4a-matrix-f64-le.v1");
+        assert_eq!(
+            cohort.data_content_fingerprint,
+            "e413ddf6896dd5eb7d292782b0e427a79864e98768fddab118f5f2eecf2895ea"
+        );
+    }
+
+    #[test]
+    fn methods_predict_cohort_refuses_duplicate_or_nonfinite_rows() {
+        let mut duplicate = base_block();
+        duplicate.metadata.as_mut().unwrap().columns[2] = Column::from_cells(
+            "sample_id",
+            vec![Cell::Str("S1".into()), Cell::Str("S1".into())],
+        );
+        let error =
+            methods_pls_predict_cohort(&assembled_with_block(duplicate), "train", "spectra")
+                .unwrap_err();
+        assert!(error.to_string().contains("duplicate sample"));
+
+        let mut nonfinite = base_block();
+        nonfinite.x[0].data[0] = f32::NAN;
+        let error =
+            methods_pls_predict_cohort(&assembled_with_block(nonfinite), "train", "spectra")
+                .unwrap_err();
+        assert!(error.to_string().contains("non-finite"));
     }
 
     #[test]
     fn emits_standard_single_source_signal_target_and_metadata() {
-        let (schema, plan, _relations) =
+        let (schema, plan, relations) =
             build_dag_ml_data_parts(&assembled_with_block(base_block())).unwrap();
         let protein = TargetId::new("protein").unwrap();
 
@@ -722,6 +1529,18 @@ mod tests {
             plan.output_representation.as_str(),
             REPRESENTATION_SIGNAL_1D
         );
+        let relations = relations.expect("relations");
+        assert_eq!(relations.rows[0].sample_id.as_str(), "S1");
+        assert_eq!(relations.rows[0].observation_id.as_str(), "O1");
+        assert_eq!(relations.rows[0].group_id.as_ref().unwrap().as_str(), "a");
+        assert_eq!(
+            relations.rows[0].repetition_id.as_ref().unwrap().as_str(),
+            "1"
+        );
+        assert_eq!(
+            relations.rows[0].source_id.as_ref().unwrap().as_str(),
+            "spectra"
+        );
     }
 
     #[test]
@@ -746,6 +1565,7 @@ mod tests {
     fn emits_feature_block_set_for_multi_source_join() {
         let mut block = base_block();
         block.x.push(matrix(2, 2));
+        block.source_ids.push("markers".into());
         block
             .feature_headers
             .push(vec!["1200".into(), "1210".into()]);
@@ -786,5 +1606,259 @@ mod tests {
         assert_eq!(target.rank, Some(2));
         assert_eq!(target.axes[1].kind, AxisKind::Target);
         assert_eq!(target.axes[1].size, Some(2));
+    }
+
+    #[test]
+    fn preserves_weights_partitions_and_fold_provenance() {
+        let mut block = base_block();
+        block.weights = Some(vec![0.25, 2.0]);
+        block.weights_header = Some("quality_weight".into());
+        let mut assembled = assembled_with_block(block);
+        assembled.folds = vec![(vec![0], vec![1])];
+        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+            train_observation_ids: vec!["O1".into()],
+            validation_observation_ids: vec!["O2".into()],
+        }];
+
+        let (schema, plan, relations) = build_dag_ml_data_parts(&assembled).unwrap();
+        let relations = relations.expect("relations");
+        assert_eq!(
+            relations.rows[0].metadata["io.sample_weight"],
+            Value::from(0.25_f32)
+        );
+        assert_eq!(
+            relations.rows[0].metadata["io.sample_weight_column"],
+            Value::String("quality_weight".into())
+        );
+        assert_eq!(
+            relations.rows[0].metadata["io.partition"],
+            Value::String("train".into())
+        );
+        assert_eq!(schema.folds.len(), 1);
+        assert_eq!(
+            schema.folds[0].metadata["io.validation_observation_ids"],
+            Value::Array(vec![Value::String("O2".into())])
+        );
+        assert_eq!(
+            plan.steps[0].metadata["io.partitions"],
+            Value::Array(vec![Value::String("train".into())])
+        );
+        let envelope = to_dag_ml_data(&assembled).unwrap();
+        assert_eq!(
+            envelope.metadata["io.dataset_schema"]["targets"]["protein"]["id"],
+            Value::String(REPRESENTATION_TARGET_NUMERIC.into())
+        );
+        assert_eq!(
+            envelope.coordinator_relations.as_ref().unwrap().records[0].metadata
+                ["io.sample_weight"],
+            Value::from(0.25_f32)
+        );
+    }
+
+    #[test]
+    fn preflight_refuses_repeated_samples_without_observation_provenance() {
+        let mut assembled = assembled_with_block(base_block());
+        assembled.identity.observation_id = None;
+        let frame = assembled
+            .blocks
+            .get_mut("train")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap();
+        frame
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "sample_id")
+            .unwrap()
+            .values[1] = Cell::Str("S1".into());
+        assert_eq!(
+            preflight_identity(&assembled),
+            Err(DagMlPreflightError::RepeatedSampleNeedsObservationId {
+                sample_id: "S1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn folds_use_prepartition_observation_provenance_not_block_order() {
+        let mut assembled = assembled_with_block(base_block());
+        // Assemble blocks in a different order than the original combined frame.
+        let mut test = base_block();
+        test.metadata
+            .as_mut()
+            .unwrap()
+            .columns
+            .iter_mut()
+            .for_each(|column| {
+                column.values.reverse();
+            });
+        assembled.blocks.insert("test".into(), test);
+        assembled.folds = vec![(vec![0, 1], vec![2])];
+        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+            train_observation_ids: vec!["O3".into(), "O1".into()],
+            validation_observation_ids: vec!["O2".into()],
+        }];
+        // Keep the direct fixture's scientific identifiers globally unique.
+        assembled
+            .blocks
+            .get_mut("test")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "sample_id")
+            .unwrap()
+            .values = vec![Cell::Str("S4".into()), Cell::Str("S3".into())];
+        assembled
+            .blocks
+            .get_mut("test")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "scan_id")
+            .unwrap()
+            .values = vec![Cell::Str("O4".into()), Cell::Str("O3".into())];
+        assembled
+            .blocks
+            .get_mut("test")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "batch")
+            .unwrap()
+            .values = vec![Cell::Str("b".into()), Cell::Str("c".into())];
+        // Use an existing observation in the provenance and verify exact order
+        // rather than the materialized train/test row order.
+        assembled.fold_provenance[0].train_observation_ids = vec!["O1".into(), "O4".into()];
+        assembled.fold_provenance[0].validation_observation_ids = vec!["O3".into()];
+        let (schema, _, _) = build_dag_ml_data_parts(&assembled).unwrap();
+        assert_eq!(
+            schema.folds[0].metadata["io.train_observation_ids"],
+            Value::Array(vec![Value::String("O1".into()), Value::String("O4".into())])
+        );
+    }
+
+    #[test]
+    fn preflight_refuses_fold_overlap_and_group_leakage() {
+        let mut assembled = assembled_with_block(base_block());
+        assembled.folds = vec![(vec![0], vec![1])];
+        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+            train_observation_ids: vec!["O1".into()],
+            validation_observation_ids: vec!["O1".into()],
+        }];
+        assert_eq!(
+            preflight_identity(&assembled),
+            Err(DagMlPreflightError::FoldTrainValidationOverlap {
+                fold: 0,
+                observation_id: "O1".into(),
+            })
+        );
+        assembled.fold_provenance[0].validation_observation_ids = vec!["O2".into()];
+        assembled
+            .blocks
+            .get_mut("train")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "batch")
+            .unwrap()
+            .values[1] = Cell::Str("a".into());
+        assert_eq!(
+            preflight_identity(&assembled),
+            Err(DagMlPreflightError::FoldGroupLeakage {
+                fold: 0,
+                group_id: "a".into(),
+            })
+        );
+
+        assembled.fold_provenance[0] = nirs4all_io::materialize::FoldProvenance {
+            train_observation_ids: vec!["O1".into(), "O1".into()],
+            validation_observation_ids: vec!["O2".into()],
+        };
+        assert_eq!(
+            preflight_identity(&assembled),
+            Err(DagMlPreflightError::FoldDuplicateObservation {
+                fold: 0,
+                role: "train",
+                observation_id: "O1".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn preflight_refuses_same_sample_across_fold_roles_without_group() {
+        let mut assembled = assembled_with_block(base_block());
+        assembled.identity.group_id = None;
+        assembled.folds = vec![(vec![0], vec![1])];
+        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+            train_observation_ids: vec!["O1".into()],
+            validation_observation_ids: vec!["O2".into()],
+        }];
+        assembled
+            .blocks
+            .get_mut("train")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "sample_id")
+            .unwrap()
+            .values[1] = Cell::Str("S1".into());
+
+        assert_eq!(
+            preflight_identity(&assembled),
+            Err(DagMlPreflightError::FoldSampleLeakage {
+                fold: 0,
+                sample_id: "S1".into(),
+            })
+        );
+        let error = to_dag_ml_data(&assembled).unwrap_err();
+        assert!(error.message.contains("leaks sample 'S1'"));
+    }
+
+    #[test]
+    fn source_schema_is_a_validated_union_of_partition_blocks() {
+        let mut assembled = assembled_with_block(base_block());
+        let mut test = base_block();
+        test.source_ids = vec!["markers".into()];
+        test.feature_headers = vec![vec!["m1".into(), "m2".into(), "m3".into()]];
+        test.metadata
+            .as_mut()
+            .unwrap()
+            .columns
+            .iter_mut()
+            .for_each(|column| {
+                if column.name == "sample_id" {
+                    column.values = vec![Cell::Str("S3".into()), Cell::Str("S4".into())];
+                }
+                if column.name == "scan_id" {
+                    column.values = vec![Cell::Str("O3".into()), Cell::Str("O4".into())];
+                }
+            });
+        assembled.blocks.insert("test".into(), test);
+        let (schema, _, relations) = build_dag_ml_data_parts(&assembled).unwrap();
+        assert_eq!(schema.sources.len(), 2);
+        assert_eq!(
+            relations.unwrap().rows[2]
+                .source_id
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            "markers"
+        );
     }
 }

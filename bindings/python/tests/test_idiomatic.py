@@ -94,13 +94,13 @@ def test_dataset_package_target_exposes_manifest_summary_and_assembled_view():
     assert len(by_id["train/x0"].content_hash) == 64
 
     summary = nio.describe_dataset_package(package)
-    assert summary["schema_version"] == 2
+    assert summary["schema_version"] == 3
     assert summary["name"] == "pkg"
     assert summary["manifest"]["root"] == manifest.root
     canonical = nio.describe_dataset_package(package, canonical=True)
     assert isinstance(canonical, str)
     assert canonical.endswith("\n")
-    assert '"schema_version": 2' in canonical
+    assert '"schema_version": 3' in canonical
 
     assembled = package.to_assembled()
     block = assembled.blocks["train"]
@@ -131,6 +131,68 @@ def test_dataset_package_load_targets_are_coherent():
     assembled = nio.load(package, target="assembled")
     assert assembled.name == "pkg"
     assert assembled.blocks["train"].X[0].shape[0] == assembled.blocks["train"].n_samples
+
+
+def test_dataset_package_v3_cross_language_wire_golden():
+    """The binding wrapper stays byte-identical to the Rust/Python v3 wire."""
+    matrix = {"data": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], "n_rows": 2, "n_cols": 3}
+    full = {
+        "assembled_schema_version": 2,
+        "name": "demo",
+        "task_type": "regression",
+        "signal_type": "absorbance",
+        "n_sources": 1,
+        "folds": [[[0], [1]]],
+        "fold_provenance": [
+            {"train_observation_ids": ["O1"], "validation_observation_ids": ["O2"]}
+        ],
+        "identity": {
+            "provenance": {
+                "source_ids": ["spectra"],
+                "sample_id": "sample_id",
+                "observation_id": "observation_id",
+                "repetition_id": "rep",
+                "group_id": "batch",
+            }
+        },
+        "repetition": None,
+        "aggregate": None,
+        "blocks": {
+            "train": {
+                "n_samples": 2,
+                "source_ids": ["spectra"],
+                "x": [matrix],
+                "feature_headers": [["1000", "1010", "1020"]],
+                "header_units": ["nm"],
+                "signal_types": ["absorbance"],
+                "y": {"data": [0.0, 1.0], "n_rows": 2, "n_cols": 1},
+                "y_headers": ["protein"],
+                "y_categorical": {},
+                "metadata": {
+                    "n_rows": 2,
+                    "columns": [
+                        {"name": "batch", "values": ["a", "b"]},
+                        {"name": "rep", "values": ["r1", "r2"]},
+                        {"name": "sample_id", "values": ["S1", "S2"]},
+                        {"name": "observation_id", "values": ["O1", "O2"]},
+                    ],
+                },
+                "weights": [1.0, 2.0],
+                "weights_header": "w",
+                "processings": [[]],
+            }
+        },
+    }
+    expected = (
+        Path(__file__).resolve().parents[3]
+        / "tests/goldens/dataset_package_v3.cross_language.canonical"
+    ).read_text(encoding="utf-8")
+    assert DatasetPackage(full).to_canonical_summary() == expected
+
+
+def test_dataset_package_rejects_retired_unversioned_assembled_wire():
+    with pytest.raises(ValueError, match="assembled_schema_version=2"):
+        DatasetPackage({"name": "legacy"})
 
 
 def test_public_repr_ids_match_package_contract():

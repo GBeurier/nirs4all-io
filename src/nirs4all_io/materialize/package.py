@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
-"""DatasetPackage v2: a public, target-agnostic package over assembly output.
+"""DatasetPackage v3 over the explicitly versioned AssembledDataset v2 wire.
 
-The package is additive to :class:`AssembledDataset`: it wraps assembled feature,
-target, metadata, and weight payloads in typed blocks, exposes a bytes-free
-payload manifest, and records whether sample identity fell back to row position.
+The package wraps v2 assembly feature, target, metadata, and weight payloads in
+typed blocks, exposes a bytes-free manifest, and records row-position fallback.
+Package v3 and assembled-wire v2 are separate contracts; neither silently
+accepts its retired predecessor.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from ..canonical_json import canonical_json
 from ..spec.dataset_spec import AggregateSpec
 from .assemble import AssembledDataset, PartitionBlock
 
-DATASET_PACKAGE_VERSION = 2
+DATASET_PACKAGE_VERSION = 3
 
 
 class repr_ids:
@@ -216,6 +217,7 @@ class PackagePartition:
 
     n_samples: int
     payloads: list[tuple[str, PayloadBlock]]
+    source_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -239,7 +241,7 @@ class RowPositionFallback:
 
 @dataclass(frozen=True)
 class DatasetPackage:
-    """The public v2 dataset package built from an :class:`AssembledDataset`."""
+    """The public v3 dataset package built from an :class:`AssembledDataset`."""
 
     name: str
     task_type: str
@@ -248,6 +250,8 @@ class DatasetPackage:
     repetition: str | None
     aggregate: AggregateSpec | None
     folds: list[tuple[list[int], list[int]]]
+    fold_provenance: list[dict[str, list[str]]]
+    identity: dict[str, object]
     warnings: list[str]
     audits: list[dict[str, Any]]
     partitions: dict[str, PackagePartition]
@@ -255,7 +259,7 @@ class DatasetPackage:
 
     @classmethod
     def from_assembled(cls, assembled: AssembledDataset) -> DatasetPackage:
-        """Build a v2 package from v1 assembly output."""
+        """Build a v3 package from assembly output."""
         partitions: dict[str, PackagePartition] = {}
         for partition_name, block in assembled.blocks.items():
             payloads: list[tuple[str, PayloadBlock]] = []
@@ -293,7 +297,11 @@ class DatasetPackage:
                         WeightsVector(values=np.asarray(block.weights, dtype=np.float32), header=block.weights_header),
                     )
                 )
-            partitions[partition_name] = PackagePartition(n_samples=block.n_samples, payloads=payloads)
+            partitions[partition_name] = PackagePartition(
+                n_samples=block.n_samples,
+                payloads=payloads,
+                source_ids=list(block.source_ids),
+            )
         return cls(
             name=assembled.name,
             task_type=assembled.task_type,
@@ -302,6 +310,8 @@ class DatasetPackage:
             repetition=assembled.repetition,
             aggregate=assembled.aggregate,
             folds=[(list(train), list(val)) for train, val in assembled.folds],
+            fold_provenance=[dict(fold) for fold in assembled.fold_provenance],
+            identity=dict(assembled.identity),
             warnings=list(assembled.warnings),
             audits=list(assembled.audits),
             partitions=partitions,
@@ -309,7 +319,7 @@ class DatasetPackage:
         )
 
     def to_assembled(self) -> AssembledDataset:
-        """Reconstruct the v1-expressible :class:`AssembledDataset` payload."""
+        """Reconstruct the v2-expressible :class:`AssembledDataset` payload."""
         assembled = AssembledDataset(
             name=self.name,
             task_type=self.task_type,
@@ -321,8 +331,11 @@ class DatasetPackage:
             audits=list(self.audits),
         )
         assembled.folds = [(list(train), list(val)) for train, val in self.folds]
+        assembled.fold_provenance = [dict(fold) for fold in self.fold_provenance]
+        assembled.identity = dict(self.identity)
         for partition_name, partition in self.partitions.items():
             block = PartitionBlock(n_samples=partition.n_samples)
+            block.source_ids = list(partition.source_ids)
             for _payload_id, payload in partition.payloads:
                 if isinstance(payload, FeatureMatrix):
                     block.X.append(np.array(payload.matrix, dtype=np.float32, copy=True))
@@ -369,10 +382,17 @@ class DatasetPackage:
             "n_sources": self.n_sources,
             "repetition": self.repetition,
             "folds": [[list(train), list(val)] for train, val in self.folds],
+            "fold_provenance": [dict(fold) for fold in self.fold_provenance],
             "aggregate": aggregate,
-            "partitions": {name: {"n_samples": partition.n_samples} for name, partition in self.partitions.items()},
+            "partitions": {
+                name: {"n_samples": partition.n_samples, "source_ids": list(partition.source_ids)}
+                for name, partition in self.partitions.items()
+            },
             "manifest": self.manifest().to_dict(),
-            "identity": {"row_position_fallback": self.row_position_fallback.to_dict()},
+            "identity": {
+                "provenance": dict(self.identity),
+                "row_position_fallback": self.row_position_fallback.to_dict(),
+            },
         }
 
     def to_canonical_summary(self) -> str:
@@ -661,19 +681,19 @@ def _manifest_entry(payload: PayloadBlock, *, partition: str, payload_id: str) -
 
 def _compute_row_position_fallback(assembled: AssembledDataset) -> RowPositionFallback:
     partitions = list(assembled.blocks)
-    repetition = assembled.repetition
-    use_repetition = repetition is not None and all(
-        block.metadata is not None and repetition in block.metadata.columns and len(block.metadata[repetition]) == block.n_samples for block in assembled.blocks.values()
+    sample_id = assembled.identity.get("sample_id") if isinstance(assembled.identity, dict) else None
+    use_sample_id = isinstance(sample_id, str) and all(
+        block.metadata is not None and sample_id in block.metadata.columns and len(block.metadata[sample_id]) == block.n_samples for block in assembled.blocks.values()
     )
-    if use_repetition:
+    if use_sample_id:
         used = False
-        reason = f"sample identity derived from repetition key '{repetition}'"
-    elif repetition is not None:
+        reason = f"stable sample-id key '{sample_id}' is aligned in every partition"
+    elif isinstance(sample_id, str):
         used = True
-        reason = f"repetition key '{repetition}' is absent or not aligned in every partition; sample identity falls back to row position"
+        reason = f"sample-id key '{sample_id}' is absent or not aligned in every partition; sample identity falls back to row position"
     else:
         used = True
-        reason = "no repetition key declared; sample identity falls back to row position"
+        reason = "no stable sample-id key declared; sample identity falls back to row position"
     fingerprint = _sha256_json({"used": used, "reason": reason, "partitions": partitions})
     return RowPositionFallback(used=used, reason=reason, partitions=partitions, fingerprint=fingerprint)
 

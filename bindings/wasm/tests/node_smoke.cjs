@@ -87,6 +87,7 @@ const assembled = wasm.assembleDataset(
 );
 // assembleDataset returns the full-value shape: blocks[part].x = [{data, n_rows,
 // n_cols}], metadata = {n_rows, columns: [{name, values}]}.
+assert.strictEqual(assembled.assembled_schema_version, 2, "assembled wire is explicitly v2");
 const block = assembled.blocks.train;
 assert.strictEqual(block.n_samples, 3, "three assembled samples");
 assert.strictEqual(
@@ -105,7 +106,7 @@ assert.ok(
 );
 const metaCols = (block.metadata ? block.metadata.columns : []).map((c) => c.name);
 assert.ok(metaCols.includes("galactic_spc"), "metadata frame is populated");
-assert.ok(!metaCols.includes("sample_id"), "sample_id is identity, not metadata");
+assert.ok(metaCols.includes("sample_id"), "sample_id identity is retained as metadata");
 assert.ok(!block.y, "no targets => no y");
 
 // CSV/tabular bytes path: assembleDataset applies the same native NA policy in

@@ -8,10 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
-use dag_ml_data::{CoordinatorDataPlanEnvelope, REPRESENTATION_SIGNAL_1D};
 use nirs4all_io::infer::infer_path;
 use nirs4all_io::materialize::assemble;
-use nirs4all_io_dagml::to_dag_ml_data;
+use nirs4all_io_dagml::{preflight_identity, to_dag_ml_data, DagMlPreflightError};
 
 fn corpus(case: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -22,60 +21,26 @@ fn corpus(case: &str) -> PathBuf {
         .join(case)
 }
 
-fn emit(case: &str) -> CoordinatorDataPlanEnvelope {
+fn assembled(case: &str) -> nirs4all_io::materialize::AssembledDataset {
     let dir = corpus(case);
     let plan = infer_path(&dir.to_string_lossy(), None).expect("infer");
     let spec = plan.resolved_spec.expect("resolved_spec");
     let assembled = assemble(&spec, Path::new(".")).expect("assemble");
-    to_dag_ml_data(&assembled).expect("emit envelope")
+    assembled
 }
 
 #[test]
-fn emits_valid_envelopes_for_corpus() {
+fn corpus_without_stable_identity_is_refused() {
     for case in ["single_combined", "train_test", "x_y_separate"] {
-        let envelope = emit(case);
-
-        // from_parts self-validates; re-validate to be explicit.
-        envelope
-            .validate()
-            .unwrap_or_else(|e| panic!("{case}: envelope invalid: {e}"));
-
-        // 64-char hex fingerprints, relations present.
-        assert_eq!(envelope.schema_fingerprint.len(), 64, "{case} schema fp");
-        assert_eq!(envelope.plan_fingerprint.len(), 64, "{case} plan fp");
-        assert!(envelope.coordinator_relations.is_some(), "{case} relations");
-
-        // JSON round-trip + validate == dag-ml-data-cli validate-envelope.
-        let json = serde_json::to_string_pretty(&envelope).unwrap();
-        let parsed: CoordinatorDataPlanEnvelope = serde_json::from_str(&json).unwrap();
-        parsed
-            .validate()
-            .unwrap_or_else(|e| panic!("{case}: round-trip invalid: {e}"));
-        assert_eq!(parsed, envelope, "{case} round-trips losslessly");
+        let assembled = assembled(case);
+        assert_eq!(
+            preflight_identity(&assembled),
+            Err(DagMlPreflightError::MissingSampleId),
+            "{case}"
+        );
+        assert!(to_dag_ml_data(&assembled)
+            .unwrap_err()
+            .message
+            .contains("stable sample identity"));
     }
-}
-
-#[test]
-fn partitioned_dataset_is_one_logical_source() {
-    // train/test is ONE logical X source spread across partition blocks — not
-    // two — so the plan has a single materialize step and no phantom join.
-    let envelope = emit("train_test");
-    assert_eq!(
-        envelope.plan.steps.len(),
-        1,
-        "one source => one materialize step"
-    );
-    assert_eq!(
-        envelope.plan.output_representation.as_str(),
-        REPRESENTATION_SIGNAL_1D
-    );
-}
-
-#[test]
-fn emit_is_deterministic() {
-    // Same input → identical envelope (fingerprints are content-derived).
-    assert_eq!(
-        serde_json::to_string(&emit("train_test")).unwrap(),
-        serde_json::to_string(&emit("train_test")).unwrap(),
-    );
 }

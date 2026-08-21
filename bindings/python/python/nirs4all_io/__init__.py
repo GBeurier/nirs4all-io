@@ -22,6 +22,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ._adapter import to_spectrodataset
+from ._assembled import require_assembled_dataset_v2
 from ._native import __version__, assembled_full, load_summary
 from ._native import infer as _native_infer
 from ._native import to_spec as _native_to_spec
@@ -276,7 +277,9 @@ def load(
             return input.to_assembled()
     native_input = _normalize_input(_adapt_to_io_spec(input, base_dir=base_dir))
     if target == "assembled":
-        return load_summary(native_input, conventions, name)
+        summary = load_summary(native_input, conventions, name)
+        require_assembled_dataset_v2(summary)
+        return summary
     if target in {"dataset_package", "package"}:
         return DatasetPackage(assembled_full(native_input, conventions, name))
     if target == "spectrodataset":

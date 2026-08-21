@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 """Materialization: merge/join engine, loaders, and target builders (Epic 4)."""
 
+from .assemble import ASSEMBLED_DATASET_VERSION
 from .join import (
     JoinAudit,
     JoinError,
@@ -61,6 +62,7 @@ __all__ = [
     "coerce_numeric",
     "encode_categorical",
     # package
+    "ASSEMBLED_DATASET_VERSION",
     "DATASET_PACKAGE_VERSION",
     "DatasetPackage",
     "FeatureMatrix",

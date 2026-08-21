@@ -1,4 +1,5 @@
 {
+  "assembled_schema_version": 2,
   "aggregate": null,
   "blocks": {
     "train": {
@@ -28,6 +29,9 @@
       ],
       "signal_types": [
         null
+      ],
+      "source_ids": [
+        "data"
       ],
       "weights_header": null,
       "x": [
@@ -154,7 +158,19 @@
       ]
     }
   },
+  "fold_provenance": [],
   "folds": [],
+  "identity": {
+    "provenance": {
+      "group_id": null,
+      "observation_id": null,
+      "repetition_id": null,
+      "sample_id": null,
+      "source_ids": [
+        "data"
+      ]
+    }
+  },
   "n_sources": 1,
   "name": "data",
   "repetition": null,

@@ -13,6 +13,7 @@ Re-bless with `NIRS4ALL_IO_ACCEPT_GOLDENS=1 pytest tests/test_assembled_goldens.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import pytest
 
 import nirs4all_io as nio
 from nirs4all_io.canonical_json import canonical_json
+from nirs4all_io.materialize.assemble import ASSEMBLED_DATASET_VERSION
 
 _DIR = Path(__file__).parent / "goldens" / "contract"
 _ACCEPT = os.environ.get("NIRS4ALL_IO_ACCEPT_GOLDENS") == "1"
@@ -33,6 +35,7 @@ def _round_mat(arr) -> list[list[float]]:
 def _block_summary(b) -> dict:
     return {
         "n_samples": b.n_samples,
+        "source_ids": b.source_ids,
         "x_shapes": [list(x.shape) for x in b.X],
         "x": [_round_mat(x) for x in b.X],
         "feature_headers": b.feature_headers,
@@ -50,12 +53,15 @@ def _block_summary(b) -> dict:
 
 def _summary(a) -> dict:
     return {
+        "assembled_schema_version": ASSEMBLED_DATASET_VERSION,
         "name": a.name,
         "task_type": a.task_type,
         "signal_type": a.signal_type,
         "n_sources": a.n_sources,
         "blocks": {p: _block_summary(b) for p, b in a.blocks.items()},
         "folds": [[list(tr), list(vl)] for tr, vl in a.folds],
+        "fold_provenance": a.fold_provenance,
+        "identity": {"provenance": a.identity},
         "repetition": a.repetition,
         "aggregate": (
             {
@@ -70,6 +76,15 @@ def _summary(a) -> dict:
     }
 
 
+def _read_v2_golden(path: Path) -> str:
+    """Accept only the explicitly versioned assembled-summary artifact wire."""
+    value = json.loads(path.read_text(encoding="utf-8"))
+    assert value.get("assembled_schema_version") == ASSEMBLED_DATASET_VERSION, (
+        "assembled golden uses the retired unversioned v1 wire; re-bless it as v2"
+    )
+    return canonical_json(value)
+
+
 @pytest.mark.parametrize("case", _CASES)
 def test_assembled_golden(case: str) -> None:
     spec = nio.infer(str(_DIR / "corpus" / case)).accept()
@@ -79,4 +94,4 @@ def test_assembled_golden(case: str) -> None:
     if _ACCEPT:
         golden.write_text(produced, encoding="utf-8")
         return
-    assert produced == golden.read_text(encoding="utf-8"), f"assembled drift for {case}"
+    assert produced == _read_v2_golden(golden), f"assembled drift for {case}"
