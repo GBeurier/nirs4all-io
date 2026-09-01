@@ -28,8 +28,9 @@ struct or a JSON char. `nirs4all_io.summary` prints scored decisions for a plan
 and name/sources for a spec.
 
 The raw JSON surface stays reachable through the MEX dispatcher
-(`n4io('to_spec', input_json, ...)`, `n4io('infer', ...)`, `n4io('validate',
-spec_json)`, `n4io('abi_version')`) — identical to the C ABI / other bindings.
+(`n4io('to_spec', input_json, ...)`, `n4io('infer', ...)`,
+`n4io('load_summary', input_json)`, `n4io('validate', spec_json)`,
+`n4io('abi_version')`) — identical to the C ABI / other bindings.
 
 `jsonencode`/`jsondecode` exist in MATLAB and in Octave ≥ 7 (the CI runs Octave
 on `ubuntu-latest`, currently 8.x).

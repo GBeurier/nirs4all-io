@@ -135,3 +135,9 @@ export function assembleDataset(
   recordSets: RecordSet[],
   specJson: string,
 ): AssembledDataset;
+/** Canonical structural summary from the same native fs-free assembler. */
+export function loadSummary(
+  files: NamedFile[],
+  recordSets: RecordSet[],
+  specJson: string,
+): string;

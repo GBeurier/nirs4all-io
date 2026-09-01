@@ -17,6 +17,9 @@ n4io('validate', spec);
 plan = n4io('infer', json_path(fullfile(corpus, 'single_combined')));
 assert(~isempty(strfind(plan, '"resolved_spec"')), 'plan missing resolved_spec'); %#ok<STREMP>
 
+load_json = n4io('load_summary', json_path(fullfile(corpus, 'single_combined')));
+assert(~isempty(strfind(load_json, '"assembled_schema_version": 2')), 'summary missing schema version'); %#ok<STREMP>
+
 % a bad spec is rejected.
 rejected = false;
 try
@@ -61,6 +64,9 @@ assert(nirs4all_io.validate(pl.resolved_spec) == true, 'resolved_spec rejected')
 flist = {fullfile(corpus, 'x_y_separate', 'X.csv'), fullfile(corpus, 'x_y_separate', 'Y.csv')};
 fpl = nirs4all_io.infer(flist);
 assert(isstruct(fpl) && isfield(fpl, 'resolved_spec'), 'file-list infer failed');
+
+lsum = nirs4all_io.load_summary(fullfile(corpus, 'single_combined'));
+assert(isstruct(lsum) && lsum.assembled_schema_version == 2, 'idiomatic load_summary failed');
 
 % validate rejects a bad spec struct.
 bad_struct = struct('partitions', struct('by', 'random'));

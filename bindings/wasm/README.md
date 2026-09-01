@@ -19,6 +19,7 @@ inferRecords(recordSets)   // decoded nirs4all-formats records -> DatasetPlan ob
 inferDataset(files, recordSets, options) // browser raw files + decoded records -> DatasetPlan object
 proposeDataset(files, recordSets, options) // iterative builder: -> {plan, proposals, spec, valid, validation_errors}
 assembleDataset(files, recordSets, specJson) // materialize a DatasetSpec -> AssembledDataset object
+loadSummary(files, recordSets, specJson) // canonical native structural summary JSON
 version()            // () -> crate version string (semver)
 ```
 

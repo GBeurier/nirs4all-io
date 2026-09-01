@@ -79,6 +79,8 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         st = n4io_to_spec(ctx, input, conv, &out);
     else if (strcmp(cmd, "infer") == 0)
         st = n4io_infer(ctx, input, conv, &out);
+    else if (strcmp(cmd, "load_summary") == 0)
+        st = n4io_load_summary(ctx, input, conv, &out);
     else {
         n4io_context_destroy(ctx);
         mexErrMsgIdAndTxt("n4io:cmd", "unknown command '%s'", cmd);
