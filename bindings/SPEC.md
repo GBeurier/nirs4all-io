@@ -109,7 +109,11 @@ returns canonical JSON by value instead.
 - Per-crate: `cargo fmt --check`, `cargo clippy --workspace --all-targets -D
   warnings`, `cargo test --workspace`, `--no-default-features` build.
 - Contract: Python ≡ Rust ≡ each binding, byte-identical `to_spec`/`infer` JSON.
-- Cross-binding behavioral parity: identical plans across Python/R/MATLAB/WASM.
+- IO-XLG-001 cross-binding qualification: Rust CLI, Python wheel, WASM module,
+  R package, MATLAB/Octave MEX, and direct C ABI materialize one frozen
+  identity-rich fixture to byte-identical assembled-summary-v2 JSON. A runtime
+  absence is recorded as `unavailable`, a build/contract failure as `refused`,
+  and either disposition prevents closure.
 - ABI: symbol-snapshot diff + version script + forbidden-dep audit + the
   compatibility probe on load; an MSVC/Windows leg.
 - Import-boundary: importing the Python binding MUST NOT import `nirs4all`.

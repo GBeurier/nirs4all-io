@@ -126,6 +126,20 @@ const assembledCsv = wasm.assembleDataset(
 const csvBlock = assembledCsv.blocks.train;
 assert.strictEqual(csvBlock.x[0].n_rows, 2, "CSV NA rows preserved");
 assert.deepStrictEqual(csvBlock.x[0].data, [1.0, 7.0, 2.0, 3.0], "CSV NA is replaced");
+const summaryCsv = JSON.parse(wasm.loadSummary(
+  [{ name: "X.csv", bytes: new TextEncoder().encode("1000;1005\n1;\n2;3\n") }],
+  [],
+  JSON.stringify({
+    sources: [{
+      id: "x",
+      role: "features",
+      input: "X.csv",
+      params: { na: { policy: "replace", fill: { method: "value", fill_value: 7.0 } } },
+    }],
+  })
+));
+assert.strictEqual(summaryCsv.assembled_schema_version, 2, "summary wire is explicitly v2");
+assert.deepStrictEqual(summaryCsv.blocks.train.source_ids, ["x"], "summary preserves source ids");
 
 // proposeDataset: iterative builder surface. An X/y pair sharing sample_id ->
 // the proposal layer surfaces a pairing decision; confirming it as a join writes

@@ -13,7 +13,9 @@ use nirs4all_io_core::infer::memory::{
     infer_browser_dataset, infer_decoded_records, infer_named_bytes, DecodedRecordSet, NamedBytes,
 };
 use nirs4all_io_core::infer::propose::{propose_browser_dataset, ConfirmedLock};
-use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
+use nirs4all_io_core::materialize::{
+    assemble_in_memory, AssembledDataset, InMemorySource, SourcePayload,
+};
 use nirs4all_io_core::spec::{normalize_to_spec_dict, validate_spec, DatasetSpec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -255,6 +257,34 @@ pub fn assemble_dataset(
     record_sets: JsValue,
     spec: &str,
 ) -> Result<JsValue, JsError> {
+    let assembled = assemble_from_js(files, record_sets, spec)?;
+    assembled
+        .to_full_value()
+        .serialize(&js_serializer())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Materialize the same fs-free inputs as [`assemble_dataset`] and return the
+/// canonical structural summary used by the native CLI and C ABI.
+///
+/// Keeping this as canonical JSON (rather than a re-serialized JS object) makes
+/// the cross-language qualification byte-exact and preserves source, sample,
+/// observation, repetition, group, and fold provenance without host-side logic.
+#[wasm_bindgen(js_name = loadSummary)]
+pub fn load_summary(
+    files: JsValue,
+    record_sets: JsValue,
+    spec: &str,
+) -> Result<String, JsError> {
+    let assembled = assemble_from_js(files, record_sets, spec)?;
+    canonical_json(&assembled.to_summary_value()).map_err(|e| JsError::new(&e.to_string()))
+}
+
+fn assemble_from_js(
+    files: JsValue,
+    record_sets: JsValue,
+    spec: &str,
+) -> Result<AssembledDataset, JsError> {
     let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
         .map_err(|e| JsError::new(&format!("files must be an array of {{name, bytes}}: {e}")))?;
     let record_sets: Vec<WasmRecordSet> = serde_wasm_bindgen::from_value(record_sets)
@@ -277,12 +307,8 @@ pub fn assemble_dataset(
         });
     }
 
-    let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None)
-        .map_err(|e| JsError::new(&e.message))?;
-    assembled
-        .to_full_value()
-        .serialize(&js_serializer())
-        .map_err(|e| JsError::new(&e.to_string()))
+    assemble_in_memory(&spec, &sources, &HashMap::new(), None)
+        .map_err(|e| JsError::new(&e.message))
 }
 
 /// The wire-contract (crate) version string.
