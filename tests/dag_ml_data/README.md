@@ -43,7 +43,8 @@ cargo test --manifest-path crates/nirs4all-io-dagml/Cargo.toml \
   --config "patch.crates-io.dag-ml-data.path='../dag-ml-data/crates/dag-ml-data'"
 scripts/dag_ml_data_conformance.sh                         # strict proof command
 bash tests/dag_ml_data/verify_cross_cli.sh                 # developer smoke; skips if siblings are absent
-bash tests/dag_ml_data/verify_cross_cli.sh train_test      # a specific case
+bash tests/dag_ml_data/verify_cross_cli.sh \
+  tests/cross_binding/corpus/identity.spec.json            # explicit identity-rich case
 ```
 
 `scripts/dag_ml_data_conformance.sh` is the release-proof entrypoint. It sets
@@ -52,6 +53,10 @@ bash tests/dag_ml_data/verify_cross_cli.sh train_test      # a specific case
 `../dag-ml` for CI clones, and fails with the exact missing-CLI blocker instead
 of reporting a green skip. Override paths with `NIRS4ALL_DAG_ML_DATA` and
 `NIRS4ALL_DAG_ML`.
+
+The default case is the identity-rich IO-XLG fixture. Loader-only convention
+corpora without an explicit `sample_index` are intentionally not release
+fixtures for this bridge: the bridge must reject untraceable sample identity.
 
 `single_combined` is inference-only (no convention match), so the CLI emit path
 (which loads via conventions) does not cover it; the in-process test exercises it

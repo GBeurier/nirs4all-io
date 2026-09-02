@@ -21,9 +21,14 @@ io_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 sib="$(cd "${io_root}/.." && pwd)"
 dmd="${NIRS4ALL_DAG_ML_DATA:-${sib}/dag-ml-data}"
 dml="${NIRS4ALL_DAG_ML:-${sib}/dag-ml}"
-# Convention-loadable corpus cases (the CLI emit path goes through load/conventions);
-# single_combined is inference-only and is covered by the in-process Rust test.
-cases=("${@:-train_test x_y_separate}")
+# The release default must carry explicit, stable identity. Legacy convention
+# corpora without sample_index remain useful loader goldens, but the dag-ml-data
+# bridge correctly refuses them because their samples cannot be tracked safely.
+if [[ "$#" -eq 0 ]]; then
+  inputs=("${io_root}/tests/cross_binding/corpus/identity.spec.json")
+else
+  inputs=("$@")
+fi
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
@@ -37,27 +42,78 @@ if [[ ! -d "${dmd}" || ! -d "${dml}" ]]; then
   exit 0
 fi
 
-echo ">> building CLIs"
-# The emit lives in the nirs4all-io-dagml bridge crate. Build it through its own
-# manifest so we can patch dag-ml-data to the sibling checkout.
-emit_manifest="${io_root}/crates/nirs4all-io-dagml/Cargo.toml"
-dagml_data_patch=(--config "patch.crates-io.dag-ml-data.path='${dmd}/crates/dag-ml-data'")
-( cargo build -q --manifest-path "${emit_manifest}" --bin emit-dagml "${dagml_data_patch[@]}" )
-( cd "${dmd}" && cargo build -q -p dag-ml-data-cli --release )
-( cd "${dml}" && cargo build -q -p dag-ml-cli --release )
+for repository in "${io_root}" "${dmd}" "${dml}"; do
+  if [[ -n "$(git -C "${repository}" status --porcelain=v1 --untracked-files=all)" ]]; then
+    echo "FAIL: cross-CLI conformance requires a clean source checkout: ${repository}" >&2
+    exit 1
+  fi
+done
+io_commit=$(git -C "${io_root}" rev-parse HEAD)
+io_tree=$(git -C "${io_root}" rev-parse HEAD^{tree})
+dmd_commit=$(git -C "${dmd}" rev-parse HEAD)
+dml_commit=$(git -C "${dml}" rev-parse HEAD)
 
-emit_target="$(cargo metadata --format-version 1 --manifest-path "${emit_manifest}" --no-deps "${dagml_data_patch[@]}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+echo ">> building CLIs"
+# Build an exact HEAD archive in the private work directory. Selecting a newer
+# local dag-ml-data candidate may require a lock update; doing that in the source
+# checkout would mix release evidence and can silently leave an unused patch.
+io_source="${work}/io-source"
+mkdir -p "${io_source}"
+git -C "${io_root}" archive --format=tar HEAD | tar -x -C "${io_source}"
+emit_manifest="${io_source}/crates/nirs4all-io-dagml/Cargo.toml"
+dmd_version=$(sed -nE '/^\[workspace\.package\]/,/^\[/{s/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p}' \
+  "${dmd}/Cargo.toml" | head -n1)
+if [[ -z "${dmd_version}" ]]; then
+  echo "FAIL: could not resolve dag-ml-data workspace version" >&2
+  exit 1
+fi
+dagml_data_patch=(--config "patch.crates-io.dag-ml-data.path='${dmd}/crates/dag-ml-data'")
+cargo update -q --manifest-path "${emit_manifest}" -p dag-ml-data \
+  --precise "${dmd_version}" --offline "${dagml_data_patch[@]}"
+metadata_json="${work}/emit-metadata.json"
+cargo metadata --format-version 1 --manifest-path "${emit_manifest}" \
+  "${dagml_data_patch[@]}" > "${metadata_json}"
+python3 - "${metadata_json}" "${dmd}/crates/dag-ml-data/Cargo.toml" "${dmd_version}" <<'PY'
+import json, pathlib, sys
+metadata = json.load(open(sys.argv[1], encoding="utf-8"))
+expected_manifest = pathlib.Path(sys.argv[2]).resolve()
+expected_version = sys.argv[3]
+matches = [package for package in metadata["packages"] if package["name"] == "dag-ml-data"]
+if len(matches) != 1:
+    raise SystemExit(f"expected one dag-ml-data package, found {len(matches)}")
+package = matches[0]
+if pathlib.Path(package["manifest_path"]).resolve() != expected_manifest:
+    raise SystemExit(f"dag-ml-data patch was not selected: {package['manifest_path']}")
+if package["version"] != expected_version or package.get("source") is not None:
+    raise SystemExit(f"unexpected dag-ml-data identity: {package}")
+PY
+cargo build -q --locked --manifest-path "${emit_manifest}" --bin emit-dagml \
+  "${dagml_data_patch[@]}"
+( cd "${dmd}" && cargo build -q --locked -p dag-ml-data-cli --release )
+( cd "${dml}" && cargo build -q --locked -p dag-ml-cli --release )
+
+emit_target="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["target_directory"])' "${metadata_json}")"
 emit_cli="$(find "${emit_target}" -maxdepth 2 -name emit-dagml -type f | head -1)"
 dmd_cli="${dmd}/target/release/dag-ml-data-cli"
 dml_cli="${dml}/target/release/dag-ml-cli"
 
-for case in ${cases[*]}; do
+for requested_input in "${inputs[@]}"; do
+  if [[ -e "${requested_input}" ]]; then
+    input="${requested_input}"
+  elif [[ -e "${io_root}/tests/goldens/contract/corpus/${requested_input}" ]]; then
+    input="${io_root}/tests/goldens/contract/corpus/${requested_input}"
+  else
+    echo "FAIL: conformance input not found: ${requested_input}" >&2
+    exit 1
+  fi
+  case=$(basename "${requested_input}")
+  case=${case%.spec.json}
   echo ">> case: ${case}"
   env_json="${work}/${case}.envelope.json"
   ext_json="${work}/${case}.external.json"
   camp_json="${work}/${case}.campaign.json"
 
-  "${emit_cli}" "${io_root}/tests/goldens/contract/corpus/${case}" > "${env_json}"
+  "${emit_cli}" "${input}" > "${env_json}"
 
   echo "   - dag-ml-data-cli validate-envelope"
   "${dmd_cli}" validate-envelope "${env_json}"
@@ -94,6 +150,20 @@ PY
   echo "   - dag-ml-cli validate-data-binding"
   "${dml_cli}" validate-data-binding \
     --campaign "${camp_json}" --envelope "${ext_json}" --node model --input X
+done
+
+if [[ "$(git -C "${io_root}" rev-parse HEAD)" != "${io_commit}" ]] || \
+   [[ "$(git -C "${io_root}" rev-parse HEAD^{tree})" != "${io_tree}" ]] || \
+   [[ "$(git -C "${dmd}" rev-parse HEAD)" != "${dmd_commit}" ]] || \
+   [[ "$(git -C "${dml}" rev-parse HEAD)" != "${dml_commit}" ]]; then
+  echo "FAIL: source identity changed during cross-CLI conformance" >&2
+  exit 1
+fi
+for repository in "${io_root}" "${dmd}" "${dml}"; do
+  if [[ -n "$(git -C "${repository}" status --porcelain=v1 --untracked-files=all)" ]]; then
+    echo "FAIL: source checkout changed during cross-CLI conformance: ${repository}" >&2
+    exit 1
+  fi
 done
 
 echo "ALL CASES PASSED both CLIs."
