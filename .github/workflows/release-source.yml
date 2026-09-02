@@ -80,6 +80,11 @@ jobs:
 
       - name: Canonicalize SBOM provenance
         run: |
+          # The normalizer deliberately requires a pristine checkout. Syft has
+          # already consumed this temporary extraction, so remove it before
+          # the fail-closed worktree check while retaining its path strings in
+          # the raw SBOM for canonical remapping.
+          rm -rf sbom-root
           python scripts/normalize_cyclonedx.py \
             "dist/${{ steps.meta.outputs.prefix }}.cdx.json" \
             "dist/${{ steps.meta.outputs.prefix }}-src.tar.gz"
