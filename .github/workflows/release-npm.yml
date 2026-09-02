@@ -87,7 +87,7 @@ jobs:
         # scope; the exact name + provenance are pinned in the next step.
         run: wasm-pack build bindings/wasm --release --target nodejs --out-dir pkg-node --scope nirs4all --locked
 
-      - name: Stage scoped package, idiomatic API, types, and licenses
+      - name: Stage scoped package, idiomatic API, types, licenses, and SBOM
         run: node scripts/stage_wasm_package.mjs bindings/wasm/pkg-node
 
       - name: Smoke-test the Node WASM module

@@ -20,6 +20,11 @@ the shipped Rust closure. `Cargo.lock`, `bindings/python/Cargo.lock`,
 locks. This notice summarizes direct runtime dependencies; it does not replace the
 transitive inventory, upstream notices in the R vendor bundle, or the SBOM.
 
+The staged WASM npm package includes `nirs4all-io-wasm.cdx.json`, a deterministic
+CycloneDX 1.6 document generated from `cargo metadata --locked --offline`. It records
+the exact Cargo components, licenses, purls, dependency graph, and source commit/tree;
+it deliberately contains no timestamp, UUID, or local build path.
+
 ## Python runtime dependencies
 
 | Component | License (SPDX) | Copyright | Upstream |
