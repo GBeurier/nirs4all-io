@@ -38,7 +38,7 @@ fn to_input(obj: &Bound<'_, PyAny>) -> PyResult<Input> {
     }
 }
 
-fn to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
+fn to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
     Ok(pythonize(py, value)
         .map_err(|e| PyValueError::new_err(e.to_string()))?
         .unbind())
@@ -51,7 +51,7 @@ fn infer(
     py: Python<'_>,
     input: &Bound<'_, PyAny>,
     conventions: Option<Vec<String>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let plan = match to_input(input)? {
         Input::Path(p) => infer_path(&p, conventions.as_deref()),
         Input::Paths(ps) => infer_paths(&ps, conventions.as_deref()),
@@ -73,7 +73,7 @@ fn to_spec(
     input: &Bound<'_, PyAny>,
     conventions: Option<Vec<String>>,
     name: Option<String>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let (spec, _base) = facade_to_spec(&to_input(input)?, conventions.as_deref(), name.as_deref())
         .map_err(|e| PyValueError::new_err(e.message))?;
     to_py(py, &spec.to_value())
@@ -103,7 +103,7 @@ fn load_summary(
     input: &Bound<'_, PyAny>,
     conventions: Option<Vec<String>>,
     name: Option<String>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let assembled = load_assembled(&to_input(input)?, conventions.as_deref(), name.as_deref())
         .map_err(|e| PyValueError::new_err(e.message))?;
     to_py(py, &assembled.to_summary_value())
@@ -118,7 +118,7 @@ fn assembled_full(
     input: &Bound<'_, PyAny>,
     conventions: Option<Vec<String>>,
     name: Option<String>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let assembled = load_assembled(&to_input(input)?, conventions.as_deref(), name.as_deref())
         .map_err(|e| PyValueError::new_err(e.message))?;
     to_py(py, &assembled.to_full_value())

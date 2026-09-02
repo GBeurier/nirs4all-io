@@ -7,6 +7,17 @@ on:
   pull_request:
 
 jobs:
+  rust-security:
+    name: Rust security (all lockfiles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.1
+      - name: Audit root and binding dependency graphs
+        run: bash scripts/audit_rust_locks.sh
+
   rust:
     name: Rust green gate
     runs-on: ubuntu-latest

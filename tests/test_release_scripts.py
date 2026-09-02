@@ -62,6 +62,24 @@ def test_web_wasm_rebuilds_are_locked() -> None:
     assert source.count("--locked") == 2
 
 
+def test_rust_security_gate_audits_every_lockfile() -> None:
+    source = (ROOT / "scripts" / "audit_rust_locks.sh").read_text(encoding="utf-8")
+    for lock_file in (
+        "Cargo.lock",
+        "bindings/python/Cargo.lock",
+        "bindings/wasm/Cargo.lock",
+        "bindings/r/Cargo.lock.rust",
+    ):
+        assert f'"{lock_file}"' in source
+    assert 'cargo audit --file "${repo_root}/${lock_file}"' in source
+
+    for workflow in ("ci.yml", "release.yml"):
+        workflow_source = (ROOT / ".github" / "workflows" / workflow).read_text(
+            encoding="utf-8"
+        )
+        assert "bash scripts/audit_rust_locks.sh" in workflow_source
+
+
 def test_dagml_release_gate_uses_identity_and_exact_sibling() -> None:
     source = (ROOT / "tests" / "dag_ml_data" / "verify_cross_cli.sh").read_text(
         encoding="utf-8"
