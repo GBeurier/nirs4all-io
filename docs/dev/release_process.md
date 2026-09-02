@@ -20,13 +20,13 @@ per-surface workflows are `release-crates.yml`, `release-npm.yml`,
 ## Single source of truth
 
 The canonical version is the **`[workspace.package] version` in the root
-`Cargo.toml`** (Cargo SemVer, currently `0.1.9`).
+`Cargo.toml`** (Cargo SemVer, currently `0.1.12`).
 `scripts/bump_version.sh` propagates it to every binding manifest, translating
 the spelling each ecosystem requires:
 
 | Spelling | Example (`0.1.0-alpha.1`) | Manifests |
 |---|---|---|
-| Cargo SemVer (verbatim) | `0.1.0-alpha.1` | root `Cargo.toml` `[workspace.dependencies]` internal-crate `version`, workspace-member crates via `version.workspace = true`, `bindings/python/Cargo.toml`, `bindings/wasm/Cargo.toml` |
+| Cargo SemVer (verbatim) | `0.1.0-alpha.1` | root `Cargo.toml` `[workspace.dependencies]` internal-crate `version`, workspace-member crates via `version.workspace = true`, `bindings/python/Cargo.toml`, `bindings/wasm/Cargo.toml`, and the vendored workspace template in `bindings/r/configure` |
 | PEP 440 | `0.1.0a1` (`alpha.N→aN`, `beta.N→bN`, `rc.N→rcN`; plain `X.Y.Z`→itself) | `src/nirs4all_io/_version.py` |
 | R | `0.1.0.9000` (plain `X.Y.Z` for a final; `X.Y.Z.9000` "in development toward X.Y.Z" for ANY pre-release, since CRAN rejects SemVer pre-release suffixes) | `bindings/r/DESCRIPTION` |
 
@@ -56,10 +56,10 @@ the `n4io_` exported-symbol surface is diffed by `.github/workflows/abi-check.ym
 |---------|---------|----------|------------|---------|
 | Python | `nirs4all-io` | PyPI | **Automated** — `release.yml` (`python-wheels` maturin matrix all-3-OS + `python-sdist`) publishes via Trusted Publishing | push tag `v*` (non-pre-release) → PyPI |
 | R | `nirs4allio` | **R-universe / GitHub Release** (CRAN deferred) | **Build CI-automated** — `release-r.yml` installs + smokes across the matrix, then builds a self-contained vendored source tarball. **R-universe is a one-time registry entry; CRAN is a deferred manual web-form step** (see *R → CRAN*). | tag push attaches the tarball |
-| JS / WASM | `@nirs4all/io-wasm` | npm | **Automated** — `release-npm.yml` (wasm-pack nodejs build, scoped name + provenance, node smoke) publishes via `npm publish` | push tag `v*` (non-pre-release) + `NPM_TOKEN` |
-| MATLAB / Octave | `nirs4all-io-matlab-octave-<version>.zip` | GitHub Release | **Automated** — `release-matlab.yml` (`git archive HEAD:bindings/matlab`) | push tag `v*` (non-pre-release) |
+| JS / WASM | `@nirs4all/io-wasm` | npm | **Automated** — `release-npm.yml` (wasm-pack nodejs build, raw + idiomatic smokes, authored types, licenses, scoped name + provenance) publishes via `npm publish` and retains the exact `.tgz` | push tag `v*` (non-pre-release) + `NPM_TOKEN` |
+| MATLAB / Octave | `nirs4all-io-matlab-octave-<version>.zip` | GitHub Release | **Automated** — `release-matlab.yml` (`scripts/build_matlab_archive.sh`, commit-timestamped and byte-reproducible in a pinned tool environment) | push tag `v*` (non-pre-release) |
 | Rust crates | `nirs4all-io-core`, `nirs4all-io`, `nirs4all-io-capi`, `nirs4all-io-cli` | crates.io | **Automated** — `release-crates.yml` publishes leaf-first | push tag `v*` (non-pre-release) + `CARGO_REGISTRY_TOKEN` |
-| Source + provenance | — | GitHub Release | **Automated** — `release-source.yml` (reproducible git-archive tar.gz + zip, CycloneDX SBOM, `SHA256SUMS`, keyless Sigstore provenance) | push tag `v*` (non-pre-release) |
+| Source + provenance | — | GitHub Release | **Automated** — `release-source.yml` (reproducible git-archive tar.gz + zip, pinned Syft action, canonical CycloneDX SBOM, `SHA256SUMS`, keyless Sigstore provenance) | push tag `v*` (non-pre-release) |
 
 ## Exact release artifacts — what each binding ships, and where to upload it
 
@@ -70,10 +70,10 @@ they are downloadable from one place.
 |---|---|---|---|
 | Python `nirs4all-io` | PyPI | `nirs4all_io-<version>-*.whl` (maturin abi3 wheels: Linux + macOS + Windows) + `nirs4all_io-<version>.tar.gz` (maturin sdist) | **Automated** — Trusted Publishing, *no manual upload* |
 | Rust crates | crates.io | the 4 workspace crates (`nirs4all-io-core` / `nirs4all-io` / `nirs4all-io-capi` / `nirs4all-io-cli`) | **Automated** — `cargo publish`, leaf-first |
-| R `nirs4allio` | R-universe / Release | **`nirs4allio_<version>.tar.gz`** (source tarball) | **Automated to the Release** (R-universe builds from Git). **NOT CRAN-self-contained** — see *R → CRAN* |
-| JS / WASM `@nirs4all/io-wasm` | npm | the staged `pkg-node/` package (via `npm publish`) | **Automated** — `release-npm.yml` (needs `NPM_TOKEN` + the `@nirs4all` scope) |
-| MATLAB / Octave | GitHub Release | `nirs4all-io-matlab-octave-<version>.zip` (the `bindings/matlab` subtree) | **Automated** — `release-matlab.yml` |
-| C-ABI archive | GitHub Release | `nirs4all-io-capi-<os>.tar.gz` (lib + `nirs4all_io.h` + LICENSES), Linux/macOS/Windows | **Automated** — `release.yml` |
+| R `nirs4allio` | R-universe / Release | **`nirs4allio_<version>.tar.gz`** (source tarball) | **Automated to the Release** (R-universe builds from Git). The release tarball is self-contained for CRAN; submission remains manual — see *R → CRAN*. |
+| JS / WASM `@nirs4all/io-wasm` | npm | `nirs4all-io-wasm-<version>.tgz` containing raw WASM/JS, the idiomatic ESM wrapper, detailed types, and the license inventory | **Automated** — `release-npm.yml` (needs `NPM_TOKEN` + the `@nirs4all` scope) |
+| MATLAB / Octave | GitHub Release | `nirs4all-io-matlab-octave-<version>.zip` (binding sources plus project license/notice inventory) | **Automated** — `release-matlab.yml` |
+| C-ABI archive | GitHub Release | `nirs4all-io-capi-<target-triple>.tar.gz` (lib + `nirs4all_io.h` + target/source metadata + project license/provenance inventory), pinned Linux x86_64 / macOS arm64 / Windows x86_64 targets; built and canonicalized by `scripts/build_capi_archive.py` | **Automated** — `release.yml` |
 | Source + provenance | GitHub Release | `nirs4all-io-<version>-src.tar.gz` · `…-src.zip` · `nirs4all-io-<version>.cdx.json` (SBOM) · `SHA256SUMS` | **Automated** — `release-source.yml` |
 
 ## Pre-release gates (release blockers)
@@ -83,9 +83,10 @@ Run these before tagging or publishing anything:
 1. **Version sync** — `scripts/bump_version.sh --check`. The canonical version
    lives in the root `Cargo.toml` `[workspace.package] version`; the script
    syncs it into every tracked binding manifest (the root
-   `[workspace.dependencies]` internal-crate versions used for crates.io
-   resolution, the two binding Cargo manifests, the PEP 440 `_version.py`, and
-   the R `DESCRIPTION`). **Bump with** `bump_version.sh --bump X.Y.Z[-pre]`.
+   `[workspace.dependencies]` internal-crate versions used for crates.io,
+   the two binding Cargo manifests, the vendored Rust workspace template in
+   `bindings/r/configure`, the PEP 440 `_version.py`, and the R `DESCRIPTION`).
+   **Bump with** `bump_version.sh --bump X.Y.Z[-pre]`.
    Enforced in CI by `version-sync.yml`.
 2. **Green gate** — `cargo fmt --check`, `cargo clippy -D warnings`,
    `cargo test --workspace`, plus the Python / R / WASM / MATLAB binding smokes.
@@ -93,6 +94,14 @@ Run these before tagging or publishing anything:
    matches the current surface; the `n4io_` exported-symbol set matches
    `crates/nirs4all-io-capi/abi/expected_symbols_*.txt` (`abi-check.yml`). Bump
    `N4IO_ABI_VERSION` only on an ABI change.
+
+After assembling a local candidate directory, generate its canonical receipt with
+`python scripts/write_release_receipt.py <release-dir>`. The writer refuses a dirty
+checkout, stale commit/tree evidence, missing required package surfaces, failed
+cross-binding or reproducibility evidence, and concurrent source/artifact changes.
+`local_linux` can become `GO` from the locally available Rust/Python/WASM/C legs;
+`global_release` remains `NO-GO` until the six-surface CI matrix and independently
+verified attestations are present as `release-matrix.json` and `attestations.json`.
 
 ## Tag-to-release flow
 
@@ -112,9 +121,11 @@ PEP 440 spelling (`v0.1.0a0`) — `publish-pypi` validates that the tag minus `v
 equals the built wheel/sdist version, but the production-only check additionally
 requires a plain `vX.Y.Z` for auto-publish.
 
-`workflow_dispatch` runs build/dry-run jobs only; the PyPI publish also gates on
-`github.event_name != 'workflow_dispatch'`, the crates publish dry-runs by
-default (`dry_run` input), and the npm publish gates on `inputs.publish == true`.
+`workflow_dispatch` runs build/dry-run jobs by default; the PyPI publish also gates on
+`github.event_name != 'workflow_dispatch'`. The crates workflow defaults to a dry
+run and honors `dry_run=false` only when dispatching the exact
+`v<workspace-version>` tag. npm follows the same identity rule for `publish=true`;
+a branch dispatch can never publish.
 
 ---
 
@@ -161,8 +172,9 @@ immutable, so a bad version can only be **yanked**, never replaced.
 ### JS → npm (`@nirs4all/io-wasm`)
 
 `release-npm.yml` builds the wasm-pack `nodejs` target, pins the scoped name +
-provenance in `pkg-node/package.json`, runs the committed Node smoke
-(`bindings/wasm/tests/node_smoke.cjs`), and publishes via `npm publish`.
+provenance in `pkg-node/package.json`, stages the authored idiomatic wrapper,
+detailed types and legal inventory, runs both committed Node smokes, retains
+the exact `.tgz`, and publishes via `npm publish`.
 
 One-time: own the `@nirs4all` scope on [npmjs.com](https://www.npmjs.com)
 (*Add Organization* → create the free org `nirs4all`), generate a granular

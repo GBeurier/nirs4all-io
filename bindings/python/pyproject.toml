@@ -9,7 +9,7 @@ description = "Dataset-assembly bridge for the nirs4all ecosystem (Rust core, py
 readme = "README.md"
 requires-python = ">=3.11"
 license = "CECILL-2.1 OR AGPL-3.0-or-later"
-license-files = ["LICENSE", "LICENSES/*", "LICENSING.md", "THIRD_PARTY_NOTICES.md"]
+license-files = ["LICENSE", "LICENSES/*", "LICENSING.md", "THIRD_PARTY_NOTICES.md", "COPY_PROVENANCE.md"]
 dynamic = ["version"]
 # numpy/pandas back the SpectroDataset adapter (full-array reconstruction). They
 # are NOT nirs4all — the import-boundary test still holds. nirs4all itself is a

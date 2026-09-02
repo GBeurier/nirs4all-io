@@ -44,13 +44,20 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7.0.0
+      - name: Verify release tag identity
+        run: python scripts/verify_release_tag.py
+      - name: Configure reproducible Rust paths
+        run: python scripts/configure_release_env.py
       - uses: actions/setup-python@v6.3.0
         with:
           python-version: "3.11"
       - uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release -m bindings/python/Cargo.toml --out dist
+          args: --locked --release -m bindings/python/Cargo.toml --out dist
+      - name: Canonicalize embedded Rust SBOM and wheel container
+        shell: bash
+        run: python scripts/normalize_wheel.py dist/*.whl
       - name: Install and test wheel before publishing
         shell: bash
         run: |
@@ -68,6 +75,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
+      - name: Verify release tag identity
+        run: python scripts/verify_release_tag.py
+      - name: Configure reproducible Rust paths
+        run: python scripts/configure_release_env.py
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
@@ -79,31 +90,36 @@ jobs:
           if-no-files-found: error
 
   c-abi-archive:
-    name: C-ABI archive (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: C-ABI archive (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7.0.0
+      - name: Verify release tag identity
+        run: python scripts/verify_release_tag.py
+      - name: Configure reproducible Rust paths
+        run: python scripts/configure_release_env.py
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build -p nirs4all-io-capi --release
+      - uses: actions/setup-python@v6.3.0
+        with:
+          python-version: "3.11"
       - name: Assemble archive
         shell: bash
         run: |
-          stage="nirs4all-io-capi"
-          mkdir -p "${stage}/lib" "${stage}/include" "${stage}/licenses"
-          cp crates/nirs4all-io-capi/include/nirs4all_io.h "${stage}/include/"
-          cp LICENSE LICENSES/AGPL-3.0-or-later.txt LICENSES/CeCILL-2.1.txt "${stage}/licenses/"
-          # Copy whatever shared/static libs this platform produced.
-          find target/release -maxdepth 1 \
-            \( -name 'libnirs4all_io_capi.*' -o -name 'nirs4all_io_capi.dll' -o -name 'nirs4all_io_capi.lib' \) \
-            ! -name '*.d' ! -name '*.rlib' -exec cp {} "${stage}/lib/" \;
-          tar -czf "nirs4all-io-capi-${{ matrix.os }}.tar.gz" "${stage}"
+          python scripts/build_capi_archive.py \
+            "${{ matrix.target }}" .
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: c-abi-${{ matrix.os }}
+          name: c-abi-${{ matrix.target }}
           path: nirs4all-io-capi-*.tar.gz
           if-no-files-found: error
 
@@ -191,7 +207,7 @@ jobs:
 
   github-release:
     name: Attach assets to the GitHub release
-    needs: [python-wheels, python-sdist, c-abi-archive]
+    needs: [python-wheels, python-sdist, c-abi-archive, publish-pypi]
     runs-on: ubuntu-latest
     # Same gate as publish-pypi: production tags only, pre-release tags ('-')
     # excluded so a pre-release never cuts a public GitHub Release.

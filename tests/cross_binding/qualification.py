@@ -24,6 +24,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from scripts.rust_reproducibility import reproducible_rust_env  # noqa: E402
+
 FIXTURE = ROOT / "tests" / "cross_binding" / "corpus" / "identity.csv"
 SPEC = ROOT / "tests" / "cross_binding" / "corpus" / "identity.spec.json"
 GOLDEN = ROOT / "tests" / "cross_binding" / "identity.expected.canonical"
@@ -78,8 +81,50 @@ def clean_env(target_dir: pathlib.Path) -> dict[str, str]:
     env.pop("PYTHONPATH", None)
     env.pop("VIRTUAL_ENV", None)
     env["PYTHONNOUSERSITE"] = "1"
-    env["CARGO_TARGET_DIR"] = str(target_dir)
-    return env
+    return reproducible_rust_env(ROOT, target_dir, env)
+
+
+def sanitize_diagnostic(error: BaseException, work: pathlib.Path) -> str:
+    message = str(error)
+    replacements = {
+        str(ROOT): "<SOURCE>",
+        str(work): "<WORK>",
+        str(pathlib.Path.home()): "<HOME>",
+    }
+    for before, after in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+        message = message.replace(before, after).replace(before.replace("/", "\\"), after)
+    return message
+
+
+def git_value(*args: str) -> str:
+    return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def tool_versions() -> dict[str, str]:
+    commands = {
+        "cargo": executable("cargo"),
+        "rustc": executable("rustc"),
+        "maturin": executable("maturin", "N4IO_MATURIN"),
+        "wasm_pack": executable("wasm-pack", "N4IO_WASM_PACK"),
+        "node": executable("node", "N4IO_NODE"),
+        "r": executable("R", "N4IO_R"),
+        "rscript": executable("Rscript", "N4IO_RSCRIPT"),
+        "octave": executable("octave", "N4IO_OCTAVE"),
+        "matlab": executable("matlab", "N4IO_MATLAB"),
+        "cc": executable("cc", "N4IO_CC"),
+    }
+    versions = {"python": sys.version.splitlines()[0]}
+    for name, command in commands.items():
+        if command is None:
+            versions[name] = "unavailable"
+            continue
+        try:
+            result = subprocess.run([command, "--version"], check=False, capture_output=True, text=True, timeout=10)
+            output = (result.stdout or result.stderr).splitlines()
+            versions[name] = output[0].strip() if output else "version-unreported"
+        except (OSError, subprocess.TimeoutExpired):
+            versions[name] = "version-unreported"
+    return versions
 
 
 @dataclass
@@ -108,11 +153,7 @@ class Context:
 
     def compare(self, output: bytes) -> None:
         if output != self.golden:
-            raise RuntimeError(
-                "canonical summary mismatch "
-                f"(expected {hashlib.sha256(self.golden).hexdigest()}, "
-                f"got {hashlib.sha256(output).hexdigest()})"
-            )
+            raise RuntimeError(f"canonical summary mismatch (expected {hashlib.sha256(self.golden).hexdigest()}, got {hashlib.sha256(output).hexdigest()})")
 
 
 def build_native(ctx: Context, packages: list[str], release: bool = False) -> None:
@@ -188,6 +229,7 @@ def qualify_python(ctx: Context) -> list[dict[str, object]]:
     if len(wheels) != 1:
         raise RuntimeError(f"expected one wheel, found {len(wheels)}")
     wheel = wheels[0]
+    ctx.run([python, str(ROOT / "scripts/normalize_wheel.py"), str(wheel)])
     unpacked = ctx.work / "python-unpacked"
     with zipfile.ZipFile(wheel) as archive:
         archive.extractall(unpacked)
@@ -209,9 +251,10 @@ def qualify_wasm(ctx: Context) -> list[dict[str, object]]:
         raise FileNotFoundError("Node.js not found")
     package = ctx.work / "wasm-pkg"
     ctx.run(
-        [wasm_pack, "build", "--release", "--target", "nodejs", "--out-dir", str(package)],
+        [wasm_pack, "build", "--locked", "--release", "--target", "nodejs", "--out-dir", str(package)],
         cwd=ROOT / "bindings/wasm",
     )
+    ctx.run([node, str(ROOT / "scripts/stage_wasm_package.mjs"), str(package)])
     js = package / "nirs4all_io_wasm.js"
     wasm = package / "nirs4all_io_wasm_bg.wasm"
     result = ctx.run(
@@ -235,10 +278,7 @@ def qualify_r(ctx: Context) -> list[dict[str, object]]:
         stderr=subprocess.DEVNULL,
     )
     if dependency.returncode != 0:
-        raise FileNotFoundError(
-            "R package jsonlite is absent from the explicit runtime closure; "
-            "the strict runner never downloads dependencies"
-        )
+        raise FileNotFoundError("R package jsonlite is absent from the explicit runtime closure; the strict runner never downloads dependencies")
     library = ctx.work / "r-library"
     library.mkdir(exist_ok=True)
     env = ctx.env.copy()
@@ -329,9 +369,7 @@ def validate_identity(summary: dict[str, object]) -> None:
 
 def finalize_report(rows: list[dict[str, object]]) -> dict[str, object]:
     by_surface = {str(row["surface"]): row for row in rows}
-    complete = set(by_surface) == set(SURFACES) and all(
-        by_surface[surface].get("disposition") == "passed" for surface in SURFACES
-    )
+    complete = set(by_surface) == set(SURFACES) and all(by_surface[surface].get("disposition") == "passed" for surface in SURFACES)
     return {
         "schema_version": 1,
         "qualification": "IO-XLG-001",
@@ -348,6 +386,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-incomplete", action="store_true")
     args = parser.parse_args(argv)
 
+    dirty = git_value("status", "--porcelain=v1", "--untracked-files=all")
+    if dirty:
+        parser.error("IO-XLG-001 requires a clean source worktree; commit or remove all changes first")
+
     golden = GOLDEN.read_bytes()
     validate_identity(json.loads(golden))
     owned_work = args.work_dir is None
@@ -356,9 +398,21 @@ def main(argv: list[str] | None = None) -> int:
     work.mkdir(parents=True, exist_ok=True)
     target = work / "cargo-target"
     ctx = Context(work=work, target=target, env=clean_env(target), golden=golden)
-    commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
-    ).stdout.strip()
+    commit = git_value("rev-parse", "HEAD")
+    tree = git_value("rev-parse", "HEAD^{tree}")
+    evidence_paths = (
+        pathlib.Path(__file__),
+        ROOT / "tests/cross_binding/verify.sh",
+        FIXTURE,
+        SPEC,
+        GOLDEN,
+        ROOT / "Cargo.lock",
+        ROOT / "bindings/python/Cargo.lock",
+        ROOT / "bindings/wasm/Cargo.lock",
+        ROOT / "bindings/r/Cargo.lock.rust",
+    )
+    initial_hashes = {path: sha256(path) for path in evidence_paths}
+    versions = tool_versions()
 
     rows: list[dict[str, object]] = []
     for surface in SURFACES:
@@ -373,21 +427,39 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
         except FileNotFoundError as error:
-            rows.append(
-                {"surface": surface, "disposition": "unavailable", "reason": str(error), "artifacts": []}
-            )
+            rows.append({"surface": surface, "disposition": "unavailable", "reason": sanitize_diagnostic(error, work), "artifacts": []})
         except (OSError, subprocess.CalledProcessError, RuntimeError, ValueError) as error:
-            rows.append(
-                {"surface": surface, "disposition": "refused", "reason": str(error), "artifacts": []}
-            )
+            rows.append({"surface": surface, "disposition": "refused", "reason": sanitize_diagnostic(error, work), "artifacts": []})
+
+    if git_value("status", "--porcelain=v1", "--untracked-files=all"):
+        raise SystemExit("source worktree changed during IO-XLG-001; refusing mixed-state evidence")
+    if git_value("rev-parse", "HEAD") != commit or git_value("rev-parse", "HEAD^{tree}") != tree:
+        raise SystemExit("source identity changed during IO-XLG-001; refusing mixed-state evidence")
+    final_hashes = {path: sha256(path) for path in evidence_paths}
+    if final_hashes != initial_hashes:
+        raise SystemExit("qualification inputs changed during IO-XLG-001; refusing mixed-state evidence")
 
     report = finalize_report(rows)
     report.update(
         {
             "source_commit": commit,
-            "fixture_sha256": sha256(FIXTURE),
-            "spec_sha256": sha256(SPEC),
-            "expected_summary_sha256": sha256(GOLDEN),
+            "source_tree": tree,
+            "source_dirty": False,
+            "fixture_sha256": initial_hashes[FIXTURE],
+            "spec_sha256": initial_hashes[SPEC],
+            "expected_summary_sha256": initial_hashes[GOLDEN],
+            "runner_sha256": initial_hashes[pathlib.Path(__file__)],
+            "entrypoint_sha256": initial_hashes[ROOT / "tests/cross_binding/verify.sh"],
+            "lockfiles": {
+                str(path.relative_to(ROOT)): sha256(path)
+                for path in (
+                    ROOT / "Cargo.lock",
+                    ROOT / "bindings/python/Cargo.lock",
+                    ROOT / "bindings/wasm/Cargo.lock",
+                    ROOT / "bindings/r/Cargo.lock.rust",
+                )
+            },
+            "tool_versions": versions,
             "isolation": {
                 "editable_install": False,
                 "pythonpath": False,
