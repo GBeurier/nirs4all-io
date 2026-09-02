@@ -89,7 +89,9 @@ Run these before tagging or publishing anything:
    **Bump with** `bump_version.sh --bump X.Y.Z[-pre]`.
    Enforced in CI by `version-sync.yml`.
 2. **Green gate** — `cargo fmt --check`, `cargo clippy -D warnings`,
-   `cargo test --workspace`, plus the Python / R / WASM / MATLAB binding smokes.
+   `cargo test --workspace`, `scripts/audit_rust_locks.sh` (root plus the
+   independently resolved Python, WASM, and R lockfiles), and the Python / R /
+   WASM / MATLAB binding smokes.
 3. **C ABI sanity** — the committed `crates/nirs4all-io-capi/include/nirs4all_io.h`
    matches the current surface; the `n4io_` exported-symbol set matches
    `crates/nirs4all-io-capi/abi/expected_symbols_*.txt` (`abi-check.yml`). Bump

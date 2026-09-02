@@ -33,8 +33,20 @@ permissions:
   id-token: write   # PyPI trusted publishing (OIDC)
 
 jobs:
+  rust-security:
+    name: Rust security (all lockfiles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.1
+      - name: Audit root and binding dependency graphs
+        run: bash scripts/audit_rust_locks.sh
+
   python-wheels:
     name: Python wheels (${{ matrix.os }})
+    needs: rust-security
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -72,6 +84,7 @@ jobs:
 
   python-sdist:
     name: Python sdist
+    needs: rust-security
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
@@ -91,6 +104,7 @@ jobs:
 
   c-abi-archive:
     name: C-ABI archive (${{ matrix.target }})
+    needs: rust-security
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
