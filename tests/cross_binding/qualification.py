@@ -81,7 +81,7 @@ def clean_env(target_dir: pathlib.Path) -> dict[str, str]:
     env.pop("PYTHONPATH", None)
     env.pop("VIRTUAL_ENV", None)
     env["PYTHONNOUSERSITE"] = "1"
-    return reproducible_rust_env(ROOT, target_dir, env)
+    return reproducible_rust_env(ROOT, target_dir, env, extra_roots=(target_dir.parent,))
 
 
 def sanitize_diagnostic(error: BaseException, work: pathlib.Path) -> str:
