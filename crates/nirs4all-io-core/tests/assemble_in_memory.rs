@@ -157,7 +157,8 @@ fn wide_record(width: usize, sample_id: &str, protein: Option<f64>, extra_meta: 
 /// metadata {sample_id, galactic_spc*} and NO targets — inferred via
 /// `infer_decoded_records` and assembled through `assemble_in_memory` must yield
 /// features == signal width (no metadata/id leak into X) and a populated metadata
-/// frame, with sample_id treated as identity (excluded from X and metadata).
+/// frame, with sample_id treated as identity (excluded from X, retained as
+/// aligned metadata so downstream hosts never recreate it from row position).
 #[test]
 fn decoded_features_only_records_assemble_to_signal_width() {
     let width = 700;
@@ -191,7 +192,7 @@ fn decoded_features_only_records_assemble_to_signal_width() {
     assert_eq!(block.x.len(), 1, "single feature source");
     assert_eq!(block.x[0].n_cols, width, "X width == signal width");
     assert_eq!(block.feature_headers[0].len(), width);
-    // metadata frame populated with the non-identity metadata keys only.
+    // The metadata frame carries ordinary metadata and the aligned identity.
     let meta_cols = block
         .metadata
         .as_ref()
@@ -202,8 +203,8 @@ fn decoded_features_only_records_assemble_to_signal_width() {
         "metadata frame carries galactic_spc, got {meta_cols:?}"
     );
     assert!(
-        !meta_cols.contains(&"sample_id".to_string()),
-        "sample_id is identity, not metadata: {meta_cols:?}"
+        meta_cols.contains(&"sample_id".to_string()),
+        "sample_id identity is retained as metadata: {meta_cols:?}"
     );
     // and sample_id never leaks into the feature axis.
     assert!(!block.feature_headers[0].contains(&"sample_id".to_string()));
@@ -248,7 +249,7 @@ fn decoded_mixed_records_assemble_with_targets_and_clean_x() {
         .map(|f| f.column_names())
         .unwrap_or_default();
     assert!(meta_cols.contains(&"galactic_spc".to_string()));
-    assert!(!meta_cols.contains(&"sample_id".to_string()));
+    assert!(meta_cols.contains(&"sample_id".to_string()));
     assert!(!block.feature_headers[0].contains(&"protein".to_string()));
     assert!(!block.feature_headers[0].contains(&"sample_id".to_string()));
 }
