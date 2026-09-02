@@ -2,7 +2,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
+IO_ROOT="$(cd "$HERE/.." && pwd)"
+WORKSPACE_ROOT="$(cd "$IO_ROOT/.." && pwd)"
+FORMATS_ROOT="${N4IO_FORMATS_ROOT:-$WORKSPACE_ROOT/nirs4all-formats}"
 export PATH="$HOME/.cargo/bin:$PATH"
 WASM_PACK="${WASM_PACK:-$(command -v wasm-pack || true)}"
 if [[ -z "$WASM_PACK" && -x "$HOME/.cargo/bin/wasm-pack" ]]; then
@@ -13,6 +15,21 @@ if [[ -z "$WASM_PACK" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$FORMATS_ROOT/bindings/wasm/Cargo.toml" ]]; then
+  echo "nirs4all-formats checkout not found: $FORMATS_ROOT" >&2
+  echo "set N4IO_FORMATS_ROOT to the exact Formats source checkout" >&2
+  exit 1
+fi
+
+# The committed web bundles are part of the source archive. Canonicalize every
+# Rust source root that can otherwise be embedded by panic/debug metadata.
+CARGO_ROOT="${CARGO_HOME:-$HOME/.cargo}"
+RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$IO_ROOT=/usr/src/nirs4all-io"
+RUSTFLAGS+=" --remap-path-prefix=$FORMATS_ROOT=/usr/src/nirs4all-formats"
+RUSTFLAGS+=" --remap-path-prefix=$CARGO_ROOT=/usr/src/cargo-home"
+export RUSTFLAGS
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$IO_ROOT" log -1 --format=%ct)}"
+
 # zstd-compressed Parquet is decoded inside the Rust/Parquet WASM bundle. The
 # upstream zstd C shim can compile to wasm32 with emcc, but cc-rs must not add
 # its own `--target=wasm32-unknown-unknown` flag because emcc rejects it.
@@ -21,8 +38,7 @@ if [[ -z "${CC_wasm32_unknown_unknown:-}" ]]; then
   if [[ -z "$EMCC" ]]; then
     for candidate in \
       "${EMSDK:-}/upstream/emscripten/emcc" \
-      "$HOME/emsdk/upstream/emscripten/emcc" \
-      "/home/delete/emsdk/upstream/emscripten/emcc"; do
+      "$HOME/emsdk/upstream/emscripten/emcc"; do
       if [[ -n "$candidate" && -x "$candidate" ]]; then
         EMCC="$candidate"
         break
@@ -39,8 +55,7 @@ if [[ -z "${AR_wasm32_unknown_unknown:-}" ]]; then
   if [[ -z "$EMAR" ]]; then
     for candidate in \
       "${EMSDK:-}/upstream/emscripten/emar" \
-      "$HOME/emsdk/upstream/emscripten/emar" \
-      "/home/delete/emsdk/upstream/emscripten/emar"; do
+      "$HOME/emsdk/upstream/emscripten/emar"; do
       if [[ -n "$candidate" && -x "$candidate" ]]; then
         EMAR="$candidate"
         break
@@ -59,12 +74,12 @@ fi
 mkdir -p "$HERE/pkg"
 rm -rf "$HERE/pkg/formats" "$HERE/pkg/io"
 
-"$WASM_PACK" build "$ROOT/nirs4all-formats/bindings/wasm" \
+"$WASM_PACK" build "$FORMATS_ROOT/bindings/wasm" \
   --target web \
   --release \
   --out-dir "$HERE/pkg/formats"
 
-"$WASM_PACK" build "$ROOT/nirs4all-io/bindings/wasm" \
+"$WASM_PACK" build "$IO_ROOT/bindings/wasm" \
   --target web \
   --release \
   --out-dir "$HERE/pkg/io"

@@ -26,7 +26,7 @@ import init, {
 
 await init();
 
-version();   // "0.2.2"
+version();   // "0.1.0-alpha.1"
 features();  // { hdf5: true, matlab: true, parquet: true }
 readerCatalog(); // [{ reader: "nirs4all_formats::readers::jcamp" }, ...]
 

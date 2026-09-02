@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, "..");
 const workspace = path.resolve(root, "..", "..");
-const formatsRoot = path.join(workspace, "nirs4all-formats");
+const formatsRoot = process.env.N4IO_FORMATS_ROOT || path.join(workspace, "nirs4all-formats");
 const standalone = pathToFileURL(path.join(root, "dist", "nirs4all-io-standalone.html")).href;
 const chromeExecutable = process.env.CHROME_BIN || "/usr/bin/google-chrome";
 const workers = Number.parseInt(process.env.NIRS4ALL_ALL_SAMPLES_WORKERS || "3", 10);

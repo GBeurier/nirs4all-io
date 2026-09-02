@@ -5,7 +5,8 @@ import { pathToFileURL } from "node:url";
 const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, "..");
 const workspace = path.resolve(root, "..", "..");
-const formatsSamples = path.join(workspace, "nirs4all-formats", "samples");
+const formatsRoot = process.env.N4IO_FORMATS_ROOT || path.join(workspace, "nirs4all-formats");
+const formatsSamples = path.join(formatsRoot, "samples");
 const standalone = pathToFileURL(path.join(root, "dist", "nirs4all-io-standalone.html")).href;
 const chromeExecutable = process.env.CHROME_BIN || "/usr/bin/google-chrome";
 
@@ -67,7 +68,7 @@ const cases = [
   ["fgi_xml", ["fgi/synthetic_fgi.xml", "fgi/synthetic_fgi.h5"], "fgi-hdf5-xml"],
 ].map(([label, files, expectedText]) => ({ label, files, expectedText }));
 
-const localAdf = path.join(workspace, "nirs4all-formats", "samples_local", "allotrope_adf", "adfsee_example.adf");
+const localAdf = path.join(formatsRoot, "samples_local", "allotrope_adf", "adfsee_example.adf");
 if (fs.existsSync(localAdf)) {
   cases.push({
     label: "allotrope_adf_local",
@@ -76,7 +77,7 @@ if (fs.existsSync(localAdf)) {
   });
 }
 
-const localPerkinElmerCsv = path.join(workspace, "nirs4all-formats", "samples_local", "perkin_elmer", "426475_1.csv");
+const localPerkinElmerCsv = path.join(formatsRoot, "samples_local", "perkin_elmer", "426475_1.csv");
 if (fs.existsSync(localPerkinElmerCsv)) {
   cases.push({
     label: "perkin_elmer_csv_local",

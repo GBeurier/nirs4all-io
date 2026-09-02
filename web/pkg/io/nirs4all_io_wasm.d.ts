@@ -43,6 +43,16 @@ export function inferFiles(files: any, options: any): any;
 export function inferRecords(record_sets: any): any;
 
 /**
+ * Materialize the same fs-free inputs as [`assemble_dataset`] and return the
+ * canonical structural summary used by the native CLI and C ABI.
+ *
+ * Keeping this as canonical JSON (rather than a re-serialized JS object) makes
+ * the cross-language qualification byte-exact and preserves source, sample,
+ * observation, repetition, group, and fold provenance without host-side logic.
+ */
+export function loadSummary(files: any, record_sets: any, spec: string): string;
+
+/**
  * Iterative, user-validatable dataset inference.
  *
  * Inputs mirror [`infer_dataset`] plus `options.confirmed` — an array of
@@ -76,6 +86,7 @@ export interface InitOutput {
     readonly inferDataset: (a: any, b: any, c: any) => [number, number, number];
     readonly inferFiles: (a: any, b: any) => [number, number, number];
     readonly inferRecords: (a: any) => [number, number, number];
+    readonly loadSummary: (a: any, b: any, c: number, d: number) => [number, number, number, number];
     readonly proposeDataset: (a: any, b: any, c: any) => [number, number, number];
     readonly to_spec: (a: number, b: number) => [number, number, number, number];
     readonly validate: (a: number, b: number) => [number, number];
