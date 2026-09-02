@@ -125,10 +125,15 @@ For dependencies licensed as `MIT OR Apache-2.0` or `Unlicense OR MIT`, the WASM
 distribution relies on the MIT option and bundles `LICENSES/MIT.txt`; a separate
 Unlicense text is therefore not required. Apache Arrow is Apache-only but is not in
 the fs-free WASM dependency graph. The locked WASM closure does, however, include
-`ryu 1.0.23` (`Apache-2.0 OR BSL-1.0`) through `csv`. Neither Apache-2.0 nor BSL-1.0
-currently has a canonical repository text, so a self-contained closure audit remains
-blocked until one exact upstream text is adopted at the root and propagated to every
-compiled Rust release surface. Do not source that text from an unrelated repository.
+`ryu 1.0.23` (`Apache-2.0 OR BSL-1.0`) through `csv`. This distribution selects
+Apache-2.0 and bundles `LICENSES/Apache-2.0.txt`, imported from the exact upstream
+crate whose SHA-256 matches `bindings/wasm/Cargo.lock`; BSL-1.0 therefore does not
+apply. The staging guard pins both the crate and Apache-text hashes so an upgrade
+cannot silently reuse an unaudited payload. The same audit covers the mandatory
+Unicode-3.0 branch of `unicode-ident 1.0.24`; its exact locked upstream text is
+bundled as `LICENSES/Unicode-3.0.txt` and pinned by the guard. A normalized digest
+of every package name, version, and SPDX expression returned by locked Cargo
+metadata makes any other closure change fail closed pending a fresh audit.
 
 ## Test
 

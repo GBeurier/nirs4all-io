@@ -29,7 +29,7 @@ transitive inventory, upstream notices in the R vendor bundle, or the SBOM.
 | `pyyaml` | MIT | Copyright (c) 2006-2025 PyYAML contributors | https://github.com/yaml/pyyaml |
 | `jsonschema` | MIT | Copyright (c) 2013 Julian Berman | https://github.com/python-jsonschema/jsonschema |
 
-## Direct Rust runtime dependencies
+## Rust runtime dependencies
 
 | Component | License expression | Upstream |
 |---|---|---|
@@ -41,17 +41,35 @@ transitive inventory, upstream notices in the R vendor bundle, or the SBOM.
 | `toml` | `MIT OR Apache-2.0` | https://github.com/toml-rs/toml |
 | `indexmap` | `Apache-2.0 OR MIT` | https://github.com/indexmap-rs/indexmap |
 | `csv` | `Unlicense OR MIT` | https://github.com/BurntSushi/rust-csv |
+| `ryu` (transitive through `csv`) | `Apache-2.0` selected from `Apache-2.0 OR BSL-1.0` | https://github.com/dtolnay/ryu |
 | `glob` | `MIT OR Apache-2.0` | https://github.com/rust-lang/glob |
 | `flate2` | `MIT OR Apache-2.0` | https://github.com/rust-lang/flate2-rs |
 | `zip` | `MIT` | https://github.com/zip-rs/zip2 |
 | Apache Arrow Rust (`arrow-*`, `parquet`) | `Apache-2.0` and, for `arrow-array`, `Apache-2.0 AND MIT` | https://github.com/apache/arrow-rs |
 | `clap` | `MIT OR Apache-2.0` | https://github.com/clap-rs/clap |
 | `wasm-bindgen`, `js-sys` | `MIT OR Apache-2.0` | https://github.com/wasm-bindgen/wasm-bindgen |
+| `unicode-ident` (transitive build/runtime support) | `MIT AND Unicode-3.0` selected from `(MIT OR Apache-2.0) AND Unicode-3.0` | https://github.com/dtolnay/unicode-ident |
 
 ## Bundled license-family texts (`LICENSES/`)
 
+- `LICENSES/Apache-2.0.txt` — Apache-2.0
 - `LICENSES/BSD-3-Clause.txt` — BSD-3-Clause
 - `LICENSES/MIT.txt` — MIT
+- `LICENSES/Unicode-3.0.txt` — Unicode-3.0
+
+Binary distributions select the MIT branch for dependencies offered as
+`MIT OR Apache-2.0` or `Unlicense OR MIT`; consequently a separate Unlicense text
+is not required. They select the Apache-2.0 branch for `ryu 1.0.23`, so BSL-1.0
+does not apply to this distribution. The canonical Apache text was imported from
+the exact locked `ryu-1.0.23.crate` (crate SHA-256
+`9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f`;
+license-text SHA-256
+`62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`).
+The mandatory Unicode-3.0 branch for `unicode-ident 1.0.24` is likewise copied
+from its exact locked crate (crate SHA-256
+`e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75`;
+license-text SHA-256
+`f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1`).
 
 Additional license families and copyright notices in the transitive Rust closure are
 preserved in the upstream crate sources inside the self-contained R vendor archive and are
