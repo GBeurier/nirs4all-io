@@ -422,7 +422,12 @@ pub fn infer_decoded_records(record_sets: &[DecodedRecordSet]) -> Result<Dataset
         if identity.value.as_str() == Some("metadata.sample_id") {
             spec_dict.insert(
                 "sample_index".into(),
-                json!({"by": "id", "key": "metadata.sample_id"}),
+                // Decoded-record metadata is flattened into ordinary frame
+                // columns by the materializer. Keep the diagnostic decision
+                // path namespaced above, but emit the executable column name
+                // into DatasetSpec so identity is retained as metadata rather
+                // than silently disappearing during assembly.
+                json!({"by": "id", "key": "sample_id"}),
             );
         }
     }
@@ -1200,7 +1205,7 @@ fn infer_decoded_repetition(
     );
     let Some(sample_key) = sample_key else {
         if let Some(rep_key) = repetition_key {
-            apply_repetition_fields(spec_dict, None, Some(&format!("metadata.{rep_key}")));
+            apply_repetition_fields(spec_dict, None, Some(&rep_key));
             plan.params.as_object_mut().unwrap().insert(
                 "repetition".into(),
                 json!({
@@ -1218,8 +1223,11 @@ fn infer_decoded_repetition(
         .unwrap_or_default();
     let unique = sample_values.iter().collect::<BTreeSet<_>>().len();
     let profile = repetition_profile(sample_values.len(), unique);
-    let observation_ref = format!("metadata.{sample_key}");
-    let repetition_ref = repetition_key.map(|key| format!("metadata.{key}"));
+    // `records_to_frame` flattens record.metadata into frame columns. These
+    // references are part of the executable DatasetSpec and therefore name
+    // the materialized columns, not their input JSON paths.
+    let observation_ref = sample_key.clone();
+    let repetition_ref = repetition_key;
 
     if profile.is_repetition || repetition_ref.is_some() {
         apply_repetition_fields(spec_dict, Some(&observation_ref), repetition_ref.as_deref());
@@ -2141,15 +2149,9 @@ mod tests {
 
         let plan = infer_decoded_records(&record_sets).unwrap();
         let spec = plan.resolved_spec.unwrap().to_value();
-        assert_eq!(
-            spec["sample_index"]["observation_id"],
-            json!("metadata.sample_id")
-        );
-        assert_eq!(
-            spec["sample_index"]["repetition_id"],
-            json!("metadata.replicate")
-        );
-        assert_eq!(spec["repetition"], json!("metadata.replicate"));
+        assert_eq!(spec["sample_index"]["observation_id"], json!("sample_id"));
+        assert_eq!(spec["sample_index"]["repetition_id"], json!("replicate"));
+        assert_eq!(spec["repetition"], json!("replicate"));
         assert_eq!(plan.params["repetition"]["avg_reps"], json!(1.5));
     }
 

@@ -41,20 +41,24 @@ archive only after verifying its SHA-256. WASM runs the produced `.wasm` under N
 MEX, and C compiles a direct probe against the built cdylib. No leg discovers a
 sibling checkout.
 
-## Known parent-baseline smoke failure
+## Release-candidate closure
 
-The broader pre-existing WASM smoke is red independently of IO-XLG-001. It was
-reproduced from a detached, clean parent `98aca515d83369f1b61538ce31a5d2b1f519d4e9`
-with the same Node 22 and wasm-bindgen 0.2.122 environment:
+The `0.1.12` candidate pins the native bridge to `dag-ml-data` `0.2.9`, the
+version used by the final native train. It also closes the broader WASM smoke
+failure inherited from `98aca515d83369f1b61538ce31a5d2b1f519d4e9`:
+decoded-record metadata is flattened into ordinary materialized columns, so
+the inferred executable `DatasetSpec` now names `sample_id`, `observation_id`,
+and repetition columns exactly as the assembler sees them. Diagnostic evidence
+may still describe their input JSON paths as `metadata.<name>`.
+
+The regression gate is:
 
 ```bash
 wasm-pack build --dev --target nodejs --out-dir pkg
 node bindings/wasm/tests/node_smoke.cjs
 ```
 
-The exact failure is `AssertionError [ERR_ASSERTION]: sample_id identity is
-retained as metadata` at `bindings/wasm/tests/node_smoke.cjs:109`. IO-XLG-001
-does not hide or relabel it. The dedicated WASM runner additionally calls the
-pre-existing `assembleDataset` and the new canonical `loadSummary` over the same
-rich fixture, and refuses unless their identity, fold provenance, and per-block
-source ids agree. The unrelated parent smoke remains a separate baseline defect.
+It must print `wasm node smoke OK`. The dedicated cross-binding runner also
+calls the pre-existing `assembleDataset` and the canonical `loadSummary` over
+the same rich fixture, and refuses unless identity, fold provenance, and
+per-block source ids agree.

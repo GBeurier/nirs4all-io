@@ -10,7 +10,8 @@
 
 Status: **Rust Phase 2 complete.** The bridge lives in `crates/nirs4all-io-dagml`
 (`to_dag_ml_data(&AssembledDataset)` + `emit-dagml`) and is validated by the
-Phase-2 gate in [`PHASE2_GATE.md`](PHASE2_GATE.md). The Python MVP exposes
+repository's maintainer-only Phase-2 gate and the public
+[`IO_XLG_QUALIFICATION.md`](IO_XLG_QUALIFICATION.md) record. The Python MVP exposes
 `SpectroDataset`, `AssembledDataset`, and `DatasetPackage`; it intentionally does
 not expose a `dag-ml-data` `load` target.
 
