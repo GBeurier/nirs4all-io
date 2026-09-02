@@ -114,6 +114,22 @@ const plan = nio.inferFiles(files);             // options default to {}
 const ds = nio.assembleDataset([], recordSets, plan.resolved_spec); // object spec OK
 ```
 
+## Legal payload policy
+
+`scripts/stage_wasm_package.mjs --check-legal` requires this binding's `LICENSE`,
+`LICENSING.md`, `THIRD_PARTY_NOTICES.md`, `COPY_PROVENANCE.md`, and complete
+`LICENSES/` directory to be byte-identical to the canonical files at the repository
+root. The release staging step copies that verified mirror into the npm package.
+
+For dependencies licensed as `MIT OR Apache-2.0` or `Unlicense OR MIT`, the WASM
+distribution relies on the MIT option and bundles `LICENSES/MIT.txt`; a separate
+Unlicense text is therefore not required. Apache Arrow is Apache-only but is not in
+the fs-free WASM dependency graph. The locked WASM closure does, however, include
+`ryu 1.0.23` (`Apache-2.0 OR BSL-1.0`) through `csv`. Neither Apache-2.0 nor BSL-1.0
+currently has a canonical repository text, so a self-contained closure audit remains
+blocked until one exact upstream text is adopted at the root and propagated to every
+compiled Rust release surface. Do not source that text from an unrelated repository.
+
 ## Test
 
 ```bash
@@ -123,5 +139,5 @@ node bindings/wasm/tests/idiomatic_smoke.mjs     # idiomatic.mjs wrapper
 ```
 
 The release workflow runs both smokes again against the staged npm package and
-retains the exact `.tgz`, including the wrapper, detailed types, and complete
-license/provenance inventory.
+retains the exact `.tgz`, including the wrapper, detailed types, and canonical
+project license/provenance inventory.
