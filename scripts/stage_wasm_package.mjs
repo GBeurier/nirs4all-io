@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: CECILL-2.1 OR AGPL-3.0-or-later
 // Stage the authored JS/types/legal surface into a wasm-pack package.
 
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wasm = path.join(root, "bindings/wasm");
+const sbomFileName = "nirs4all-io-wasm.cdx.json";
 const legalTopLevel = ["LICENSE", "LICENSING.md", "THIRD_PARTY_NOTICES.md", "COPY_PROVENANCE.md"];
 const legalMirrors = [
   "bindings/python",
@@ -76,6 +77,165 @@ function verifyWasmLicenseClosure() {
       `locked WASM license closure changed (${checksum}); audit every license expression before staging`,
     );
   }
+  return metadata;
+}
+
+function runGit(args) {
+  const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${result.stderr.trim()}`);
+  }
+  return result.stdout.trim();
+}
+
+function sourceIdentity(requireClean) {
+  if (requireClean) {
+    const status = runGit(["status", "--porcelain=v1", "--untracked-files=all"]);
+    if (status) throw new Error("WASM SBOM staging requires a clean source worktree");
+  }
+  const commit = runGit(["rev-parse", "HEAD"]);
+  const tree = runGit(["rev-parse", "HEAD^{tree}"]);
+  if (!/^[0-9a-f]{40}$/.test(commit) || !/^[0-9a-f]{40}$/.test(tree)) {
+    throw new Error("source commit/tree must be full SHA-1 object identities");
+  }
+  return { commit, tree };
+}
+
+function normalizedSpdx(expression) {
+  if (expression === "Unlicense/MIT") return "Unlicense OR MIT";
+  if (expression === "MIT/Apache-2.0") return "MIT OR Apache-2.0";
+  return expression;
+}
+
+function lockChecksums() {
+  const blocks = fs.readFileSync(path.join(wasm, "Cargo.lock"), "utf8").split("[[package]]").slice(1);
+  const checksums = new Map();
+  for (const block of blocks) {
+    const name = block.match(/^name = "([^"]+)"$/m)?.[1];
+    const version = block.match(/^version = "([^"]+)"$/m)?.[1];
+    const checksum = block.match(/^checksum = "([0-9a-f]+)"$/m)?.[1];
+    if (!name || !version || !checksum) continue;
+    const key = `${name}@${version}`;
+    if (checksums.has(key) && checksums.get(key) !== checksum) {
+      throw new Error(`ambiguous Cargo.lock checksums for ${key}`);
+    }
+    checksums.set(key, checksum);
+  }
+  return checksums;
+}
+
+function cargoPurl(pkg) {
+  return `pkg:cargo/${encodeURIComponent(pkg.name)}@${encodeURIComponent(pkg.version)}`;
+}
+
+function buildWasmSbom(metadata, identity) {
+  const checksums = lockChecksums();
+  const packages = [...metadata.packages].sort((left, right) =>
+    cargoPurl(left).localeCompare(cargoPurl(right)),
+  );
+  const refsById = new Map(packages.map((pkg) => [pkg.id, cargoPurl(pkg)]));
+  if (new Set(refsById.values()).size !== packages.length) {
+    throw new Error("WASM Cargo metadata contains duplicate package purls/bom-refs");
+  }
+  const components = packages.map((pkg) => {
+    const purl = cargoPurl(pkg);
+    const component = {
+      type: "library",
+      "bom-ref": purl,
+      name: pkg.name,
+      version: pkg.version,
+      licenses: [{ expression: normalizedSpdx(pkg.license ?? "NOASSERTION") }],
+      purl,
+    };
+    const crateChecksum = checksums.get(`${pkg.name}@${pkg.version}`);
+    if (crateChecksum) component.hashes = [{ alg: "SHA-256", content: crateChecksum }];
+    if (pkg.source === null) {
+      component.externalReferences = [
+        {
+          type: "vcs",
+          url: `https://github.com/GBeurier/nirs4all-io/tree/${identity.commit}`,
+        },
+      ];
+      component.properties = [
+        { name: "nirs4all:source:commit", value: identity.commit },
+        { name: "nirs4all:source:tree", value: identity.tree },
+      ];
+    }
+    return component;
+  });
+
+  const dependencyMap = new Map(
+    (metadata.resolve?.nodes ?? []).map((node) => [
+      node.id,
+      [...new Set(node.dependencies.map((id) => refsById.get(id)).filter(Boolean))].sort(),
+    ]),
+  );
+  const dependencies = packages.map((pkg) => ({
+    ref: refsById.get(pkg.id),
+    dependsOn: dependencyMap.get(pkg.id) ?? [],
+  }));
+  const subjectPurl = "pkg:cargo/nirs4all-io-wasm@0.1.12";
+  return {
+    bomFormat: "CycloneDX",
+    specVersion: "1.6",
+    version: 1,
+    metadata: {
+      component: {
+        type: "library",
+        "bom-ref": subjectPurl,
+        name: "nirs4all-io-wasm",
+        version: "0.1.12",
+        licenses: [{ expression: "CECILL-2.1 OR AGPL-3.0-or-later" }],
+        purl: subjectPurl,
+        externalReferences: [
+          {
+            type: "vcs",
+            url: `https://github.com/GBeurier/nirs4all-io/tree/${identity.commit}`,
+          },
+        ],
+        properties: [
+          { name: "nirs4all:source:commit", value: identity.commit },
+          { name: "nirs4all:source:tree", value: identity.tree },
+        ],
+      },
+    },
+    components,
+    dependencies,
+  };
+}
+
+function validateWasmSbom(sbom) {
+  if (sbom.bomFormat !== "CycloneDX" || sbom.specVersion !== "1.6" || sbom.version !== 1) {
+    throw new Error("invalid deterministic WASM CycloneDX envelope");
+  }
+  const subject = sbom.metadata?.component;
+  if (subject?.name !== "nirs4all-io-wasm" || subject.version !== "0.1.12") {
+    throw new Error("invalid WASM SBOM subject identity");
+  }
+  if (sbom.components.length !== 55 || sbom.dependencies.length !== 55) {
+    throw new Error(
+      `WASM SBOM must contain exactly 55 components/dependencies, got ${sbom.components.length}/${sbom.dependencies.length}`,
+    );
+  }
+  const refs = new Set(sbom.components.map((component) => component["bom-ref"]));
+  if (refs.size !== sbom.components.length || !refs.has(subject["bom-ref"])) {
+    throw new Error("WASM SBOM component bom-refs are incomplete or duplicated");
+  }
+  for (const component of sbom.components) {
+    if (component.purl !== component["bom-ref"] || !component.licenses?.[0]?.expression) {
+      throw new Error(`invalid component identity/license for ${component.name}`);
+    }
+  }
+  for (const dependency of sbom.dependencies) {
+    if (!refs.has(dependency.ref) || dependency.dependsOn.some((ref) => !refs.has(ref))) {
+      throw new Error(`invalid dependency reference for ${dependency.ref}`);
+    }
+  }
+  const serialized = `${JSON.stringify(sbom, null, 2)}\n`;
+  if (/"timestamp"\s*:|"serialNumber"\s*:|\/home\/|[A-Za-z]:\\\\/.test(serialized)) {
+    throw new Error("WASM SBOM contains a volatile timestamp, UUID, or local path");
+  }
+  return serialized;
 }
 
 function verifyLockedLicenseSources() {
@@ -128,7 +288,7 @@ function verifyLegalMirror(surface, expectedLicenses) {
 }
 
 function verifyReleaseLegalMirrors() {
-  verifyWasmLicenseClosure();
+  const metadata = verifyWasmLicenseClosure();
   verifyLockedLicenseSources();
   const rootLicenseDir = path.join(root, "LICENSES");
   const expectedLicenses = regularFileNames(rootLicenseDir);
@@ -146,13 +306,17 @@ function verifyReleaseLegalMirrors() {
     }
   }
 
-  return expectedLicenses;
+  return { expectedLicenses, metadata };
 }
 
-const expectedLicenses = verifyReleaseLegalMirrors();
+const { expectedLicenses, metadata } = verifyReleaseLegalMirrors();
 if (process.argv.includes("--check-legal")) {
+  const identity = sourceIdentity(false);
+  const first = validateWasmSbom(buildWasmSbom(metadata, identity));
+  const second = validateWasmSbom(buildWasmSbom(metadata, identity));
+  if (first !== second) throw new Error("WASM SBOM generation is not deterministic");
   console.log(
-    `verified ${legalMirrors.length} release legal mirrors (${expectedLicenses.length} license texts)`,
+    `verified ${legalMirrors.length} release legal mirrors, ${metadata.packages.length} SBOM components (${sha256(Buffer.from(first))})`,
   );
   process.exit(0);
 }
@@ -162,6 +326,7 @@ const pkgDir = path.resolve(pkgDirArg ?? path.join(root, "bindings/wasm/pkg-node
 const cargo = fs.readFileSync(path.join(root, "Cargo.toml"), "utf8");
 const workspace = cargo.match(/\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
 if (!workspace) throw new Error("could not read [workspace.package] version");
+const sbom = validateWasmSbom(buildWasmSbom(metadata, sourceIdentity(true)));
 
 const packagePath = path.join(pkgDir, "package.json");
 const manifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
@@ -183,6 +348,7 @@ manifest.files = [...new Set([
   "LICENSING.md",
   "THIRD_PARTY_NOTICES.md",
   "COPY_PROVENANCE.md",
+  sbomFileName,
 ])];
 manifest.exports = {
   ".": {
@@ -220,5 +386,6 @@ for (const name of legalTopLevel) {
 for (const name of expectedLicenses) {
   fs.copyFileSync(path.join(wasm, "LICENSES", name), path.join(pkgDir, "LICENSES", name));
 }
+fs.writeFileSync(path.join(pkgDir, sbomFileName), sbom);
 fs.writeFileSync(packagePath, `${JSON.stringify(manifest, null, 2)}\n`);
 console.log(`staged ${manifest.name}@${manifest.version} in ${pkgDir}`);
