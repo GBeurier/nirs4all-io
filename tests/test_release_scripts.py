@@ -57,6 +57,11 @@ def test_committed_web_wasm_has_no_checkout_paths() -> None:
     scan_paths(bundles)
 
 
+def test_web_wasm_rebuilds_are_locked() -> None:
+    source = (ROOT / "web" / "build-wasm.sh").read_text(encoding="utf-8")
+    assert source.count("--locked") == 2
+
+
 def test_cyclonedx_validation_and_array_canonicalization() -> None:
     document = {
         "bomFormat": "CycloneDX",
