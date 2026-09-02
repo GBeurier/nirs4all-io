@@ -3,7 +3,10 @@
 
 io owns the `AssembledDataset → CoordinatorDataPlanEnvelope` bridge (ADR-0001).
 The emit lives in the `crates/nirs4all-io-dagml` bridge crate
-(`to_dag_ml_data` + the `emit-dagml` binary). It is a workspace member, but its
+(`to_dag_ml_data`, the Rust `PackageProvider`, and the `emit-dagml` binary). The
+binary now follows the same loader → `DatasetPackage` → provider path as a Rust
+consumer, without serializing payloads or constructing a `SpectroDataset`. It is
+a workspace member, but its
 default dependency resolution uses the published `dag-ml-data` crate so
 standalone IO builds remain ecosystem-free. This conformance harness patches
 Cargo to the sibling `dag-ml-data` checkout when it is present. The main
@@ -32,7 +35,8 @@ fingerprints and self-validates). io does **not** emit dag-ml
      contract).
 
    Fingerprints are content-derived, so nothing brittle is pinned — the "golden"
-   is the round trip *emit → both CLIs accept*. The script needs the sibling
+   is the round trip *loader → DatasetPackage → PackageProvider → both CLIs
+   accept*. The script needs the sibling
    `dag-ml-data` and `dag-ml` repos (override locations with `NIRS4ALL_DAG_ML_DATA`
    / `NIRS4ALL_DAG_ML`); it SKIPs (exit 0) if either is absent unless
    `NIRS4ALL_REQUIRE_DAGML_SIBLINGS=1` is set. In CI the repos are cloned and
@@ -40,7 +44,9 @@ fingerprints and self-validates). io does **not** emit dag-ml
 
 ```bash
 cargo test --manifest-path crates/nirs4all-io-dagml/Cargo.toml \
-  --config "patch.crates-io.dag-ml-data.path='../dag-ml-data/crates/dag-ml-data'"
+  --config "patch.crates-io.dag-ml-data.path='../dag-ml-data/crates/dag-ml-data'" \
+  --config "patch.crates-io.dag-ml-data-core.path='../dag-ml-data/crates/dag-ml-data-core'" \
+  --config "patch.crates-io.dag-ml-data-provider.path='../dag-ml-data/crates/dag-ml-data-provider'"
 scripts/dag_ml_data_conformance.sh                         # strict proof command
 bash tests/dag_ml_data/verify_cross_cli.sh                 # developer smoke; skips if siblings are absent
 bash tests/dag_ml_data/verify_cross_cli.sh \
