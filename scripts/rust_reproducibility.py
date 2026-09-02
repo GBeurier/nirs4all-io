@@ -9,7 +9,12 @@ import shlex
 from pathlib import Path
 
 
-def reproducible_rust_env(root: Path, target_dir: Path, base: dict[str, str] | None = None) -> dict[str, str]:
+def reproducible_rust_env(
+    root: Path,
+    target_dir: Path,
+    base: dict[str, str] | None = None,
+    extra_roots: tuple[Path, ...] = (),
+) -> dict[str, str]:
     env = dict(base or os.environ)
     encoded = env.pop("CARGO_ENCODED_RUSTFLAGS", "")
     flags = encoded.split("\x1f") if encoded else shlex.split(env.pop("RUSTFLAGS", ""))
@@ -20,6 +25,10 @@ def reproducible_rust_env(root: Path, target_dir: Path, base: dict[str, str] | N
         (cargo_home, Path("/usr/local/cargo")),
         (rustup_home, Path("/usr/local/rustup")),
         (target_dir.resolve(), Path("/usr/src/nirs4all-io/target")),
+        *(
+            (source.resolve(), Path(f"/usr/src/nirs4all-io/build-{index}"))
+            for index, source in enumerate(extra_roots)
+        ),
     )
     flags.extend(f"--remap-path-prefix={source}={destination}" for source, destination in mappings)
     env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flag for flag in flags if flag)

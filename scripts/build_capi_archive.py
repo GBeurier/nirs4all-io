@@ -93,7 +93,7 @@ def main() -> int:
     ).encode("utf-8")
     with tempfile.TemporaryDirectory(prefix="n4io-capi-build-") as temporary:
         target_dir = Path(temporary) / "target"
-        env = reproducible_rust_env(root, target_dir)
+        env = reproducible_rust_env(root, target_dir, extra_roots=(Path(temporary),))
         env["SOURCE_DATE_EPOCH"] = str(epoch)
         subprocess.run(
             [

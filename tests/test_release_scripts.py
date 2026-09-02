@@ -15,6 +15,7 @@ import pytest
 from scripts.normalize_cyclonedx import canonicalize_arrays, validate_cyclonedx, verify_subject
 from scripts.normalize_wheel import normalize_wheel
 from scripts.release_paths import CANONICAL_SOURCE, normalize_source_strings, refuse_source_path_leaks
+from scripts.rust_reproducibility import reproducible_rust_env
 from scripts.scan_artifact_paths import scan_paths
 from scripts.verify_release_tag import verify
 from scripts.write_deterministic_zip import write_zip
@@ -29,6 +30,13 @@ def test_json_path_normalization_handles_escaped_windows_form() -> None:
     normalized = normalize_source_strings(document, ROOT)
     assert normalized == {"nested": [f"{CANONICAL_SOURCE}\\crates\\core"]}
     refuse_source_path_leaks(normalized, ROOT)
+
+
+def test_rust_environment_remaps_ephemeral_build_root(tmp_path: Path) -> None:
+    target = tmp_path / "ephemeral-build" / "target"
+    env = reproducible_rust_env(ROOT, target, {}, extra_roots=(target.parent,))
+    flags = env["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
+    assert f"--remap-path-prefix={target.parent.resolve()}=/usr/src/nirs4all-io/build-0" in flags
 
 
 def test_path_leak_scanner_descends_into_zip(tmp_path: Path) -> None:
