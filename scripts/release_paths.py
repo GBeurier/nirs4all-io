@@ -59,7 +59,7 @@ def refuse_source_path_leaks(value: Any, root: Path) -> None:
     """Fail if a canonicalized document still exposes a checkout path."""
     roots = tuple(before.casefold() for before, _ in source_path_replacements(root))
     sensitive = re.compile(
-        r"(?i)(?:[a-z]:[\\/]|/(?:home|users)/|/github/workspace/|/home/runner/work/)[^\n\r]*nirs4all-io"
+        r"(?i)(?:(?<![a-z])[a-z]:[\\/]|/(?:home|users)/|/github/workspace/|/home/runner/work/)[^\n\r]*nirs4all-io"
     )
     for candidate in iter_strings(value):
         folded = candidate.casefold()

@@ -30,6 +30,10 @@ def test_json_path_normalization_handles_escaped_windows_form() -> None:
     normalized = normalize_source_strings(document, ROOT)
     assert normalized == {"nested": [f"{CANONICAL_SOURCE}\\crates\\core"]}
     refuse_source_path_leaks(normalized, ROOT)
+    refuse_source_path_leaks(
+        {"bom-ref": f"path+file://{CANONICAL_SOURCE}/bindings/python#nirs4all-io-py@0.1.12"},
+        ROOT,
+    )
 
 
 def test_rust_environment_remaps_ephemeral_build_root(tmp_path: Path) -> None:
