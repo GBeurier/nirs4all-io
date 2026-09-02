@@ -38,7 +38,7 @@ def main() -> int:
         stream.write(f"RUSTFLAGS={flags}\n")
         stream.write("CARGO_INCREMENTAL=0\n")
         stream.write(f"SOURCE_DATE_EPOCH={epoch}\n")
-    print("configured checkout-independent Rust release paths")
+    print("configured canonical Rust source-path metadata")
     return 0
 
 

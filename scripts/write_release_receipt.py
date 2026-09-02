@@ -265,6 +265,7 @@ def main() -> int:
             "python": sys.version.splitlines()[0],
         },
         "reserves": [
+            "Rust package builds are compared at one stable logical build root per platform; remapping removes host paths but Cargo package identity remains build-root-sensitive",
             "R and MATLAB/Octave qualification unavailable on the local host",
             "macOS and Windows binary matrices require CI runners",
             "Sigstore/OIDC attestations and registry publication require release CI",

@@ -103,6 +103,16 @@ cross-binding or reproducibility evidence, and concurrent source/artifact change
 `global_release` remains `NO-GO` until the six-surface CI matrix and independently
 verified attestations are present as `release-matrix.json` and `attestations.json`.
 
+Rust/Cargo package identity is sensitive to the absolute workspace root even when
+`--remap-path-prefix` removes host paths from the resulting binaries. Therefore an
+A/B comparison for compiled Python or WASM packages must use the same logical build
+root, operating-system image, and pinned toolchain on both runs. The two inputs may
+come from independent clean clones (and their source archives are compared
+separately), but each is staged at that common build root before compilation. The
+GitHub-hosted release jobs provide this stable per-platform checkout location; the
+path-leak scanner independently proves that the retained artifact exposes no runner
+or staging path.
+
 ## Tag-to-release flow
 
 1. `scripts/bump_version.sh --bump X.Y.Z` (rewrites the SoT + syncs every
