@@ -33,6 +33,11 @@ command exits non-zero otherwise. For an honest local inventory on a partial
 developer machine, use `--allow-incomplete`. This changes only the process exit
 code, never a row disposition or `overall_complete`.
 
+The strict runner refuses a dirty source worktree. Its report records the
+source commit and tree, `source_dirty: false`, hashes of all binding lockfiles
+and runner inputs, plus the discovered tool versions before the per-surface
+evidence.
+
 Python is qualified from a built wheel whose extension is loaded by absolute
 path: there is no editable install or `PYTHONPATH`. R builds the vendored package
 path and requires `jsonlite` to be present before the run; the strict harness

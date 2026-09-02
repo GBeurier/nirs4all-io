@@ -107,7 +107,7 @@ spec **object** directly. The raw `to_spec` / `validate` string functions stay
 reachable for the cross-binding JSON contract.
 
 ```js
-import * as nio from "./idiomatic.mjs";
+import * as nio from "@nirs4all/io-wasm/idiomatic";
 const spec = nio.toSpec({ name: "run", sources: [{ id: "x", role: "features", input: "x.csv" }] });
 nio.validateSpec(spec);                         // throws on an invalid spec
 const plan = nio.inferFiles(files);             // options default to {}
@@ -121,3 +121,7 @@ wasm-pack build bindings/wasm --target nodejs --out-dir pkg
 node bindings/wasm/tests/node_smoke.cjs          # raw exports
 node bindings/wasm/tests/idiomatic_smoke.mjs     # idiomatic.mjs wrapper
 ```
+
+The release workflow runs both smokes again against the staged npm package and
+retains the exact `.tgz`, including the wrapper, detailed types, and complete
+license/provenance inventory.

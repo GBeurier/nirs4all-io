@@ -2,11 +2,13 @@
 # MATLAB / Octave binding package for every release tag.
 #
 # The bindings/matlab tree (the +nirs4all_io classdef package, build.m, the MEX
-# source n4io.c, and the smoke test) is a SOURCE distribution: users download
+# source n4io.c, the license inventory, and the smoke test) is a SOURCE
+# distribution: users download
 # the zip, run build.m to compile the n4io MEX against their own MATLAB or
 # Octave (and the prebuilt nirs4all-io-capi cdylib), then use the +nirs4all_io
 # package. The same archive serves MATLAB and Octave. It is attached to the
-# GitHub Release so users can download it without cloning the repo.
+# GitHub Release so users can download it without cloning the repo. The shared
+# archive builder normalizes file order and timestamps to the source commit.
 #
 # Trigger: tag push v*.*.* (attach gated on a non-rc tag), or workflow_dispatch
 # for a dry run (build the artifact, no Release upload).
@@ -30,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
 
+      - name: Verify release tag identity
+        run: python scripts/verify_release_tag.py
+
       - name: Resolve version
         id: meta
         run: |
@@ -41,14 +46,9 @@ jobs:
           # name makes the package discoverable to both audiences.
           echo "prefix=nirs4all-io-matlab-octave-$VER" >> "$GITHUB_OUTPUT"
 
-      - name: Build the MATLAB/Octave package (deterministic git archive)
+      - name: Build the deterministic MATLAB/Octave package
         run: |
-          mkdir -p dist
-          # Archive only the bindings/matlab subtree under a clean top-level dir.
-          git archive --format=zip \
-            --prefix="${{ steps.meta.outputs.prefix }}/" \
-            HEAD:bindings/matlab \
-            -o "dist/${{ steps.meta.outputs.prefix }}.zip"
+          scripts/build_matlab_archive.sh dist
           unzip -l "dist/${{ steps.meta.outputs.prefix }}.zip" | tail -3
 
       - name: Upload to the matching Release

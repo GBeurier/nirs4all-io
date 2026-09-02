@@ -5,6 +5,8 @@
 #                                         (internal dep version, for crates.io)
 #   - bindings/python/Cargo.toml          (Cargo SemVer)
 #   - bindings/wasm/Cargo.toml            (Cargo SemVer)
+#   - bindings/r/configure                (vendored Cargo workspace template)
+#   - bindings/r/Cargo.lock.rust          (vendored workspace dependency lock)
 #   - src/nirs4all_io/_version.py         (PEP 440)
 #   - bindings/r/DESCRIPTION              (R version spelling)
 #

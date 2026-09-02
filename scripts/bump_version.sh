@@ -20,8 +20,9 @@
 #               Used by the root Cargo.toml [workspace.dependencies]
 #               nirs4all-io-core / nirs4all-io internal-dep `version` (required
 #               so the published crates resolve each other from crates.io),
-#               bindings/python/Cargo.toml, bindings/wasm/Cargo.toml, and every
-#               workspace-member package via `version.workspace = true`.
+#               bindings/python/Cargo.toml, bindings/wasm/Cargo.toml, the
+#               self-contained workspace emitted by bindings/r/configure, and
+#               every workspace-member package via `version.workspace = true`.
 #               The npm package.json (bindings/wasm/pkg/) is a gitignored
 #               wasm-pack build artifact, NOT a sync target — release-npm.yml
 #               injects the SoT version into it at build time.
@@ -61,6 +62,20 @@ read_workspace_version() {
         exit 2
     fi
     printf '%s' "${value}"
+}
+
+find_python311() {
+    local candidate
+    for candidate in "${N4IO_VERSION_PYTHON:-}" python3.13 python3.12 python3.11 python3; do
+        [[ -n "${candidate}" ]] || continue
+        command -v "${candidate}" >/dev/null 2>&1 || continue
+        if "${candidate}" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' 2>/dev/null; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    done
+    echo "error: Python >=3.11 is required for semantic Cargo TOML validation" >&2
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -220,6 +235,28 @@ update_with_sed() {
     fi
 }
 
+# update_cargo_lock_package <relative_path> <package_name> <expected_version>
+update_cargo_lock_package() {
+    local rel="$1" package="$2" expected="$3"
+    local abs="${ROOT}/${rel}"
+    local current
+    current=$(sed -nE "/^name = \"${package}\"$/,/^\[\[package\]\]/{s/^version[[:space:]]*=[[:space:]]*\"([^\"]+)\"/\1/p}" \
+        "${abs}" | head -n1 || true)
+    if [[ -z "${current}" ]]; then
+        echo "  DRIFT: ${rel} has no package '${package}'" >&2
+        DRIFTED+=("${rel}:${package}")
+        EXIT_CODE=1
+    elif [[ "${MODE}" == "check" && "${current}" != "${expected}" ]]; then
+        echo "  DRIFT: ${rel} package '${package}' reports '${current}' (expected '${expected}')" >&2
+        DRIFTED+=("${rel}:${package}")
+        EXIT_CODE=1
+    elif [[ "${MODE}" != "check" && "${current}" != "${expected}" ]]; then
+        sed -i -E "/^name = \"${package}\"$/,/^\[\[package\]\]/{s/^(version[[:space:]]*=[[:space:]]*\")[^\"]+(\")/\1${expected}\2/}" \
+            "${abs}"
+        echo "  updated ${rel}:${package}: ${current} → ${expected}"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # 7. The manifest table — every downstream version string lives here.
 # ---------------------------------------------------------------------------
@@ -254,6 +291,31 @@ update_with_sed \
     "${CARGO_VERSION}" \
     "^version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
     "s/^(version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
+
+# R source packages generate a self-contained vendored Rust workspace at
+# configure time. Its three literal versions are executable release metadata,
+# not documentation, and must follow the Cargo source of truth as well.
+update_with_sed \
+    "bindings/r/configure" \
+    "${CARGO_VERSION}" \
+    "^version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
+    "s/^(version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
+
+update_with_sed \
+    "bindings/r/configure" \
+    "${CARGO_VERSION}" \
+    "^nirs4all-io-core[[:space:]]*=.*version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
+    "s/^(nirs4all-io-core[[:space:]]*=.*version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
+
+update_with_sed \
+    "bindings/r/configure" \
+    "${CARGO_VERSION}" \
+    "^nirs4all-io[[:space:]]*=.*version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
+    "s/^(nirs4all-io[[:space:]]*=.*version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
+
+for package in nirs4all-io-core nirs4all-io nirs4all-io-capi; do
+    update_cargo_lock_package "bindings/r/Cargo.lock.rust" "${package}" "${CARGO_VERSION}"
+done
 
 for rel in \
     "crates/nirs4all-io-core/Cargo.toml" \
@@ -305,6 +367,11 @@ update_with_sed \
 # 8. Summary
 # ---------------------------------------------------------------------------
 if [[ "${MODE}" == "check" ]]; then
+    N4IO_CHECK_PYTHON="$(find_python311)"
+    if ! "${N4IO_CHECK_PYTHON}" "${ROOT}/scripts/check_r_reduced_workspace.py" --root "${ROOT}"; then
+        DRIFTED+=("bindings/r/reduced-workspace")
+        EXIT_CODE=1
+    fi
     if [[ ${EXIT_CODE} -eq 0 ]]; then
         echo "  OK: every manifest is in sync with the Cargo workspace version (${CARGO_VERSION})"
     else

@@ -75,13 +75,16 @@ $(STATLIB):
 	# defaults to every logical CPU on the build machine.
 	export CARGO_HOME="$(CARGOTMP)" && \
 	export CARGO_TARGET_DIR="$(TARGET_DIR)" && \
+	export N4IO_REMAP_CONFIG="build.rustflags=['--remap-path-prefix=$(CARGOTMP)=/cargo-home','--remap-path-prefix=$(CURDIR)=/nirs4allio-src']" && \
 	if [ -f rust/vendor.tar.xz ]; then \
 		[ -d rust/vendor ] || ( echo "extracting rust/vendor.tar.xz"; cd rust && tar xJf vendor.tar.xz ); \
-		cd rust && cargo build -p nirs4all-io-capi --release -j 2 --offline \
+		cd rust && cargo build -p nirs4all-io-capi --locked --release -j 2 --offline \
+			--config "$${N4IO_REMAP_CONFIG}" \
 			--config 'source.crates-io.replace-with="vendored-sources"' \
 			--config 'source.vendored-sources.directory="vendor"'; \
 	else \
-		cd rust && cargo build -p nirs4all-io-capi --release -j 2; \
+		cd rust && cargo build -p nirs4all-io-capi --locked --release -j 2 \
+			--config "$${N4IO_REMAP_CONFIG}"; \
 	fi
 
 # Post-link cleanup. Runs AFTER $(SHLIB) has linked $(STATLIB) into the package
