@@ -62,6 +62,16 @@ def test_web_wasm_rebuilds_are_locked() -> None:
     assert source.count("--locked") == 2
 
 
+def test_dagml_release_gate_uses_identity_and_exact_sibling() -> None:
+    source = (ROOT / "tests" / "dag_ml_data" / "verify_cross_cli.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "tests/cross_binding/corpus/identity.spec.json" in source
+    assert "cargo update" in source and "--precise" in source and "--offline" in source
+    assert "dag-ml-data patch was not selected" in source
+    assert source.count("cargo build -q --locked") == 3
+
+
 def test_cyclonedx_validation_and_array_canonicalization() -> None:
     document = {
         "bomFormat": "CycloneDX",
