@@ -19,6 +19,7 @@ inferRecords(recordSets)   // decoded nirs4all-formats records -> DatasetPlan ob
 inferDataset(files, recordSets, options) // browser raw files + decoded records -> DatasetPlan object
 proposeDataset(files, recordSets, options) // iterative builder: -> {plan, proposals, spec, valid, validation_errors}
 assembleDataset(files, recordSets, specJson) // materialize a DatasetSpec -> AssembledDataset object
+loadSummary(files, recordSets, specJson) // canonical native structural summary JSON
 version()            // () -> crate version string (semver)
 ```
 
@@ -86,9 +87,41 @@ const browserPlan = wasm.inferDataset(
 console.log(wasm.version());
 ```
 
+## TypeScript types
+
+wasm-bindgen types every `JsValue` parameter/return as `any`. Hand-written types
+in [`types/nirs4all-io.d.ts`](types/nirs4all-io.d.ts) give the real shapes
+(`NamedFile`, `RecordSet`, `InferOptions`, `ProposeOptions`, `DatasetPlan`,
+`DatasetSpec`, `Proposal`, `ProposeResult`, `AssembledDataset`) and typed views
+of every export, so call sites are checked by `tsc`.
+
+## Idiomatic ESM wrapper
+
+[`idiomatic.mjs`](idiomatic.mjs) (typed by [`idiomatic.d.ts`](idiomatic.d.ts)) is
+a thin, dependency-free wrapper over the wasm-pack module. The object-returning
+entry points (`inferFiles` / `inferRecords` / `inferDataset` / `proposeDataset` /
+`assembleDataset`) are re-exported with default options; the string-JSON surface
+gains native-JS conveniences `toSpec` (object → canonical spec **object**) and
+`validateSpec` (object in; throws when invalid). `assembleDataset` also accepts a
+spec **object** directly. The raw `to_spec` / `validate` string functions stay
+reachable for the cross-binding JSON contract.
+
+```js
+import * as nio from "@nirs4all/io-wasm/idiomatic";
+const spec = nio.toSpec({ name: "run", sources: [{ id: "x", role: "features", input: "x.csv" }] });
+nio.validateSpec(spec);                         // throws on an invalid spec
+const plan = nio.inferFiles(files);             // options default to {}
+const ds = nio.assembleDataset([], recordSets, plan.resolved_spec); // object spec OK
+```
+
 ## Test
 
 ```bash
 wasm-pack build bindings/wasm --target nodejs --out-dir pkg
-node bindings/wasm/tests/node_smoke.cjs
+node bindings/wasm/tests/node_smoke.cjs          # raw exports
+node bindings/wasm/tests/idiomatic_smoke.mjs     # idiomatic.mjs wrapper
 ```
+
+The release workflow runs both smokes again against the staged npm package and
+retains the exact `.tgz`, including the wrapper, detailed types, and complete
+license/provenance inventory.

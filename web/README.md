@@ -80,6 +80,8 @@ If Playwright is not installed in this directory, point `PLAYWRIGHT_MODULE` at a
 installed `playwright/index.mjs`. The test opens the standalone file through
 `file://` and checks the sample dataset, sidecar alerts, folder upload,
 reader-catalog display, Y histogram, and non-spectral format refusals.
+For a non-sibling checkout such as a Git worktree, set `N4IO_FORMATS_ROOT` to
+the exact `nirs4all-formats` source root for both the build and smoke commands.
 `standalone-formats-smoke.mjs` additionally uploads real fixtures from the
 sibling `nirs4all-formats/samples` directory, including single-file and sidecar
 formats, to verify the full browser path from upload to `DatasetSpec`.

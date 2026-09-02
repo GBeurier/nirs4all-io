@@ -51,6 +51,12 @@ def test_path_leak_scanner_descends_into_zip(tmp_path: Path) -> None:
         scan_paths([archive])
 
 
+def test_committed_web_wasm_has_no_checkout_paths() -> None:
+    bundles = sorted((ROOT / "web" / "pkg").glob("**/*.wasm"))
+    assert bundles
+    scan_paths(bundles)
+
+
 def test_cyclonedx_validation_and_array_canonicalization() -> None:
     document = {
         "bomFormat": "CycloneDX",

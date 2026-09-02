@@ -1,16 +1,15 @@
 {
-  "name": "@nirs4all/formats-wasm",
+  "name": "nirs4all-formats-wasm",
   "type": "module",
   "collaborators": [
     "Gregory Beurier <gregory.beurier@cirad.fr>"
   ],
   "description": "WebAssembly bindings for nirs4all-formats.",
-  "version": "0.2.2",
+  "version": "0.2.8",
   "license": "CECILL-2.1 OR AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/GBeurier/nirs4all-formats.git",
-    "directory": "bindings/wasm"
+    "url": "https://github.com/GBeurier/nirs4all-formats"
   },
   "files": [
     "nirs4all_formats_wasm_bg.wasm",

@@ -81,6 +81,39 @@ export function inferRecords(record_sets) {
 }
 
 /**
+ * Materialize the same fs-free inputs as [`assemble_dataset`] and return the
+ * canonical structural summary used by the native CLI and C ABI.
+ *
+ * Keeping this as canonical JSON (rather than a re-serialized JS object) makes
+ * the cross-language qualification byte-exact and preserves source, sample,
+ * observation, repetition, group, and fold provenance without host-side logic.
+ * @param {any} files
+ * @param {any} record_sets
+ * @param {string} spec
+ * @returns {string}
+ */
+export function loadSummary(files, record_sets, spec) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(spec, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.loadSummary(files, record_sets, ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Iterative, user-validatable dataset inference.
  *
  * Inputs mirror [`infer_dataset`] plus `options.confirmed` — an array of

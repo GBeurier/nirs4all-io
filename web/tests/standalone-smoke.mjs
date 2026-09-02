@@ -4,7 +4,8 @@ import path from "node:path";
 const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, "..");
 const workspace = path.resolve(root, "..", "..");
-const formatsSamples = path.join(workspace, "nirs4all-formats", "samples");
+const formatsRoot = process.env.N4IO_FORMATS_ROOT || path.join(workspace, "nirs4all-formats");
+const formatsSamples = path.join(formatsRoot, "samples");
 const standalone = pathToFileURL(path.join(root, "dist", "nirs4all-io-standalone.html")).href;
 const chromeExecutable = process.env.CHROME_BIN || "/usr/bin/google-chrome";
 
