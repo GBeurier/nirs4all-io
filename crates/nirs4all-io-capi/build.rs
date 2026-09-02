@@ -25,11 +25,24 @@ fn main() {
     // asserted by the ABI-check CI. cdylib-link-arg applies only to cdylibs.
     let version_script = crate_dir.join("abi").join("version_script.map");
     println!("cargo:rerun-if-changed={}", version_script.display());
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
-        println!(
-            "cargo:rustc-cdylib-link-arg=-Wl,--version-script={}",
-            version_script.display()
-        );
+    match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("linux") => {
+            println!(
+                "cargo:rustc-cdylib-link-arg=-Wl,--version-script={}",
+                version_script.display()
+            );
+            // Without an explicit SONAME, GNU ld records Cargo's absolute
+            // output path as the BASE entry in .gnu.version_d. That makes an
+            // otherwise reproducible cdylib depend on its temporary target dir.
+            println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libnirs4all_io_capi.so");
+        }
+        Ok("macos") => {
+            // Keep the Mach-O install name independent of Cargo's output path.
+            println!(
+                "cargo:rustc-cdylib-link-arg=-Wl,-install_name,@rpath/libnirs4all_io_capi.dylib"
+            );
+        }
+        _ => {}
     }
 
     if !config_path.exists() {
