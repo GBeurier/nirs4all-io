@@ -26,7 +26,7 @@ jobs:
           package-manager-cache: false
       - name: Verify WASM Cargo lock
         run: cargo metadata --manifest-path bindings/wasm/Cargo.toml --locked --format-version 1 > /dev/null
-      - name: Verify WASM legal payload mirrors the canonical inventory
+      - name: Verify release legal payloads mirror the canonical inventory
         run: node scripts/stage_wasm_package.mjs --check-legal
       - name: Build (nodejs target)
         run: wasm-pack build bindings/wasm --target nodejs --out-dir pkg --locked
