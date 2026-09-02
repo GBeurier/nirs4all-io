@@ -80,6 +80,15 @@ def test_rust_security_gate_audits_every_lockfile() -> None:
         assert "bash scripts/audit_rust_locks.sh" in workflow_source
 
 
+def test_source_release_removes_sbom_staging_before_clean_tree_gate() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release-source.yml").read_text(
+        encoding="utf-8"
+    )
+    remove_index = workflow.index("rm -rf sbom-root")
+    normalize_index = workflow.index("python scripts/normalize_cyclonedx.py")
+    assert remove_index < normalize_index
+
+
 def test_dagml_release_gate_uses_identity_and_exact_sibling() -> None:
     source = (ROOT / "tests" / "dag_ml_data" / "verify_cross_cli.sh").read_text(
         encoding="utf-8"
