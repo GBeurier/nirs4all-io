@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 
 use nirs4all_io::api::{load_assembled, Input};
-use nirs4all_io_dagml::to_dag_ml_data;
+use nirs4all_io_dagml::{to_dataset_package, PackageProvider};
 
 #[derive(Parser)]
 #[command(
@@ -41,7 +41,8 @@ fn main() -> Result<()> {
     };
     let assembled =
         load_assembled(&input, conv, cli.name.as_deref()).map_err(|e| anyhow!(e.message))?;
-    let envelope = to_dag_ml_data(&assembled).map_err(|e| anyhow!(e.message))?;
-    println!("{}", serde_json::to_string_pretty(&envelope)?);
+    let package = to_dataset_package(&assembled);
+    let provider = PackageProvider::from_package(&package).map_err(|e| anyhow!(e.message))?;
+    println!("{}", serde_json::to_string_pretty(provider.envelope())?);
     Ok(())
 }

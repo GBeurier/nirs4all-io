@@ -10,7 +10,8 @@
 #                       wrapped by a hand-authored DataBinding in a CampaignSpec)
 #
 # Fingerprints are content-derived, so no brittle byte-golden is pinned — the
-# "golden" is the round trip: emit -> both CLIs accept. Needs the sibling
+# "golden" is the round trip: Rust loader -> DatasetPackage -> PackageProvider
+# -> both CLIs accept its envelope. Needs the sibling
 # `dag-ml-data` and `dag-ml` repos (the ecosystem tree); if either is absent the
 # script SKIPS (exit 0) with a message rather than failing unless
 # NIRS4ALL_REQUIRE_DAGML_SIBLINGS=1 is set. When siblings are present, Cargo is
@@ -67,7 +68,11 @@ if [[ -z "${dmd_version}" ]]; then
   echo "FAIL: could not resolve dag-ml-data workspace version" >&2
   exit 1
 fi
-dagml_data_patch=(--config "patch.crates-io.dag-ml-data.path='${dmd}/crates/dag-ml-data'")
+dagml_data_patch=(
+  --config "patch.crates-io.dag-ml-data.path='${dmd}/crates/dag-ml-data'"
+  --config "patch.crates-io.dag-ml-data-core.path='${dmd}/crates/dag-ml-data-core'"
+  --config "patch.crates-io.dag-ml-data-provider.path='${dmd}/crates/dag-ml-data-provider'"
+)
 cargo update -q --manifest-path "${emit_manifest}" -p dag-ml-data \
   --precise "${dmd_version}" --offline "${dagml_data_patch[@]}"
 metadata_json="${work}/emit-metadata.json"

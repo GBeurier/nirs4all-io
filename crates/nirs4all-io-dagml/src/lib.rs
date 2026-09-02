@@ -23,13 +23,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use dag_ml_data::{
     sample_metadata, signal_1d, signal_with_processings, target_categorical,
     target_categorical_matrix, target_numeric, target_numeric_matrix, AxisKind, AxisSpec,
-    CoordinateDType, CoordinateSpec, CoordinateValues, CoordinatorDataPlanEnvelope, DataPlan,
-    DataPlanStep, DataPlanStepKind, DatasetSchema, FitScope, FoldSpec, GroupId, GroupKind,
-    GroupSpec, MetadataFieldSpec, MetadataSchema, MetadataValueKind, ObservationId, RepetitionId,
-    RepresentationId, RepresentationSpec, SampleId, SampleRelation, SampleRelationTable,
-    SignalKind, SourceDescriptor, SourceGranularity, SourceId, TargetId,
+    CoordinateDType, CoordinateSpec, CoordinateValues, CoordinatorDataHandleRecord,
+    CoordinatorDataMaterializationRequest, CoordinatorDataPlanEnvelope, CoordinatorDataViewRecord,
+    CoordinatorFeatureBlock, CoordinatorRelationSet, CoordinatorTargetBlock,
+    CoordinatorTargetTable, CoordinatorTargetValue, DataPlan, DataPlanStep, DataPlanStepKind,
+    DataView, DatasetSchema, FitScope, FoldSpec, GroupId, GroupKind, GroupSpec, MetadataFieldSpec,
+    MetadataSchema, MetadataValueKind, NumericFeatureBufferStore, NumericFeatureMatrixF64,
+    ObservationId, RepetitionId, RepresentationId, RepresentationSpec, SampleId, SampleRelation,
+    SampleRelationTable, SignalKind, SourceDescriptor, SourceGranularity, SourceId, TargetId,
     REPRESENTATION_FEATURE_BLOCK_SET, REPRESENTATION_SAMPLE_METADATA,
 };
+use dag_ml_data_provider::{DagMlDataProvider, InMemoryProvider};
 use nirs4all_io::core::infer::{ColDtype, NumericKind};
 use nirs4all_io::core::materialize::package::DatasetPackage;
 use nirs4all_io::core::spec::SpecError;
@@ -1206,6 +1210,9 @@ fn build_dag_ml_data_parts(
     } else {
         BTreeMap::new()
     };
+    let relation_target_id = (targets.len() == 1)
+        .then(|| targets.keys().next().cloned())
+        .flatten();
 
     // --- metadata (declared as sample_metadata when present) ---
     let (metadata, metadata_schema) = emit_metadata(b0, n_samples);
@@ -1220,7 +1227,11 @@ fn build_dag_ml_data_parts(
                     .then(|| SourceId::new(&row.source_ids[0]))
                     .transpose()
                     .map_err(err)?,
-                target_id: None,
+                // A single target has an unambiguous observation relation. For
+                // multi-target data the complete target-id set stays in the
+                // schema and provider tables; inventing duplicate observation
+                // rows would violate the coordinator identity contract.
+                target_id: relation_target_id.clone(),
                 group_id: row
                     .group_id
                     .as_ref()
@@ -1332,20 +1343,21 @@ fn build_dag_ml_data_parts(
     Ok((schema, plan, relations))
 }
 
-/// Map an [`AssembledDataset`] to a dag-ml-data `CoordinatorDataPlanEnvelope`.
-pub fn to_dag_ml_data(
+fn envelope_from_parts(
     assembled: &AssembledDataset,
+    schema: &DatasetSchema,
+    plan: DataPlan,
+    relations: Option<&SampleRelationTable>,
 ) -> Result<CoordinatorDataPlanEnvelope, SpecError> {
-    let (schema, plan, relations) = build_dag_ml_data_parts(assembled)?;
     let mut envelope =
-        CoordinatorDataPlanEnvelope::from_parts(&schema, plan, relations.as_ref()).map_err(err)?;
+        CoordinatorDataPlanEnvelope::from_parts(schema, plan, relations).map_err(err)?;
     // `CoordinatorDataPlanEnvelope` fingerprints a schema but does not carry it
     // as a first-class field. Retain the exact schema as an io namespaced
     // snapshot so source ids, target labels, groups and fold declarations do
     // not disappear behind an opaque hash at this bridge boundary.
     envelope.metadata.insert(
         "io.dataset_schema".to_string(),
-        serde_json::to_value(&schema).map_err(err)?,
+        serde_json::to_value(schema).map_err(err)?,
     );
     envelope.metadata.insert(
         "io.identity_contract".to_string(),
@@ -1363,7 +1375,294 @@ pub fn to_dag_ml_data(
     Ok(envelope)
 }
 
-/// Build the v2 [`DatasetPackage`] for an [`AssembledDataset`] — the typed-payload
+/// Map an [`AssembledDataset`] to a dag-ml-data `CoordinatorDataPlanEnvelope`.
+pub fn to_dag_ml_data(
+    assembled: &AssembledDataset,
+) -> Result<CoordinatorDataPlanEnvelope, SpecError> {
+    let (schema, plan, relations) = build_dag_ml_data_parts(assembled)?;
+    envelope_from_parts(assembled, &schema, plan, relations.as_ref())
+}
+
+/// A production-shaped Rust provider built directly from an IO
+/// [`DatasetPackage`].
+///
+/// The package is converted through its canonical, lossless
+/// [`DatasetPackage::to_assembled`] path; no JSON payload round-trip and no
+/// `SpectroDataset` adapter is involved. DATA-002 deliberately supports the
+/// dense, single-source matrix surface. Multi-source fusion and N-D payloads
+/// remain owned by their existing, explicit provider paths.
+pub struct PackageProvider {
+    envelope: CoordinatorDataPlanEnvelope,
+    feature_set_id: String,
+    target_ids: Vec<TargetId>,
+    provider: InMemoryProvider,
+}
+
+impl PackageProvider {
+    /// Build a dag-ml-data provider from a Rust IO package without serializing
+    /// or adapting through Python.
+    pub fn from_package(package: &DatasetPackage) -> Result<Self, SpecError> {
+        let assembled = package.to_assembled();
+        let (schema, plan, relations) = build_dag_ml_data_parts(&assembled)?;
+        if schema.sources.len() != 1 {
+            return Err(SpecError::new(
+                "cannot build PackageProvider: DATA-002 supports one feature source; use the explicit dag-ml-data fusion provider for multi-source packages",
+            ));
+        }
+        if assembled.blocks.values().any(|block| {
+            block
+                .processings
+                .iter()
+                .any(|processings| !processings.is_empty())
+        }) {
+            return Err(SpecError::new(
+                "cannot build PackageProvider: processing-stack/N-D payloads require the explicit dag-ml-data tensor provider",
+            ));
+        }
+
+        let envelope = envelope_from_parts(&assembled, &schema, plan, relations.as_ref())?;
+        let identity_rows = collect_identity_rows(&assembled).map_err(preflight_err)?;
+        let feature_matrix = package_feature_matrix(&assembled, &schema, &identity_rows)?;
+        let feature_set_id = feature_matrix.feature_set_id.clone();
+        let feature_store =
+            NumericFeatureBufferStore::from_f64_matrices(vec![feature_matrix]).map_err(err)?;
+        let target_tables = package_target_tables(&assembled, &schema, &identity_rows)?;
+        let target_ids = target_tables.keys().cloned().collect();
+        let provider =
+            InMemoryProvider::new(envelope.clone(), target_tables, feature_store).map_err(err)?;
+
+        Ok(Self {
+            envelope,
+            feature_set_id,
+            target_ids,
+            provider,
+        })
+    }
+
+    /// Exact coordinator envelope used by this provider.
+    pub fn envelope(&self) -> &CoordinatorDataPlanEnvelope {
+        &self.envelope
+    }
+
+    /// Feature-set id accepted by [`Self::feature_block`].
+    pub fn feature_set_id(&self) -> &str {
+        &self.feature_set_id
+    }
+
+    /// Target ids accepted by [`Self::target_block`].
+    pub fn target_ids(&self) -> &[TargetId] {
+        &self.target_ids
+    }
+}
+
+impl DagMlDataProvider for PackageProvider {
+    fn materialize(
+        &self,
+        request: &CoordinatorDataMaterializationRequest,
+    ) -> dag_ml_data::Result<CoordinatorDataHandleRecord> {
+        self.provider.materialize(request)
+    }
+
+    fn make_view(
+        &self,
+        data_handle: u64,
+        view: &DataView,
+    ) -> dag_ml_data::Result<CoordinatorDataViewRecord> {
+        self.provider.make_view(data_handle, view)
+    }
+
+    fn view_identity(&self, view_handle: u64) -> dag_ml_data::Result<CoordinatorRelationSet> {
+        self.provider.view_identity(view_handle)
+    }
+
+    fn target_block(
+        &self,
+        view_handle: u64,
+        target_id: &TargetId,
+    ) -> dag_ml_data::Result<CoordinatorTargetBlock> {
+        self.provider.target_block(view_handle, target_id)
+    }
+
+    fn feature_block(
+        &self,
+        view_handle: u64,
+        feature_set_id: &str,
+    ) -> dag_ml_data::Result<CoordinatorFeatureBlock> {
+        self.provider.feature_block(view_handle, feature_set_id)
+    }
+
+    fn release(&self, handle: u64) -> bool {
+        self.provider.release(handle)
+    }
+}
+
+fn package_feature_matrix(
+    assembled: &AssembledDataset,
+    schema: &DatasetSchema,
+    identity_rows: &[IdentityRow],
+) -> Result<NumericFeatureMatrixF64, SpecError> {
+    let source = &schema.sources[0];
+    let source_id = source.id.as_str();
+    let mut feature_names: Option<Vec<String>> = None;
+    let mut observation_ids = Vec::new();
+    let mut values = Vec::new();
+    let mut validity_mask = Vec::new();
+    let mut identity_offset = 0usize;
+
+    for (partition, block) in &assembled.blocks {
+        let source_index = block
+            .source_ids
+            .iter()
+            .position(|candidate| candidate == source_id)
+            .ok_or_else(|| {
+                SpecError::new(format!(
+                    "cannot build PackageProvider: partition `{partition}` does not contain source `{source_id}`"
+                ))
+            })?;
+        let matrix = &block.x[source_index];
+        let headers = block
+            .feature_headers
+            .get(source_index)
+            .cloned()
+            .unwrap_or_default();
+        if feature_names
+            .as_ref()
+            .is_some_and(|known| known != &headers)
+        {
+            return Err(SpecError::new(format!(
+                "cannot build PackageProvider: source `{source_id}` feature headers differ in partition `{partition}`"
+            )));
+        }
+        feature_names.get_or_insert(headers);
+        for row in 0..block.n_samples {
+            let identity = &identity_rows[identity_offset + row];
+            if identity.partition != *partition {
+                return Err(SpecError::new(
+                    "cannot build PackageProvider: identity rows are not aligned with package partitions",
+                ));
+            }
+            observation_ids.push(ObservationId::new(&identity.observation_id).map_err(err)?);
+            for value in &matrix.data[row * matrix.n_cols..(row + 1) * matrix.n_cols] {
+                let valid = value.is_finite();
+                values.push(if valid { f64::from(*value) } else { 0.0 });
+                validity_mask.push(valid);
+            }
+        }
+        identity_offset += block.n_samples;
+    }
+
+    Ok(NumericFeatureMatrixF64 {
+        feature_set_id: source_id.to_string(),
+        representation_id: source.native_representation.id.clone(),
+        feature_names: feature_names.unwrap_or_default(),
+        observation_ids,
+        values,
+        validity_mask: validity_mask
+            .iter()
+            .any(|valid| !valid)
+            .then_some(validity_mask),
+    })
+}
+
+fn package_target_tables(
+    assembled: &AssembledDataset,
+    schema: &DatasetSchema,
+    identity_rows: &[IdentityRow],
+) -> Result<BTreeMap<TargetId, CoordinatorTargetTable>, SpecError> {
+    if schema.targets.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let matrix_target = schema.targets.len() == 1
+        && schema
+            .targets
+            .keys()
+            .next()
+            .is_some_and(|target_id| target_id.as_str() == "targets");
+    let mut values = BTreeMap::<TargetId, Vec<CoordinatorTargetValue>>::new();
+    let mut seen = BTreeMap::<(TargetId, SampleId), Value>::new();
+    let mut identity_offset = 0usize;
+
+    for (partition, block) in &assembled.blocks {
+        let Some(matrix) = &block.y else {
+            identity_offset += block.n_samples;
+            continue;
+        };
+        if matrix.n_rows != block.n_samples || matrix.n_cols != block.y_headers.len() {
+            return Err(SpecError::new(format!(
+                "cannot build PackageProvider: target matrix shape differs from headers in partition `{partition}`"
+            )));
+        }
+        for row in 0..block.n_samples {
+            let identity = &identity_rows[identity_offset + row];
+            let sample_id = SampleId::new(&identity.sample_id).map_err(err)?;
+            let target_values = if matrix_target {
+                let row_values = (0..matrix.n_cols)
+                    .map(|column| finite_target_value(matrix.data[row * matrix.n_cols + column]))
+                    .collect::<Result<Vec<_>, _>>()?;
+                vec![(
+                    TargetId::new("targets").map_err(err)?,
+                    Value::Array(row_values),
+                )]
+            } else {
+                block
+                    .y_headers
+                    .iter()
+                    .enumerate()
+                    .map(|(column, header)| {
+                        Ok((
+                            TargetId::new(sanitize(header, &format!("target{column}")))
+                                .map_err(err)?,
+                            finite_target_value(matrix.data[row * matrix.n_cols + column])?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, SpecError>>()?
+            };
+            for (target_id, value) in target_values {
+                let key = (target_id.clone(), sample_id.clone());
+                if let Some(previous) = seen.get(&key) {
+                    if previous != &value {
+                        return Err(SpecError::new(format!(
+                            "cannot build PackageProvider: repeated sample `{sample_id}` has conflicting values for target `{target_id}`"
+                        )));
+                    }
+                    continue;
+                }
+                seen.insert(key, value.clone());
+                values
+                    .entry(target_id.clone())
+                    .or_default()
+                    .push(CoordinatorTargetValue {
+                        sample_id: sample_id.clone(),
+                        value,
+                    });
+            }
+        }
+        identity_offset += block.n_samples;
+    }
+
+    values
+        .into_iter()
+        .map(|(target_id, target_values)| {
+            let table = CoordinatorTargetTable {
+                target_id: target_id.clone(),
+                values: target_values,
+            };
+            table.validate().map_err(err)?;
+            Ok((target_id, table))
+        })
+        .collect()
+}
+
+fn finite_target_value(value: f32) -> Result<Value, SpecError> {
+    if !value.is_finite() {
+        return Err(SpecError::new(
+            "cannot build PackageProvider: target matrix contains a non-finite value",
+        ));
+    }
+    Ok(Value::from(f64::from(value)))
+}
+
+/// Build the v3 [`DatasetPackage`] for an [`AssembledDataset`] — the typed-payload
 /// + content-hash-manifest companion to [`to_dag_ml_data`] (`IO-002`).
 ///
 /// This **extends** the bridge rather than replacing it: the same
@@ -1532,6 +1831,10 @@ mod tests {
         let relations = relations.expect("relations");
         assert_eq!(relations.rows[0].sample_id.as_str(), "S1");
         assert_eq!(relations.rows[0].observation_id.as_str(), "O1");
+        assert_eq!(
+            relations.rows[0].target_id.as_ref().unwrap().as_str(),
+            "protein"
+        );
         assert_eq!(relations.rows[0].group_id.as_ref().unwrap().as_str(), "a");
         assert_eq!(
             relations.rows[0].repetition_id.as_ref().unwrap().as_str(),
@@ -1653,6 +1956,103 @@ mod tests {
                 ["io.sample_weight"],
             Value::from(0.25_f32)
         );
+    }
+
+    #[test]
+    fn dataset_package_materializes_provider_without_spectrodataset() {
+        let mut assembled = assembled_with_block(base_block());
+        assembled.folds = vec![(vec![0], vec![1])];
+        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+            train_observation_ids: vec!["O1".into()],
+            validation_observation_ids: vec!["O2".into()],
+        }];
+
+        // Rust loader output -> DatasetPackage -> dag-ml-data provider. No
+        // JSON/pickle/Python/SpectroDataset adapter participates in this path.
+        let package = to_dataset_package(&assembled);
+        let provider = PackageProvider::from_package(&package).unwrap();
+        let envelope = provider.envelope();
+        let relations = &envelope.coordinator_relations.as_ref().unwrap().records;
+
+        assert_eq!(provider.feature_set_id(), "spectra");
+        assert_eq!(
+            provider
+                .target_ids()
+                .iter()
+                .map(TargetId::as_str)
+                .collect::<Vec<_>>(),
+            vec!["protein"]
+        );
+        assert_eq!(relations[0].sample_id.as_str(), "S1");
+        assert_eq!(relations[0].observation_id.as_str(), "O1");
+        assert_eq!(relations[0].group_id.as_ref().unwrap().as_str(), "a");
+        assert_eq!(relations[0].source_id.as_ref().unwrap().as_str(), "spectra");
+        assert_eq!(relations[0].target_id.as_ref().unwrap().as_str(), "protein");
+        assert_eq!(
+            envelope.metadata["io.dataset_schema"]["folds"][0]["id"],
+            Value::String("io.fold.0".into())
+        );
+        assert_eq!(
+            envelope.metadata["io.dataset_schema"]["folds"][0]["metadata"]
+                ["io.train_observation_ids"],
+            Value::Array(vec![Value::String("O1".into())])
+        );
+
+        let request = CoordinatorDataMaterializationRequest {
+            run_id: "run.data002".into(),
+            node_id: "model".into(),
+            input_name: "X".into(),
+            phase: "fit".into(),
+            variant_id: None,
+            fold_id: Some("io.fold.0".into()),
+            request_id: "request.data002".into(),
+            schema_fingerprint: envelope.schema_fingerprint.clone(),
+            plan_fingerprint: envelope.plan_fingerprint.clone(),
+            relation_fingerprint: envelope.relation_fingerprint.clone(),
+            output_representation: envelope.plan.output_representation.clone(),
+            source_ids: vec![SourceId::new("spectra").unwrap()],
+            require_relations: true,
+        };
+        let data = provider.materialize(&request).unwrap();
+        let view = provider
+            .make_view(
+                data.handle.handle,
+                &DataView {
+                    sample_ids: Some(vec![
+                        SampleId::new("S2").unwrap(),
+                        SampleId::new("S1").unwrap(),
+                    ]),
+                    include_augmented: true,
+                    ..DataView::default()
+                },
+            )
+            .unwrap();
+        let view_relations = provider.view_identity(view.handle.handle).unwrap();
+        assert_eq!(
+            view_relations
+                .records
+                .iter()
+                .map(|row| row.observation_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["O2", "O1"]
+        );
+        let features = provider
+            .feature_block(view.handle.handle, provider.feature_set_id())
+            .unwrap();
+        assert_eq!(features.observation_ids[0].as_str(), "O2");
+        assert_eq!(features.sample_ids[0].as_str(), "S2");
+        assert_eq!(
+            features.values,
+            vec![
+                vec![Value::from(3.0), Value::from(4.0), Value::from(5.0)],
+                vec![Value::from(0.0), Value::from(1.0), Value::from(2.0)],
+            ]
+        );
+        let protein = TargetId::new("protein").unwrap();
+        let targets = provider.target_block(view.handle.handle, &protein).unwrap();
+        assert_eq!(targets.sample_ids[0].as_str(), "S2");
+        assert_eq!(targets.values, vec![Value::from(1.0), Value::from(0.0)]);
+        assert!(provider.release(data.handle.handle));
     }
 
     #[test]

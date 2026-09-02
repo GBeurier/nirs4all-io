@@ -33,7 +33,11 @@ readme = "README.md"
 # track [workspace.package] version — scripts/bump_version.sh keeps it in sync.
 nirs4all-io-core = { path = "crates/nirs4all-io-core", version = "0.1.12" }
 nirs4all-io = { path = "crates/nirs4all-io", version = "0.1.12" }
-dag-ml-data = "0.2.9"
+# DATA-002 consumes the paired 0.2.10 provider surface. 0.2.10 is qualified
+# from the exact sibling candidate until it is published; keep Cargo.lock on
+# the last registry release rather than manufacturing a release lock entry.
+dag-ml-data = "0.2.10"
+dag-ml-data-provider = "0.2.10"
 # Third-party. serde_json enables `preserve_order` so that *input* object order
 # mirrors Python dict insertion order (load-bearing for legacy-config
 # normalization, where input order can leak into output list order). Canonical
