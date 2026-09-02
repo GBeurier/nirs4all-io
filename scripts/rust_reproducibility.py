@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: CECILL-2.1 OR AGPL-3.0-or-later
-"""Environment helpers for checkout-independent Rust release binaries."""
+"""Environment helpers for release binaries without embedded host paths."""
 
 from __future__ import annotations
 
