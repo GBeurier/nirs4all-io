@@ -77,11 +77,13 @@ rm -rf "$HERE/pkg/formats" "$HERE/pkg/io"
 "$WASM_PACK" build "$FORMATS_ROOT/bindings/wasm" \
   --target web \
   --release \
-  --out-dir "$HERE/pkg/formats"
+  --out-dir "$HERE/pkg/formats" \
+  --locked
 
 "$WASM_PACK" build "$IO_ROOT/bindings/wasm" \
   --target web \
   --release \
-  --out-dir "$HERE/pkg/io"
+  --out-dir "$HERE/pkg/io" \
+  --locked
 
 echo "WASM bundles written to $HERE/pkg"
