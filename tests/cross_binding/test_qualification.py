@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -43,3 +44,10 @@ def test_strict_runner_never_installs_r_dependencies() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8")
     assert "install.packages" not in source
     assert "requireNamespace('jsonlite',quietly=TRUE)" in source
+
+
+def test_isolated_r_library_preserves_explicit_host_closure(tmp_path: Path) -> None:
+    host_library = os.pathsep.join(("/opt/r/closure-a", "/opt/r/closure-b"))
+    combined = qualification.prepend_search_path(tmp_path / "package", host_library)
+
+    assert combined.split(os.pathsep) == [str(tmp_path / "package"), "/opt/r/closure-a", "/opt/r/closure-b"]
