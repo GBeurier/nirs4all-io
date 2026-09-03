@@ -57,6 +57,11 @@ def executable(name: str, env_name: str | None = None) -> str | None:
     return shutil.which(name)
 
 
+def prepend_search_path(entry: pathlib.Path, existing: str | None) -> str:
+    """Prepend an isolated library without hiding the declared host closure."""
+    return os.pathsep.join(part for part in (str(entry), existing or "") if part)
+
+
 def python_interpreter() -> str | None:
     candidates = [os.environ.get("N4IO_PYTHON", ""), "python3.13", "python3.12", "python3.11"]
     for candidate in candidates:
@@ -286,7 +291,7 @@ def qualify_r(ctx: Context) -> list[dict[str, object]]:
     env["N4IO_R_LIB"] = str(library)
     ctx.run(["./configure"], cwd=ROOT / "bindings/r", env=env)
     install_env = env.copy()
-    install_env["R_LIBS_USER"] = str(library)
+    install_env["R_LIBS_USER"] = prepend_search_path(library, env.get("R_LIBS_USER"))
     ctx.run([r, "CMD", "INSTALL", "--no-multiarch", f"--library={library}", str(ROOT / "bindings/r")], env=install_env)
     result = ctx.run(
         [
