@@ -35,7 +35,8 @@ use dag_ml_data::{
 };
 use dag_ml_data_provider::{DagMlDataProvider, InMemoryProvider};
 use nirs4all_io::core::infer::{ColDtype, NumericKind};
-use nirs4all_io::core::materialize::package::DatasetPackage;
+pub use nirs4all_io::core::materialize::package::DatasetPackage;
+use nirs4all_io::core::materialize::package::PayloadBlock;
 use nirs4all_io::core::spec::SpecError;
 use nirs4all_io::materialize::{AssembledDataset, Cell, PartitionBlock};
 use serde_json::Value;
@@ -1395,6 +1396,7 @@ pub struct PackageProvider {
     envelope: CoordinatorDataPlanEnvelope,
     feature_set_id: String,
     target_ids: Vec<TargetId>,
+    target_names: Vec<String>,
     provider: InMemoryProvider,
 }
 
@@ -1402,11 +1404,38 @@ impl PackageProvider {
     /// Build a dag-ml-data provider from a Rust IO package without serializing
     /// or adapting through Python.
     pub fn from_package(package: &DatasetPackage) -> Result<Self, SpecError> {
-        let assembled = package.to_assembled();
-        let (schema, plan, relations) = build_dag_ml_data_parts(&assembled)?;
+        Self::build(package, None)
+    }
+
+    /// Build the bounded DATA-002 provider for one exact source from a
+    /// multi-source package.
+    ///
+    /// This is source selection, not fusion: the selected source keeps its IO
+    /// identity and all other feature matrices remain outside the provider.
+    /// The package's relations, folds, targets and payload-manifest identity
+    /// are retained unchanged.
+    pub fn from_package_source(
+        package: &DatasetPackage,
+        source_id: &str,
+    ) -> Result<Self, SpecError> {
+        if source_id.trim().is_empty() {
+            return Err(SpecError::new(
+                "cannot build PackageProvider: selected source id is empty",
+            ));
+        }
+        Self::build(package, Some(source_id))
+    }
+
+    fn build(package: &DatasetPackage, selected_source: Option<&str>) -> Result<Self, SpecError> {
+        preflight_package_payloads(package)?;
+        let mut assembled = package.to_assembled();
+        if let Some(source_id) = selected_source {
+            select_assembled_source(&mut assembled, source_id)?;
+        }
+        let (schema, mut plan, relations) = build_dag_ml_data_parts(&assembled)?;
         if schema.sources.len() != 1 {
             return Err(SpecError::new(
-                "cannot build PackageProvider: DATA-002 supports one feature source; use the explicit dag-ml-data fusion provider for multi-source packages",
+                "cannot build PackageProvider: DATA-002 requires one selected feature source; call from_package_source for a multi-source package or use the explicit dag-ml-data fusion provider",
             ));
         }
         if assembled.blocks.values().any(|block| {
@@ -1419,15 +1448,43 @@ impl PackageProvider {
                 "cannot build PackageProvider: processing-stack/N-D payloads require the explicit dag-ml-data tensor provider",
             ));
         }
+        if selected_source.is_some() && plan.output_representation.as_str() != "tabular_numeric" {
+            let input_representation = plan.output_representation.clone();
+            let output_representation = RepresentationId::new("tabular_numeric").map_err(err)?;
+            plan.steps.push(DataPlanStep {
+                kind: DataPlanStepKind::Adapt,
+                source_id: None,
+                adapter_id: Some("nirs4all-io.numeric-feature-matrix.v1".to_string()),
+                input_representation: Some(input_representation),
+                output_representation: Some(output_representation.clone()),
+                fit_scope: FitScope::Stateless,
+                requires_user_choice: false,
+                metadata: BTreeMap::from([(
+                    "io.adapter_semantics".to_string(),
+                    Value::String("typed-f64-row-major".to_string()),
+                )]),
+            });
+            plan.output_representation = output_representation;
+            plan.validate().map_err(err)?;
+        }
 
-        let envelope = envelope_from_parts(&assembled, &schema, plan, relations.as_ref())?;
         let identity_rows = collect_identity_rows(&assembled).map_err(preflight_err)?;
-        let feature_matrix = package_feature_matrix(&assembled, &schema, &identity_rows)?;
+        let mut feature_matrix = package_feature_matrix(&assembled, &schema, &identity_rows)?;
+        if selected_source.is_some() {
+            feature_matrix.representation_id = plan.output_representation.clone();
+        }
         let feature_set_id = feature_matrix.feature_set_id.clone();
         let feature_store =
             NumericFeatureBufferStore::from_f64_matrices(vec![feature_matrix]).map_err(err)?;
         let target_tables = package_target_tables(&assembled, &schema, &identity_rows)?;
         let target_ids = target_tables.keys().cloned().collect();
+        let target_names = package_target_names(&assembled)?;
+        let mut envelope = envelope_from_parts(&assembled, &schema, plan, relations.as_ref())?;
+        let package_content_fingerprint = package.manifest().root;
+        envelope.data_content_fingerprint = Some(package_content_fingerprint.clone());
+        envelope.target_content_fingerprint =
+            (!target_tables.is_empty()).then_some(package_content_fingerprint);
+        envelope.validate().map_err(err)?;
         let provider =
             InMemoryProvider::new(envelope.clone(), target_tables, feature_store).map_err(err)?;
 
@@ -1435,6 +1492,7 @@ impl PackageProvider {
             envelope,
             feature_set_id,
             target_ids,
+            target_names,
             provider,
         })
     }
@@ -1453,6 +1511,104 @@ impl PackageProvider {
     pub fn target_ids(&self) -> &[TargetId] {
         &self.target_ids
     }
+
+    /// Stable target-column order retained from the IO target table.
+    pub fn target_names(&self) -> &[String] {
+        &self.target_names
+    }
+
+    /// Typed row-major projection for the selected numeric source.
+    pub fn feature_block_f64(
+        &self,
+        view_handle: u64,
+    ) -> dag_ml_data::Result<dag_ml_data::CoordinatorFeatureBlockF64> {
+        self.provider
+            .feature_block_f64(view_handle, &self.feature_set_id)
+    }
+}
+
+fn preflight_package_payloads(package: &DatasetPackage) -> Result<(), SpecError> {
+    for partition in package.partitions.values() {
+        for (_, payload) in &partition.payloads {
+            if !matches!(
+                payload,
+                PayloadBlock::FeatureMatrix(_)
+                    | PayloadBlock::TargetTable(_)
+                    | PayloadBlock::MetadataTable(_)
+                    | PayloadBlock::Weights(_)
+            ) {
+                return Err(SpecError::new(
+                    "cannot build PackageProvider: N-D, sequence, record, mask and URI payloads require an explicit dag-ml-data provider",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn select_assembled_source(
+    assembled: &mut AssembledDataset,
+    source_id: &str,
+) -> Result<(), SpecError> {
+    for (partition, block) in &mut assembled.blocks {
+        let source_count = block.source_ids.len();
+        if block.x.len() != source_count
+            || block.feature_headers.len() != source_count
+            || block.header_units.len() != source_count
+            || block.signal_types.len() != source_count
+            || block.processings.len() != source_count
+        {
+            return Err(SpecError::new(format!(
+                "cannot build PackageProvider: partition `{partition}` has misaligned source payload descriptors"
+            )));
+        }
+        let index = block
+            .source_ids
+            .iter()
+            .position(|candidate| candidate == source_id)
+            .ok_or_else(|| {
+                SpecError::new(format!(
+                    "cannot build PackageProvider: partition `{partition}` has no source `{source_id}`"
+                ))
+            })?;
+        block.source_ids = vec![block.source_ids[index].clone()];
+        block.x = vec![block.x[index].clone()];
+        block.feature_headers = vec![block
+            .feature_headers
+            .get(index)
+            .cloned()
+            .unwrap_or_default()];
+        block.header_units = vec![block.header_units.get(index).cloned().unwrap_or_default()];
+        block.signal_types = vec![block.signal_types.get(index).cloned().unwrap_or(None)];
+        block.processings = vec![block.processings.get(index).cloned().unwrap_or_default()];
+    }
+    assembled.n_sources = 1;
+    assembled.identity.source_ids = vec![source_id.to_string()];
+    Ok(())
+}
+
+fn package_target_names(assembled: &AssembledDataset) -> Result<Vec<String>, SpecError> {
+    let mut names: Option<Vec<String>> = None;
+    for (partition, block) in &assembled.blocks {
+        if block.y.is_none() {
+            continue;
+        }
+        if block.y_headers.is_empty() || block.y_headers.iter().any(|name| name.trim().is_empty()) {
+            return Err(SpecError::new(format!(
+                "cannot build PackageProvider: partition `{partition}` has invalid target names"
+            )));
+        }
+        if names
+            .as_ref()
+            .is_some_and(|expected| expected != &block.y_headers)
+        {
+            return Err(SpecError::new(format!(
+                "cannot build PackageProvider: target columns differ in partition `{partition}`"
+            )));
+        }
+        names.get_or_insert_with(|| block.y_headers.clone());
+    }
+    Ok(names.unwrap_or_default())
 }
 
 impl DagMlDataProvider for PackageProvider {
