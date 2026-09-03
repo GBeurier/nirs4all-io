@@ -48,6 +48,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
 
       - name: Verify release tag identity
         run: python scripts/verify_release_tag.py
@@ -162,7 +164,12 @@ jobs:
           # never publish.
           if [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF_NAME}" == v* ]] && [[ "${GITHUB_REF_NAME}" != *-* ]]; then
             echo "do=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
+            PKG_VER=$(node -p "require('./exact-npm/package/package.json').version")
+            RELEASE_TAG="v${PKG_VER}"
+            git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
+            git diff --quiet "${RELEASE_TAG}" -- . ':(exclude).github/workflows/release-npm.yml'
+            echo "Manual npm repair matches ${RELEASE_TAG} outside this workflow."
             echo "do=true" >> "$GITHUB_OUTPUT"
           else
             echo "do=false" >> "$GITHUB_OUTPUT"
@@ -188,4 +195,4 @@ jobs:
             echo "${PKG_NAME}@${PKG_VER} already published; skipping."
             exit 0
           fi
-          npm publish "${PACKAGES[0]}" --access public
+          npm publish "./${PACKAGES[0]}" --access public
