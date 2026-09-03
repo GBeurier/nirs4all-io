@@ -186,7 +186,7 @@ jobs:
               ':(exclude)crates/nirs4all-io-capi/COPY_PROVENANCE.md' \
               ':(exclude)crates/nirs4all-io-cli/COPY_PROVENANCE.md'
             test "$(sha256sum scripts/stage_wasm_package.mjs | cut -d ' ' -f1)" = \
-              "a820e1b9a98de60b25265d594e405417144004c886106fd5293dfacb20151440"
+              "b97f34d180151a6e366d5cedae23fe1d19a92e307b72f565826802e186f723de"
             test "$(sha256sum bindings/r/Cargo.lock.rust | cut -d ' ' -f1)" = \
               "11f33651168d4663d46f2e97e1a25048c2f9d0bdb1e92c5fde4c66a585e9190d"
             for mirror in \
