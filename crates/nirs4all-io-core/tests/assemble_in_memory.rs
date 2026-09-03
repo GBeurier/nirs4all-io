@@ -136,7 +136,7 @@ fn wide_record(width: usize, sample_id: &str, protein: Option<f64>, extra_meta: 
     let axis: Vec<f64> = (0..width).map(|i| 1000.0 + i as f64).collect();
     let mut record = json!({
         "signals": {"signal": {"values": values, "axis": {"values": axis, "unit": "nm"}}},
-        "metadata": {"sample_id": sample_id},
+        "metadata": {"sample_id": sample_id, "row_index": 0},
     });
     if extra_meta {
         let meta = record["metadata"].as_object_mut().unwrap();

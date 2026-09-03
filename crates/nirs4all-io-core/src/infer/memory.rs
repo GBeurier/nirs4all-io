@@ -248,6 +248,12 @@ pub fn infer_decoded_records(record_sets: &[DecodedRecordSet]) -> Result<Dataset
         for record in &set.records {
             if let Some(metadata) = record.get("metadata").and_then(Value::as_object) {
                 for (key, value) in metadata {
+                    // Formats attaches this provenance counter to every decoded
+                    // row. The assembler deliberately drops it, so inference
+                    // must not emit an impossible column selector for it.
+                    if key == "row_index" {
+                        continue;
+                    }
                     metadata_keys.insert(key.clone());
                     if let Some(value) = value_string(value) {
                         metadata_values.entry(key.clone()).or_default().push(value);
