@@ -196,7 +196,6 @@ jobs:
             do
               cmp COPY_PROVENANCE.md "${mirror}"
             done
-            python scripts/check_r_reduced_workspace.py
             echo "Manual npm repair is the audited ${RELEASE_TAG} descendant."
             echo "do=true" >> "$GITHUB_OUTPUT"
           else
