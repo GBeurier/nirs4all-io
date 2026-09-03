@@ -21,7 +21,7 @@ const legalMirrors = [
   "crates/nirs4all-io-capi",
   "crates/nirs4all-io-cli",
 ];
-const wasmLicenseClosureChecksum = "6ebddd95f465a1cccc52c3cf4dd941357c9a24f8667d90aa30c5004d1c393770";
+const wasmLicenseClosureChecksum = "0beb0dbb5313b66328fe01317d93f44063c188b6e7da827db6fb324df124016e";
 const lockedLicenseSources = [
   {
     packageName: "ryu",
@@ -174,7 +174,11 @@ function buildWasmSbom(metadata, identity) {
     ref: refsById.get(pkg.id),
     dependsOn: dependencyMap.get(pkg.id) ?? [],
   }));
-  const subjectPurl = "pkg:cargo/nirs4all-io-wasm@0.1.12";
+  const subjectPackage = packages.find((pkg) => pkg.id === metadata.resolve?.root);
+  if (!subjectPackage || subjectPackage.name !== "nirs4all-io-wasm") {
+    throw new Error("WASM Cargo metadata root is not nirs4all-io-wasm");
+  }
+  const subjectPurl = cargoPurl(subjectPackage);
   return {
     bomFormat: "CycloneDX",
     specVersion: "1.6",
@@ -183,8 +187,8 @@ function buildWasmSbom(metadata, identity) {
       component: {
         type: "library",
         "bom-ref": subjectPurl,
-        name: "nirs4all-io-wasm",
-        version: "0.1.12",
+        name: subjectPackage.name,
+        version: subjectPackage.version,
         licenses: [{ expression: "CECILL-2.1 OR AGPL-3.0-or-later" }],
         purl: subjectPurl,
         externalReferences: [
@@ -209,7 +213,7 @@ function validateWasmSbom(sbom) {
     throw new Error("invalid deterministic WASM CycloneDX envelope");
   }
   const subject = sbom.metadata?.component;
-  if (subject?.name !== "nirs4all-io-wasm" || subject.version !== "0.1.12") {
+  if (subject?.name !== "nirs4all-io-wasm" || subject.purl !== subject["bom-ref"]) {
     throw new Error("invalid WASM SBOM subject identity");
   }
   if (sbom.components.length !== 55 || sbom.dependencies.length !== 55) {
