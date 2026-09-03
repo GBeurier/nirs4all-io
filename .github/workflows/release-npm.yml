@@ -51,6 +51,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-python@v6.3.0
+        with:
+          python-version: "3.11"
+
       - name: Verify release tag identity
         run: python scripts/verify_release_tag.py
 
@@ -196,6 +200,7 @@ jobs:
             do
               cmp COPY_PROVENANCE.md "${mirror}"
             done
+            python scripts/check_r_reduced_workspace.py
             echo "Manual npm repair is the audited ${RELEASE_TAG} descendant."
             echo "do=true" >> "$GITHUB_OUTPUT"
           else
