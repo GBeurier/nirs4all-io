@@ -31,6 +31,7 @@ FIXTURE = ROOT / "tests" / "cross_binding" / "corpus" / "identity.csv"
 SPEC = ROOT / "tests" / "cross_binding" / "corpus" / "identity.spec.json"
 GOLDEN = ROOT / "tests" / "cross_binding" / "identity.expected.canonical"
 SURFACES = ("rust", "python", "wasm", "r", "matlab_octave", "c_abi")
+R_VENDOR_CRATES = ("nirs4all-io-core", "nirs4all-io", "nirs4all-io-capi")
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -60,6 +61,19 @@ def executable(name: str, env_name: str | None = None) -> str | None:
 def prepend_search_path(entry: pathlib.Path, existing: str | None) -> str:
     """Prepend an isolated library without hiding the declared host closure."""
     return os.pathsep.join(part for part in (str(entry), existing or "") if part)
+
+
+def prepare_r_source_tree(work: pathlib.Path) -> pathlib.Path:
+    """Copy the exact R package/vendor inputs before running its mutating configure."""
+    source_root = work / "r-source"
+    package = source_root / "bindings" / "r"
+    package.parent.mkdir(parents=True)
+    shutil.copytree(ROOT / "bindings" / "r", package)
+    for crate in R_VENDOR_CRATES:
+        destination = source_root / "crates" / crate
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ROOT / "crates" / crate, destination)
+    return package
 
 
 def python_interpreter() -> str | None:
@@ -286,13 +300,14 @@ def qualify_r(ctx: Context) -> list[dict[str, object]]:
         raise FileNotFoundError("R package jsonlite is absent from the explicit runtime closure; the strict runner never downloads dependencies")
     library = ctx.work / "r-library"
     library.mkdir(exist_ok=True)
+    package = prepare_r_source_tree(ctx.work)
     env = ctx.env.copy()
     env["N4IO_R_VENDOR"] = "1"
     env["N4IO_R_LIB"] = str(library)
-    ctx.run(["./configure"], cwd=ROOT / "bindings/r", env=env)
+    ctx.run(["./configure"], cwd=package, env=env)
     install_env = env.copy()
     install_env["R_LIBS_USER"] = prepend_search_path(library, env.get("R_LIBS_USER"))
-    ctx.run([r, "CMD", "INSTALL", "--no-multiarch", f"--library={library}", str(ROOT / "bindings/r")], env=install_env)
+    ctx.run([r, "CMD", "INSTALL", "--no-multiarch", f"--library={library}", str(package)], env=install_env)
     result = ctx.run(
         [
             rscript,
