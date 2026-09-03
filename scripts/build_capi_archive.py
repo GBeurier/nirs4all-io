@@ -113,13 +113,17 @@ def main() -> int:
             check=True,
         )
         lib_dir = target_dir / args.target_triple / "release"
-        patterns = ("libnirs4all_io_capi.*", "nirs4all_io_capi.dll", "nirs4all_io_capi.lib", "nirs4all_io_capi.dll.lib")
+        # Ship the shared C ABI and its Windows import library. R and other
+        # static consumers build the vendored staticlib themselves; Cargo's
+        # prebuilt static archives retain toolchain scratch paths on macOS and
+        # MSVC and are not portable release artifacts.
+        patterns = ("libnirs4all_io_capi.*", "nirs4all_io_capi.dll", "nirs4all_io_capi.dll.lib")
         libraries = sorted(
             {
                 path
                 for pattern in patterns
                 for path in lib_dir.glob(pattern)
-                if path.is_file() and path.suffix not in {".d", ".rlib"}
+                if path.is_file() and path.suffix not in {".a", ".d", ".rlib"}
             },
             key=lambda path: path.name.encode(),
         )
