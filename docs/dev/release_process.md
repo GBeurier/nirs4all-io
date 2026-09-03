@@ -20,7 +20,7 @@ per-surface workflows are `release-crates.yml`, `release-npm.yml`,
 ## Single source of truth
 
 The canonical version is the **`[workspace.package] version` in the root
-`Cargo.toml`** (Cargo SemVer, currently `0.1.13`).
+`Cargo.toml`** (Cargo SemVer, currently `0.1.14`).
 `scripts/bump_version.sh` propagates it to every binding manifest, translating
 the spelling each ecosystem requires:
 

@@ -171,7 +171,7 @@ jobs:
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
             PKG_VER=$(node -p "require('./exact-npm/package/package.json').version")
             RELEASE_TAG="v${PKG_VER}"
-            test "${RELEASE_TAG}" = "v0.1.13"
+            test "${RELEASE_TAG}" = "v0.1.14"
             git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
             git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" HEAD
             git diff --quiet "${RELEASE_TAG}" -- . \
@@ -188,7 +188,7 @@ jobs:
             test "$(sha256sum scripts/stage_wasm_package.mjs | cut -d ' ' -f1)" = \
               "a820e1b9a98de60b25265d594e405417144004c886106fd5293dfacb20151440"
             test "$(sha256sum bindings/r/Cargo.lock.rust | cut -d ' ' -f1)" = \
-              "75b81586d015e79ba4fc622aba32dead9f54e90c787049e8dcd8482b2a30dd82"
+              "11f33651168d4663d46f2e97e1a25048c2f9d0bdb1e92c5fde4c66a585e9190d"
             for mirror in \
               bindings/python/COPY_PROVENANCE.md \
               bindings/r/inst/COPY_PROVENANCE.md \
