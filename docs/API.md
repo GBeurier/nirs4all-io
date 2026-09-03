@@ -76,6 +76,28 @@ def to_io_spec(self) -> dict | tuple[dict, pathlib.Path]: ...
 load/join/package materialization. Parsing still belongs to `nirs4all-formats`
 through IO's vendor loader; datasets only supplies catalog paths and roles.
 
+### Rust `DatasetPackage` provider (DATA-002)
+
+`crates/nirs4all-io-dagml` exposes a production-shaped, Rust-only bridge from
+the canonical package into `dag-ml-data`:
+
+```rust
+let provider = PackageProvider::from_package(&package)?;
+// For a package with several feature sources, select one; this is not fusion.
+let provider = PackageProvider::from_package_source(&package, "nir")?;
+
+let names = provider.target_names();
+let features = provider.feature_block_f64(view_handle)?;
+```
+
+The provider retains the package manifest root as the exact data-content
+fingerprint (and target-content fingerprint when targets exist), preserves
+stable target-column order, and exposes a typed row-major f64 feature block.
+DATA-002 accepts one selected dense numeric matrix; it refuses N-D, sequence,
+record, mask, URI and processing-stack payloads rather than flattening them.
+Multi-source fusion remains an explicit `dag-ml-data` provider concern. This
+does not add a Python `load(..., target="dag-ml-data")` mode.
+
 ## Invariants the seam guarantees
 
 - **No runtime `nirs4all` dependency.** `import nirs4all_io` never imports `nirs4all`
