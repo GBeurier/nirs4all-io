@@ -167,9 +167,37 @@ jobs:
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
             PKG_VER=$(node -p "require('./exact-npm/package/package.json').version")
             RELEASE_TAG="v${PKG_VER}"
+            test "${RELEASE_TAG}" = "v0.1.13"
             git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
-            git diff --quiet "${RELEASE_TAG}" -- . ':(exclude).github/workflows/release-npm.yml'
-            echo "Manual npm repair matches ${RELEASE_TAG} outside this workflow."
+            git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" HEAD
+            git diff --quiet "${RELEASE_TAG}" -- . \
+              ':(exclude).github/workflows/release-npm.yml' \
+              ':(exclude)scripts/stage_wasm_package.mjs' \
+              ':(exclude)bindings/r/Cargo.lock.rust' \
+              ':(exclude)bindings/python/COPY_PROVENANCE.md' \
+              ':(exclude)bindings/r/inst/COPY_PROVENANCE.md' \
+              ':(exclude)bindings/wasm/COPY_PROVENANCE.md' \
+              ':(exclude)crates/nirs4all-io-core/COPY_PROVENANCE.md' \
+              ':(exclude)crates/nirs4all-io/COPY_PROVENANCE.md' \
+              ':(exclude)crates/nirs4all-io-capi/COPY_PROVENANCE.md' \
+              ':(exclude)crates/nirs4all-io-cli/COPY_PROVENANCE.md'
+            test "$(sha256sum scripts/stage_wasm_package.mjs | cut -d ' ' -f1)" = \
+              "a820e1b9a98de60b25265d594e405417144004c886106fd5293dfacb20151440"
+            test "$(sha256sum bindings/r/Cargo.lock.rust | cut -d ' ' -f1)" = \
+              "75b81586d015e79ba4fc622aba32dead9f54e90c787049e8dcd8482b2a30dd82"
+            for mirror in \
+              bindings/python/COPY_PROVENANCE.md \
+              bindings/r/inst/COPY_PROVENANCE.md \
+              bindings/wasm/COPY_PROVENANCE.md \
+              crates/nirs4all-io-core/COPY_PROVENANCE.md \
+              crates/nirs4all-io/COPY_PROVENANCE.md \
+              crates/nirs4all-io-capi/COPY_PROVENANCE.md \
+              crates/nirs4all-io-cli/COPY_PROVENANCE.md
+            do
+              cmp COPY_PROVENANCE.md "${mirror}"
+            done
+            python scripts/check_r_reduced_workspace.py
+            echo "Manual npm repair is the audited ${RELEASE_TAG} descendant."
             echo "do=true" >> "$GITHUB_OUTPUT"
           else
             echo "do=false" >> "$GITHUB_OUTPUT"
