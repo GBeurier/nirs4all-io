@@ -38,8 +38,13 @@ own `DatasetConfigs`** on the supported topologies (`pytest -m parity`).
 ports the same pipeline and the `dag-ml-data` emit lives in
 `crates/nirs4all-io-dagml` (`to_dag_ml_data` + the `emit-dagml` binary). The main
 `nirs4all-io` CLI keeps an `emit-dag-ml-data` discovery subcommand that points to
-that bridge crate. There is intentionally no Python `load(..., target="dag-ml-data")`
-surface. See [`docs/STATUS.md`](docs/STATUS.md) for the per-epic breakdown,
+that bridge crate. Its bounded DATA-002 path builds a typed provider directly
+from a Rust `DatasetPackage`: `from_package` accepts one dense numeric source,
+while `from_package_source` selects one named source without fusing the others.
+The provider retains package identity, target names, and a typed row-major f64
+feature projection. There is intentionally no Python
+`load(..., target="dag-ml-data")` surface. See
+[`docs/STATUS.md`](docs/STATUS.md) for the per-epic breakdown,
 [`docs/API.md`](docs/API.md) for the seam, and
 [`docs/PHASE2_GATE.md`](docs/PHASE2_GATE.md) for the GREEN gate record. Full design:
 [`../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md`](../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md).
@@ -76,6 +81,10 @@ contract). See [`COMPAT.md`](COMPAT.md) for the full operation matrix.
 
 - **CLI** — `nirs4all-io` (`infer` / `to-spec` / `validate` / `load`; `emit-dag-ml-data` points to the bridge crate).
 - **dag-ml-data bridge** — `crates/nirs4all-io-dagml` (`to_dag_ml_data` / `emit-dagml`), validated by the cross-CLI conformance gate.
+- **Rust DATA package provider** — `PackageProvider::from_package` or
+  `from_package_source`, for one selected dense numeric source plus aligned
+  target tables; multi-source fusion and N-D payloads stay on explicit
+  `dag-ml-data` provider paths.
 - **Python** (pyo3/maturin) — [`bindings/python`](bindings/python/README.md); the only surface that builds a real `SpectroDataset`.
 - **R** (`.Call` over the C ABI) — [`bindings/r`](bindings/r/README.md). R-universe can lag the latest RC tag until its rebuild catches up; use the GitHub Release source tarball for exact-version validation, or install the current R-universe build with:
   ```r

@@ -16,7 +16,7 @@
 | 2 | cm⁻¹ axis (`AxisKind::Wavenumber`) | 🟢 **RESOLVED** | `AxisKind` (`dag-ml-data-core/src/model.rs`) now has a first-class `Wavenumber` variant (`#[non_exhaustive]`, snake_case serde, round-trip tested); added in `dag-ml-data` commit `5063fb0`. cm⁻¹ maps directly — no interim convention needed. |
 | 3 | Relation id mapping (`origin_id`↔`origin_sample_id`) | 🟢 GREEN | `coordinator_relations_from_sample_table` (`coordinator.rs:132-176`) resolves observation→sample; tested; dag-ml's `SampleRelation` is field-compatible; the shared `coordinator_data_plan_envelope.schema.json` is byte-identical across repos. |
 | 4 | Fingerprints exposed | 🟢 GREEN | `schema_fingerprint`/`data_plan_fingerprint`/`sample_relation_fingerprint` all `pub` + facade-re-exported + CLI-reachable. |
-| 5 | Array host path | 🟢 GREEN (dense v1) | `PackageProvider::from_package` hands a Rust `DatasetPackage` directly to dag-ml-data's typed `NumericFeatureMatrixF64` store and provider arena. N-D and multi-source fusion remain on their explicit provider paths. |
+| 5 | Array host path | 🟢 GREEN (dense v1) | `PackageProvider::from_package` hands a one-source Rust `DatasetPackage` directly to dag-ml-data's typed store; `from_package_source` selects one named source from a multi-source package without fusing it. `target_names` and `feature_block_f64` expose stable target order and the typed row-major projection. N-D, sequence, record, mask, URI, processing-stack and multi-source fusion remain on explicit provider paths. |
 | 6 | `dag-ml validate-data-binding` reachable | 🟢 GREEN (caveat) | dag-ml CLI `ValidateDataBinding` consumes `ExternalDataPlanEnvelope` (drops the plan body). The bridge must emit dag-ml-data's `CoordinatorDataPlanEnvelope` and rely on the **shared JSON schema** compat (no shared Rust type). |
 | 7 | Connector ownership | 🟢 **RESOLVED** | `dag-ml-data/docs/ADR-0001-nirs4all-connector-ownership.md` (**Accepted**, 2026-05-28) gives **`nirs4all-io`** ownership of the `SpectroDataset → CoordinatorDataPlanEnvelope` bridge; `dag-ml-data` ROADMAP Phase 4 is **descoped** to "accept io-emitted artifacts". |
 
@@ -40,7 +40,11 @@ The implemented EPIC-10 bridge maps an `AssembledDataset` to `DatasetSchema` +
 via `CoordinatorDataPlanEnvelope::from_parts`. It lives in `crates/nirs4all-io-dagml`
 as `to_dag_ml_data(&AssembledDataset)` plus a Rust `PackageProvider` built from
 `DatasetPackage::to_assembled()` without a serialization or `SpectroDataset`
-hop. The `emit-dagml` binary exercises that package/provider path. **io does not
+hop. The DATA-002 provider preflights package payloads, accepts one dense
+numeric source (or selects one by id), carries the package manifest root into
+the content fingerprints, and retains target names for multi-target consumers.
+It refuses unsupported payload kinds instead of flattening or fusing them. The
+`emit-dagml` binary exercises that package/provider path. **io does not
 emit `FoldSet`/`DataBinding`** — those stay in `dag-ml` (folds/campaigns are its
 domain; the cross-CLI acceptance test wraps the envelope as an `ExternalDataPlanEnvelope`
 behind a fixture `DataBinding`). The Python MVP remains `SpectroDataset` /
