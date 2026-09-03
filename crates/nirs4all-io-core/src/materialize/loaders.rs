@@ -24,6 +24,39 @@ use super::frame::{Cell, Column, Frame};
 /// Back-compat alias for the inference path.
 pub type LoadedTable = Frame;
 
+/// Streaming shape budgets applied while decoding one tabular byte source.
+///
+/// Record and field sizes count decoded CSV payload bytes (delimiters and CSV
+/// quoting are not included). Rows exclude the optional header. The cell cap
+/// covers both decoded data fields and the rectangular frame that will be
+/// materialized, so ragged input cannot hide a large allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TabularReadLimits {
+    pub max_record_bytes: u64,
+    pub max_field_bytes: u64,
+    pub max_rows: u64,
+    pub max_columns: u64,
+    pub max_cells: u64,
+}
+
+impl TabularReadLimits {
+    pub const fn new(
+        max_record_bytes: u64,
+        max_field_bytes: u64,
+        max_rows: u64,
+        max_columns: u64,
+        max_cells: u64,
+    ) -> Self {
+        Self {
+            max_record_bytes,
+            max_field_bytes,
+            max_rows,
+            max_columns,
+            max_cells,
+        }
+    }
+}
+
 fn merge_na(base: &NaConfig, over: &NaConfig) -> NaConfig {
     if over.policy == NaPolicy::Auto && over.fill_method.is_none() {
         return base.clone();
@@ -465,6 +498,24 @@ fn mangle_dupes(header: &[String], ncols: usize) -> Vec<String> {
 /// loader's decoding. The facade reads the file and handles gzip/zip before
 /// calling this so a single decoder backs both paths.
 pub fn read_table_bytes(bytes: &[u8], params: &LoadingParams) -> Result<Frame, SpecError> {
+    read_table_bytes_impl(bytes, params, None)
+}
+
+/// Decode tabular bytes while enforcing streaming record, field, and frame
+/// shape budgets before copying an accepted record into owned cell strings.
+pub fn read_table_bytes_with_limits(
+    bytes: &[u8],
+    params: &LoadingParams,
+    limits: TabularReadLimits,
+) -> Result<Frame, SpecError> {
+    read_table_bytes_impl(bytes, params, Some(limits))
+}
+
+fn read_table_bytes_impl(
+    bytes: &[u8],
+    params: &LoadingParams,
+    limits: Option<TabularReadLimits>,
+) -> Result<Frame, SpecError> {
     let delimiter = params
         .delimiter
         .as_deref()
@@ -480,23 +531,91 @@ pub fn read_table_bytes(bytes: &[u8], params: &LoadingParams) -> Result<Frame, S
         .next()
         .unwrap_or('.');
     let has_header = params.has_header.unwrap_or(true);
+    let latin1;
     let text = match std::str::from_utf8(bytes) {
-        Ok(t) => t.to_string(),
-        Err(_) => bytes.iter().map(|&b| b as char).collect(), // latin-1 fallback
+        Ok(_) => bytes,
+        Err(_) => {
+            latin1 = bytes.iter().map(|&byte| byte as char).collect::<String>();
+            latin1.as_bytes()
+        }
     };
 
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
         .delimiter(delimiter as u8)
-        .from_reader(text.as_bytes());
+        .from_reader(text);
     let mut records: Vec<Vec<String>> = Vec::new();
-    for rec in rdr.records() {
-        let rec = rec.map_err(|e| SpecError::new(format!("csv parse error: {e}")))?;
-        if rec.iter().all(|c| c.is_empty()) {
+    let mut record = csv::ByteRecord::new();
+    let mut data_cells = 0_u64;
+    let mut max_columns_seen = 0_u64;
+    while rdr
+        .read_byte_record(&mut record)
+        .map_err(|e| SpecError::new(format!("csv parse error: {e}")))?
+    {
+        if record.iter().all(|field| field.is_empty()) {
             continue; // skip_blank_lines
         }
-        records.push(rec.iter().map(str::to_string).collect());
+        if let Some(limits) = limits {
+            let record_bytes = record.iter().fold(0_u64, |total, field| {
+                total.saturating_add(field.len() as u64)
+            });
+            if record_bytes > limits.max_record_bytes {
+                return Err(SpecError::new(format!(
+                    "tabular record exceeds the {}-byte record budget",
+                    limits.max_record_bytes
+                )));
+            }
+            if record
+                .iter()
+                .any(|field| field.len() as u64 > limits.max_field_bytes)
+            {
+                return Err(SpecError::new(format!(
+                    "tabular field exceeds the {}-byte field budget",
+                    limits.max_field_bytes
+                )));
+            }
+
+            let next_record_count = records.len() as u64 + 1;
+            let data_rows = next_record_count.saturating_sub(u64::from(has_header));
+            if data_rows > limits.max_rows {
+                return Err(SpecError::new(format!(
+                    "tabular input exceeds the {}-row budget",
+                    limits.max_rows
+                )));
+            }
+            let columns = max_columns_seen.max(record.len() as u64);
+            if columns > limits.max_columns {
+                return Err(SpecError::new(format!(
+                    "tabular input exceeds the {}-column budget",
+                    limits.max_columns
+                )));
+            }
+            let next_data_cells = if has_header && records.is_empty() {
+                data_cells
+            } else {
+                data_cells.saturating_add(record.len() as u64)
+            };
+            let rectangular_cells = data_rows.saturating_mul(columns);
+            if next_data_cells.max(rectangular_cells) > limits.max_cells {
+                return Err(SpecError::new(format!(
+                    "tabular input exceeds the {}-cell budget",
+                    limits.max_cells
+                )));
+            }
+            data_cells = next_data_cells;
+            max_columns_seen = columns;
+        }
+        records.push(
+            record
+                .iter()
+                .map(|field| {
+                    std::str::from_utf8(field)
+                        .expect("CSV input was normalized to UTF-8")
+                        .to_string()
+                })
+                .collect(),
+        );
     }
     if records.is_empty() {
         return apply_na_policy(
@@ -553,6 +672,47 @@ mod tests {
             na,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn bounded_reader_accepts_every_limit_exactly() {
+        let limits = TabularReadLimits::new(5, 3, 2, 2, 4);
+        let frame = read_table_bytes_with_limits(
+            b"abc;de\n1;2\n3;4\n",
+            &LoadingParams {
+                delimiter: Some(";".into()),
+                has_header: Some(true),
+                ..Default::default()
+            },
+            limits,
+        )
+        .unwrap();
+
+        assert_eq!(frame.n_rows, 2);
+        assert_eq!(frame.columns.len(), 2);
+    }
+
+    #[test]
+    fn bounded_reader_counts_latin1_after_utf8_normalization() {
+        let error = read_table_bytes_with_limits(
+            b"\xe9\n",
+            &LoadingParams {
+                has_header: Some(false),
+                ..Default::default()
+            },
+            TabularReadLimits::new(1, 1, 1, 1, 1),
+        )
+        .unwrap_err();
+
+        assert!(error.message.contains("1-byte record budget"));
+        assert!(read_table_bytes(
+            b"\xe9\n",
+            &LoadingParams {
+                has_header: Some(false),
+                ..Default::default()
+            }
+        )
+        .is_ok());
     }
 
     fn na(policy: NaPolicy) -> NaConfig {

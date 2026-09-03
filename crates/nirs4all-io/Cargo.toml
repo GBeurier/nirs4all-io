@@ -25,6 +25,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 arrow-array = "59.0.0"
 arrow-schema = "59.0.0"
 parquet = { version = "59.0.0", default-features = false, features = ["arrow", "snap", "zstd"] }
+cap-std = "3"
+same-file = "1"
 
 [dev-dependencies]
 serde_json.workspace = true

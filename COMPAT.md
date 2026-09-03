@@ -34,6 +34,11 @@ Legend: ✅ supported · 🟡 partial / out-of-process · ❌ out of scope in v0
 | WASM / JS | `to_spec`/`validate`: JSON string; `inferFiles`/`inferDataset`/`inferRecords`/`proposeDataset`/`assembleDataset`: `{name, bytes:Uint8Array}[]` + decoded record sets (+ `{confirmed}` locks) | `to_spec`: canonical JSON string; the browser ops return plain JS objects (`DatasetPlan` / `{plan, proposals, spec}` / `AssembledDataset`) |
 
 Notes:
+- **Studio role-tagged configs** have a bounded Rust-facade-only adapter:
+  `to_spec_role_tagged`, `load_role_tagged_assembled`, and the tighter-budget
+  `load_role_tagged_assembled_with_limits` with `RoleTaggedReadLimits`. It is intentionally
+  absent from the C ABI and language bindings because the role-tagged object is
+  an existing Studio input shape, not an additional portable wire contract.
 - **`emit-dag-ml-data`** is implemented in the Rust bridge crate
   `crates/nirs4all-io-dagml` (`to_dag_ml_data` + `emit-dagml`). The published
   `nirs4all-io` CLI keeps a discovery subcommand that bails with a pointer to that
