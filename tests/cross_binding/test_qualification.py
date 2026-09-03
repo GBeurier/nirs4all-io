@@ -51,3 +51,22 @@ def test_isolated_r_library_preserves_explicit_host_closure(tmp_path: Path) -> N
     combined = qualification.prepend_search_path(tmp_path / "package", host_library)
 
     assert combined.split(os.pathsep) == [str(tmp_path / "package"), "/opt/r/closure-a", "/opt/r/closure-b"]
+
+
+def test_r_configure_uses_disposable_exact_source_copy(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    (source / "bindings" / "r").mkdir(parents=True)
+    (source / "bindings" / "r" / "configure").write_text("original\n", encoding="utf-8")
+    for crate in qualification.R_VENDOR_CRATES:
+        crate_root = source / "crates" / crate
+        crate_root.mkdir(parents=True)
+        (crate_root / "Cargo.toml").write_text(f"# {crate}\n", encoding="utf-8")
+    monkeypatch.setattr(qualification, "ROOT", source)
+
+    package = qualification.prepare_r_source_tree(tmp_path / "work")
+    (package / "configure").write_text("mutated\n", encoding="utf-8")
+
+    assert (source / "bindings" / "r" / "configure").read_text(encoding="utf-8") == "original\n"
+    assert (package / "configure").read_text(encoding="utf-8") == "mutated\n"
+    for crate in qualification.R_VENDOR_CRATES:
+        assert (tmp_path / "work" / "r-source" / "crates" / crate / "Cargo.toml").is_file()
