@@ -161,7 +161,7 @@ def main() -> int:
                 or subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True).strip() != tree
             ):
                 raise SystemExit("source identity changed during wheel normalization")
-            os.replace(candidate, destination)
+            shutil.move(candidate, destination)
         print(f"{hashlib.sha256(destination.read_bytes()).hexdigest()}  {destination}")
     return 0
 

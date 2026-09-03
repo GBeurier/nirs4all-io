@@ -91,7 +91,9 @@ def main() -> int:
         )
         + "\n"
     ).encode("utf-8")
-    with tempfile.TemporaryDirectory(prefix="n4io-capi-build-") as temporary:
+    scratch_root = root / "target" / "release-scratch"
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="n4io-capi-build-", dir=scratch_root) as temporary:
         target_dir = Path(temporary) / "target"
         env = reproducible_rust_env(root, target_dir, extra_roots=(Path(temporary),))
         env["SOURCE_DATE_EPOCH"] = str(epoch)
