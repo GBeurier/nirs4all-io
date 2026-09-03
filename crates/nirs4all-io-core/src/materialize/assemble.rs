@@ -31,7 +31,10 @@ use serde_json::{Map, Value};
 use super::folds::Fold;
 use super::frame::{Cell, Column, Frame, Matrix};
 use super::join::{concat_features, concat_samples, join_tables, merge_by_key};
-use super::loaders::{apply_na_policy, effective_params, read_table_bytes};
+use super::loaders::{
+    apply_na_policy, effective_params, read_table_bytes, read_table_bytes_with_limits,
+    TabularReadLimits,
+};
 
 /// A source payload supplied in-memory instead of a file path.
 pub enum SourcePayload {
@@ -497,9 +500,16 @@ fn unique_match<'a>(
 }
 
 /// Decode one in-memory source into a [`Frame`].
-fn frame_from_source(src: &InMemorySource, params: &LoadingParams) -> Result<Frame, SpecError> {
+fn frame_from_source(
+    src: &InMemorySource,
+    params: &LoadingParams,
+    tabular_limits: Option<TabularReadLimits>,
+) -> Result<Frame, SpecError> {
     match &src.payload {
-        SourcePayload::Bytes(bytes) => read_table_bytes(bytes, params),
+        SourcePayload::Bytes(bytes) => match tabular_limits {
+            Some(limits) => read_table_bytes_with_limits(bytes, params, limits),
+            None => read_table_bytes(bytes, params),
+        },
         SourcePayload::Frame(frame) => frame_with_params(frame, params),
         SourcePayload::Records(records) => records_to_frame(records, params),
     }
@@ -549,6 +559,7 @@ fn load_source_frame_mem(
     spec: &DatasetSpec,
     sources: &[InMemorySource],
     audits: &mut Vec<Value>,
+    tabular_limits: Option<TabularReadLimits>,
 ) -> Result<LoadedSource, SpecError> {
     let params = effective_params(&spec.params, &source.params);
     let matched = resolve_inputs_mem(&source.input, sources)?;
@@ -561,7 +572,7 @@ fn load_source_frame_mem(
     }
     let frames: Vec<Frame> = matched
         .iter()
-        .map(|s| frame_from_source(s, &params))
+        .map(|s| frame_from_source(s, &params, tabular_limits))
         .collect::<Result<_, _>>()?;
     let header_unit = frames[0].header_unit.clone();
     let signal = params.signal_type.map(|s| s.value().to_string());
@@ -991,9 +1002,10 @@ fn build_source_table(
     spec: &DatasetSpec,
     sources: &[InMemorySource],
     audits: &mut Vec<Value>,
+    tabular_limits: Option<TabularReadLimits>,
 ) -> Result<SourceTable, SpecError> {
     let (mut df, header_unit, signal, origins) =
-        load_source_frame_mem(source, spec, sources, audits)?;
+        load_source_frame_mem(source, spec, sources, audits, tabular_limits)?;
 
     if let Some(origins) = &origins {
         if !df.has_column("filename_stem") {
@@ -1049,7 +1061,7 @@ fn build_source_table(
     df.add_int_column(&row_idx_name, (0..df.n_rows as i64).collect());
 
     let key = key_list(&source.key);
-    let variations = load_variations(source, spec, sources, &df, &roles)?;
+    let variations = load_variations(source, spec, sources, &df, &roles, tabular_limits)?;
     let spec_signal = if spec.signal_type.value() != "auto" {
         Some(spec.signal_type.value().to_string())
     } else {
@@ -1074,6 +1086,7 @@ fn read_variation_frame_mem(
     spec: &DatasetSpec,
     source: &SourceSpec,
     sources: &[InMemorySource],
+    tabular_limits: Option<TabularReadLimits>,
 ) -> Result<Frame, SpecError> {
     let mut params = effective_params(&spec.params, &source.params);
     if !variation.params.is_empty_value() {
@@ -1088,7 +1101,7 @@ fn read_variation_frame_mem(
     }
     let frames: Vec<Frame> = matched
         .iter()
-        .map(|s| frame_from_source(s, &params))
+        .map(|s| frame_from_source(s, &params, tabular_limits))
         .collect::<Result<_, _>>()?;
     if frames.len() > 1 {
         let names: Vec<String> = (0..frames.len()).map(|i| i.to_string()).collect();
@@ -1104,6 +1117,7 @@ fn load_variations(
     sources: &[InMemorySource],
     parent_df: &Frame,
     roles: &[(String, String)],
+    tabular_limits: Option<TabularReadLimits>,
 ) -> Result<Vec<(String, Matrix)>, SpecError> {
     if source.variations.is_empty() {
         return Ok(vec![]);
@@ -1135,7 +1149,7 @@ fn load_variations(
                 source.id, variation.name
             )));
         }
-        let vdf = read_variation_frame_mem(variation, spec, source, sources)?;
+        let vdf = read_variation_frame_mem(variation, spec, source, sources, tabular_limits)?;
         if vdf.n_rows != parent_n {
             return Err(SpecError::new(format!(
                 "source '{}': variation '{}' has {} rows, expected {parent_n} (must row-align with the parent source)",
@@ -1172,12 +1186,25 @@ pub fn assemble_in_memory(
     index_lists: &HashMap<String, Vec<i64>>,
     fold_inline: Option<&[Fold]>,
 ) -> Result<AssembledDataset, SpecError> {
+    assemble_in_memory_with_tabular_limits(spec, sources, index_lists, fold_inline, None)
+}
+
+/// Assemble in-memory sources while applying parser budgets to every tabular
+/// [`SourcePayload::Bytes`] source. Other payload kinds are already structured
+/// and are unchanged. Passing `None` is identical to [`assemble_in_memory`].
+pub fn assemble_in_memory_with_tabular_limits(
+    spec: &DatasetSpec,
+    sources: &[InMemorySource],
+    index_lists: &HashMap<String, Vec<i64>>,
+    fold_inline: Option<&[Fold]>,
+    tabular_limits: Option<TabularReadLimits>,
+) -> Result<AssembledDataset, SpecError> {
     let mut audits: Vec<Value> = Vec::new();
     let mut tables: IndexMap<String, SourceTable> = IndexMap::new();
     for s in &spec.sources {
         tables.insert(
             s.id.clone(),
-            build_source_table(s, spec, sources, &mut audits)?,
+            build_source_table(s, spec, sources, &mut audits, tabular_limits)?,
         );
     }
 

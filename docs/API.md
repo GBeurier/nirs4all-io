@@ -106,6 +106,53 @@ does not add a Python `load(..., target="dag-ml-data")` mode.
 - **Parity**: for the supported topologies, `load(...) → SpectroDataset` equals
   `nirs4all.DatasetConfigs(...)` (`tests/test_parity.py`, run with `pytest -m parity`).
 
+### Rust host adapter for role-tagged Studio configs
+
+The Rust facade exposes `to_spec_role_tagged(config, name)`,
+`load_role_tagged_assembled(config, dataset_root, name)`, and
+`load_role_tagged_assembled_with_limits(config, dataset_root, name, limits)`.
+The latter accepts a validated `RoleTaggedReadLimits`; Studio uses 1 MiB per
+file, 2 MiB in aggregate, 128 KiB per decoded CSV record, 64 KiB per decoded
+field, 128 data rows, 256 columns, and 16,384 cells. The compatibility entry
+point explicitly keeps the 256 MiB / 512 MiB file defaults and imposes no new
+record, field, or shape restriction (`u64::MAX` compatibility sentinels are
+used after Latin-1-to-UTF-8 normalization). Custom file/aggregate byte limits
+may only tighten their compatibility ceilings. These
+functions consume the existing Studio `config.files` input shape and
+immediately emit the official `DatasetSpec`; this adapter is not a persistent
+or wire schema.
+
+The accepted slice is deliberately closed: explicit train X/Y are required;
+test X/Y and metadata, homogeneous multi-target selection, aggregation, and
+file/inline folds are optional. `files` array order is authoritative, exactly
+as in Studio's selected Python oracle. The numeric `source` member is validated
+as a non-negative UI annotation but does not reorder or group files; `null`,
+legacy `0`, positive 1-based labels, gaps, and duplicate labels are accepted.
+Non-null `multi_source`, heterogeneous target tasks, ambiguous
+`classification`, and column-sourced folds still fail closed.
+
+Known descriptive target members (`unit`, `classes`, `label`, `description`)
+are bounded and validated, then omitted from DatasetSpec because they do not
+alter loading. `default_target` is likewise checked against the selected set
+but not encoded: DatasetSpec v1 has no default-target field and the selected
+Studio loading oracle ignores it. Target selection filters Y columns; the
+assembled target order remains the Y file's column order.
+
+Materialization opens every relative path through a capability-rooted directory
+handle, rejects absolute paths outside the canonical root, deduplicates opened
+file identities, checks regular-file metadata before allocation, and reads at
+most the smaller remaining per-file/aggregate budget plus one byte from those
+already-open handles. The existing CSV decoder then checks record, field, row,
+column, and cell limits before copying an accepted record into owned cell
+strings. Record/field byte counts exclude delimiters and CSV quoting; rows
+exclude the header, and cells cover both decoded fields and the rectangular
+frame allocation. The
+scientific parser and assembly remain the existing fs-free IO core; no checked
+path is reopened. The boundary caps the serialized config at 1 MiB, files at
+64, targets at 64, each file at 256 MiB, and aggregate input bytes at 512 MiB.
+Compressed `.gz` and `.zip` inputs are temporarily rejected rather than using
+the general loader's unbounded decompression path.
+
 ## How a host would adopt it (illustrative — not wired here)
 
 ```python
