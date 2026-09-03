@@ -76,6 +76,7 @@ def main() -> int:
         *sorted((root / "LICENSES").iterdir(), key=lambda path: path.name.encode()),
     ]
     header = root / "crates/nirs4all-io-capi/include/nirs4all_io.h"
+    committed_header = header.read_bytes()
     prefix = f"nirs4all-io-capi-{args.target_triple}"
     metadata = (
         json.dumps(
@@ -112,6 +113,12 @@ def main() -> int:
             env=env,
             check=True,
         )
+        # cbindgen rewrites the tracked header during every Cargo build. On
+        # Windows its output can differ only by newline convention; package the
+        # committed contract and restore the checkout before the cleanliness
+        # assertion below.
+        if header.read_bytes() != committed_header:
+            header.write_bytes(committed_header)
         lib_dir = target_dir / args.target_triple / "release"
         # Ship the shared C ABI and its Windows import library. R and other
         # static consumers build the vendored staticlib themselves; Cargo's
