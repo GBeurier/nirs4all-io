@@ -114,6 +114,33 @@ const plan = nio.inferFiles(files);             // options default to {}
 const ds = nio.assembleDataset([], recordSets, plan.resolved_spec); // object spec OK
 ```
 
+## Legal payload policy
+
+`scripts/stage_wasm_package.mjs --check-legal` requires this binding's `LICENSE`,
+`LICENSING.md`, `THIRD_PARTY_NOTICES.md`, `COPY_PROVENANCE.md`, and complete
+`LICENSES/` directory to be byte-identical to the canonical files at the repository
+root. The release staging step copies that verified mirror into the npm package.
+
+For dependencies licensed as `MIT OR Apache-2.0` or `Unlicense OR MIT`, the WASM
+distribution relies on the MIT option and bundles `LICENSES/MIT.txt`; a separate
+Unlicense text is therefore not required. Apache Arrow is Apache-only but is not in
+the fs-free WASM dependency graph. The locked WASM closure does, however, include
+`ryu 1.0.23` (`Apache-2.0 OR BSL-1.0`) through `csv`. This distribution selects
+Apache-2.0 and bundles `LICENSES/Apache-2.0.txt`, imported from the exact upstream
+crate whose SHA-256 matches `bindings/wasm/Cargo.lock`; BSL-1.0 therefore does not
+apply. The staging guard pins both the crate and Apache-text hashes so an upgrade
+cannot silently reuse an unaudited payload. The same audit covers the mandatory
+Unicode-3.0 branch of `unicode-ident 1.0.24`; its exact locked upstream text is
+bundled as `LICENSES/Unicode-3.0.txt` and pinned by the guard. A normalized digest
+of every package name, version, and SPDX expression returned by locked Cargo
+metadata makes any other closure change fail closed pending a fresh audit.
+
+The same staging command emits `nirs4all-io-wasm.cdx.json`, a deterministic
+CycloneDX 1.6 SBOM with all 55 locked Cargo components, their SPDX expressions,
+crate hashes, purls, and dependency edges. Its subject is `nirs4all-io-wasm`
+`0.1.14`; source properties attest the full Git commit and tree. Timestamps,
+UUIDs, local paths, and other volatile fields are intentionally excluded.
+
 ## Test
 
 ```bash
@@ -123,5 +150,5 @@ node bindings/wasm/tests/idiomatic_smoke.mjs     # idiomatic.mjs wrapper
 ```
 
 The release workflow runs both smokes again against the staged npm package and
-retains the exact `.tgz`, including the wrapper, detailed types, and complete
-license/provenance inventory.
+retains the exact `.tgz`, including the wrapper, detailed types, and canonical
+project license/provenance inventory plus the closure-specific CycloneDX SBOM.

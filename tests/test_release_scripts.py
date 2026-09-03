@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import subprocess
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -22,6 +23,17 @@ from scripts.write_deterministic_zip import write_zip
 from scripts.write_release_receipt import reproducibility_covers, required_artifact_status, source_matches
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+
+
+def test_formats_security_repin_is_exact_across_python_and_web() -> None:
+    expected = "0.2.9"
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["optional-dependencies"]["formats"] == [f"nirs4all-formats=={expected}"]
+    assert f"nirs4all-formats=={expected}" in project["optional-dependencies"]["dev"]
+    web_package = json.loads((ROOT / "web/pkg/formats/package.json").read_text(encoding="utf-8"))
+    assert web_package["name"] == "nirs4all-formats-wasm"
+    assert web_package["version"] == expected
 
 
 def test_json_path_normalization_handles_escaped_windows_form() -> None:
@@ -153,7 +165,7 @@ def test_deterministic_zip_has_fixed_metadata(tmp_path: Path) -> None:
 
 
 def _write_fake_wheel(path: Path, *, duplicate: bool = False) -> None:
-    version = "0.1.12"
+    version = WORKSPACE_VERSION
     dist = f"nirs4all_io-{version}.dist-info"
     members = {
         "nirs4all_io/__init__.py": b"",
@@ -175,7 +187,7 @@ def _write_fake_wheel(path: Path, *, duplicate: bool = False) -> None:
 
 
 def test_wheel_normalizer_sets_commit_serial_and_record(tmp_path: Path) -> None:
-    wheel = tmp_path / "nirs4all_io-0.1.12-py3-none-any.whl"
+    wheel = tmp_path / f"nirs4all_io-{WORKSPACE_VERSION}-py3-none-any.whl"
     _write_fake_wheel(wheel)
     normalize_wheel(wheel, ROOT, 1_700_000_000, "a" * 40)
     with zipfile.ZipFile(wheel) as archive:
@@ -189,7 +201,7 @@ def test_wheel_normalizer_sets_commit_serial_and_record(tmp_path: Path) -> None:
 
 
 def test_wheel_normalizer_refuses_duplicate_members(tmp_path: Path) -> None:
-    wheel = tmp_path / "nirs4all_io-0.1.12-py3-none-any.whl"
+    wheel = tmp_path / f"nirs4all_io-{WORKSPACE_VERSION}-py3-none-any.whl"
     _write_fake_wheel(wheel, duplicate=True)
     with pytest.raises(SystemExit, match="duplicate"):
         normalize_wheel(wheel, ROOT, 1_700_000_000, "a" * 40)
