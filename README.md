@@ -44,10 +44,10 @@ while `from_package_source` selects one named source without fusing the others.
 The provider retains package identity, target names, and a typed row-major f64
 feature projection. There is intentionally no Python
 `load(..., target="dag-ml-data")` surface. See
-[`docs/STATUS.md`](docs/STATUS.md) for the per-epic breakdown,
-[`docs/API.md`](docs/API.md) for the seam, and
-[`docs/PHASE2_GATE.md`](docs/PHASE2_GATE.md) for the GREEN gate record. Full design:
-[`../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md`](../nirs4all-formats/docs/REDESIGN_FORMATS_AND_IO.md).
+[`docs/API.md`](docs/API.md) for the seam,
+[`docs/IO_XLG_QUALIFICATION.md`](docs/IO_XLG_QUALIFICATION.md) for binding qualification,
+and [`docs/development.md`](docs/development.md) for contributor references and
+the private development archive policy.
 
 ## Quick start (target API)
 

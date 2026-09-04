@@ -31,9 +31,7 @@ exclude_patterns = [
     # internal review trails, EPIC plans, dated acceptance notes and branch
     # names that are not part of the public docs.
     "dev/*",
-    "STATUS.md",
-    "PHASE2_GATE.md",
-    "RUST_REWRITE_ROADMAP.md",
+    "_private/**",
 ]
 
 # -- MyST configuration ------------------------------------------------------ #

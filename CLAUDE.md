@@ -178,7 +178,7 @@ These are the architectural invariants. PRs that violate them are rejected.
 8. **The `dag-ml-data` emit lives in the `nirs4all-io-dagml` bridge crate.** It is a workspace
    member, but default dependency resolution stays ecosystem-free via crates.io. The cross-CLI
    conformance harness patches Cargo to the sibling `dag-ml-data` checkout when present, and CI now
-   requires that sibling path. The Phase-2 gate is GREEN (`docs/PHASE2_GATE.md`), so this is
+   requires that sibling path. The bridge is qualified (`docs/IO_XLG_QUALIFICATION.md`), so this is
    implemented — don't reintroduce a `NotImplementedError` stub.
 
 ## Public API (`api.py`, re-exported from `__init__.py`)
@@ -232,10 +232,11 @@ adapter is testable with no nirs4all installed (see `test_load_e2e.py`).
   field, selector, merge mode, join, partition, fold, loading param, supported/out-of-scope layout,
   and a use-case cookbook with honest ✅/🟡/📋 status per option. Read this before adding spec vocab.
 - `docs/API.md` — the stable integration seam and how a host adopts it.
-- `docs/STATUS.md` / `docs/ROADMAP.md` — per-epic state (incl. the Phase-2 EPIC 7–12 table) and the
-  intentionally-deferred list.
-- `docs/RUST_REWRITE_ROADMAP.md` — the Phase-2 plan: crate split rationale, EPIC breakdown, the
-  canonical-JSON parity strategy. `docs/PHASE2_GATE.md` — why the `dag-ml-data` target is now GREEN.
+- `docs/development.md` — contributor entry point, current references, verification and private archive policy.
+- `docs/ROADMAP.md` — intentionally deferred work; validate historical items against current source.
+- `docs/_private/README.md` — local-only index of historical plans, acceptance records and AI specifications;
+  ignored by Git and excluded from Sphinx. Never force-add private records. Historical Phase-2
+  STATUS, RUST_REWRITE_ROADMAP, PHASE2_GATE and PORT_BLUEPRINT are archived there.
 - `docs/REPLUG.md` — host-adoption sequence and the io-vs-host ownership split.
 - `docs/VERSIONING.md` — the three versioned contracts (schema / convention-profile / canonical-JSON).
 - `COMPAT.md` — the per-binding operation matrix (which of infer/to-spec/validate/load each supports).

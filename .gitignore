@@ -40,6 +40,7 @@ Thumbs.db
 
 # --- untracked build/process docs (kept locally, 2026-06-16) ---
 docs/dev/PORT_BLUEPRINT.md
+/docs/_private/
 
 # coverage artefact
 coverage.xml

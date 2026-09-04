@@ -684,7 +684,7 @@ sources: [{ id: a, role: mixed, input: wide.csv, strict_columns: true,
 
 ---
 
-## 17. Toward Phase 2 (the NIRS `dag-ml-data` type)
+## 17. Rust dataset bridge (the NIRS `dag-ml-data` type)
 
 This vocabulary defines exactly what the NIRS-specific `dag-ml-data` bridge
 must be able to represent: multi-source feature
@@ -693,6 +693,7 @@ categorical), metadata (incl. m:1-broadcast dimension columns), an explicit
 sample identity (row or id), repetitions/groups, and externally-supplied
 train/test/val/predict + folds. The `AssembledDataset` IR (per-partition
 `PartitionBlock`) is the target-agnostic hand-off point: a `to_dag_ml_data`
-adapter consumes the same structure that `to_spectrodataset` does today. See
-the repository's `docs/PHASE2_GATE.md` for what `dag-ml-data` must add first
-(notably an `AxisKind::Wavenumber` for cm⁻¹).
+adapter consumes the same structure that `to_spectrodataset` does today. The
+Rust bridge is implemented in `crates/nirs4all-io-dagml`; `dag-ml-data` supports
+`AxisKind::Wavenumber` for cm⁻¹. See [API](API.md) and the
+[cross-binding qualification](IO_XLG_QUALIFICATION.md) for the supported surface.
