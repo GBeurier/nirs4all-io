@@ -30,14 +30,17 @@ static const char *req_cstr(SEXP s, const char *what) {
 // Run an n4io JSON-surface call returning an owned string; raise on non-OK.
 typedef n4io_status_t (*json_fn)(n4io_context_t *, const char *, const char *, char **);
 
-static SEXP call_json(json_fn fn, SEXP input_json, SEXP conventions_json) {
+static SEXP call_json(json_fn fn, SEXP input_json, SEXP conventions_json, SEXP limits_json) {
     const char *inp = req_cstr(input_json, "input_json");
     const char *conv = opt_cstr(conventions_json);
+    const char *limits = limits_json == R_NilValue ? NULL : req_cstr(limits_json, "limits_json");
     n4io_context_t *ctx = NULL;
     if (n4io_context_create(&ctx) != N4IO_OK)
         Rf_error("n4io: failed to create context");
     char *out = NULL;
-    n4io_status_t st = fn(ctx, inp, conv, &out);
+    n4io_status_t st = fn == n4io_load_summary
+        ? n4io_load_summary_with_limits(ctx, inp, conv, limits, &out)
+        : fn(ctx, inp, conv, &out);
     if (st != N4IO_OK) {
         // Copy the context error before destroying it.
         const char *msg = n4io_context_last_error(ctx);
@@ -54,15 +57,15 @@ static SEXP call_json(json_fn fn, SEXP input_json, SEXP conventions_json) {
 }
 
 SEXP r_n4io_to_spec(SEXP input_json, SEXP conventions_json) {
-    return call_json(n4io_to_spec, input_json, conventions_json);
+    return call_json(n4io_to_spec, input_json, conventions_json, R_NilValue);
 }
 
 SEXP r_n4io_infer(SEXP input_json, SEXP conventions_json) {
-    return call_json(n4io_infer, input_json, conventions_json);
+    return call_json(n4io_infer, input_json, conventions_json, R_NilValue);
 }
 
-SEXP r_n4io_load_summary(SEXP input_json, SEXP conventions_json) {
-    return call_json(n4io_load_summary, input_json, conventions_json);
+SEXP r_n4io_load_summary(SEXP input_json, SEXP conventions_json, SEXP limits_json) {
+    return call_json(n4io_load_summary, input_json, conventions_json, limits_json);
 }
 
 SEXP r_n4io_validate(SEXP spec_json) {
@@ -93,7 +96,7 @@ SEXP r_n4io_abi_version(void) {
 static const R_CallMethodDef call_methods[] = {
     {"r_n4io_to_spec", (DL_FUNC)&r_n4io_to_spec, 2},
     {"r_n4io_infer", (DL_FUNC)&r_n4io_infer, 2},
-    {"r_n4io_load_summary", (DL_FUNC)&r_n4io_load_summary, 2},
+    {"r_n4io_load_summary", (DL_FUNC)&r_n4io_load_summary, 3},
     {"r_n4io_validate", (DL_FUNC)&r_n4io_validate, 1},
     {"r_n4io_abi_version", (DL_FUNC)&r_n4io_abi_version, 0},
     {NULL, NULL, 0}};

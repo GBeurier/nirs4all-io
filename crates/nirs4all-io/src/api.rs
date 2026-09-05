@@ -23,7 +23,10 @@ use nirs4all_io_core::spec::{
 use same_file::Handle;
 use serde_json::{json, Value};
 
-use crate::materialize::{assemble, AssembledDataset};
+use crate::materialize::assemble::assemble_with_budget;
+use crate::materialize::limits::ReadBudget;
+use crate::materialize::AssembledDataset;
+pub use crate::materialize::LoadLimits;
 use crate::resolve::resolve_path;
 
 const CONFIG_SUFFIXES: &[&str] = &["json", "yaml", "yml"];
@@ -188,6 +191,20 @@ pub fn to_spec(
     conventions: Option<&[String]>,
     name: Option<&str>,
 ) -> Result<(DatasetSpec, PathBuf), SpecError> {
+    to_spec_with_budget(
+        input,
+        conventions,
+        name,
+        &mut ReadBudget::new(LoadLimits::default())?,
+    )
+}
+
+fn to_spec_with_budget(
+    input: &Input,
+    conventions: Option<&[String]>,
+    name: Option<&str>,
+    budget: &mut ReadBudget,
+) -> Result<(DatasetSpec, PathBuf), SpecError> {
     match input {
         Input::Spec(v) => {
             let mut spec = DatasetSpec::from_value(&normalize_to_spec_dict(v))?;
@@ -196,7 +213,7 @@ pub fn to_spec(
             }
             Ok((spec, PathBuf::from(".")))
         }
-        Input::Path(p) => to_spec_path(p, conventions, name),
+        Input::Path(p) => to_spec_path(p, conventions, name, budget),
         Input::Paths(ps) => to_spec_paths(ps, conventions, name),
     }
 }
@@ -209,9 +226,20 @@ pub fn load_assembled(
     conventions: Option<&[String]>,
     name: Option<&str>,
 ) -> Result<AssembledDataset, SpecError> {
-    let (spec, base) = to_spec(input, conventions, name)?;
+    load_assembled_with_limits(input, conventions, name, LoadLimits::default())
+}
+
+/// Materialize using explicit host budgets, shared by all file reads in a load.
+pub fn load_assembled_with_limits(
+    input: &Input,
+    conventions: Option<&[String]>,
+    name: Option<&str>,
+    limits: LoadLimits,
+) -> Result<AssembledDataset, SpecError> {
+    let mut budget = ReadBudget::new(limits)?;
+    let (spec, base) = to_spec_with_budget(input, conventions, name, &mut budget)?;
     validate_spec(&spec)?;
-    assemble(&spec, &base)
+    assemble_with_budget(&spec, &base, &mut budget)
 }
 
 /// Adapt Studio's existing role-tagged `config.files` object to the official
@@ -462,6 +490,7 @@ fn to_spec_path(
     p: &str,
     conventions: Option<&[String]>,
     name: Option<&str>,
+    budget: &mut ReadBudget,
 ) -> Result<(DatasetSpec, PathBuf), SpecError> {
     let path = Path::new(p);
     let suffix = path
@@ -473,7 +502,7 @@ fn to_spec_path(
         .is_some_and(|s| CONFIG_SUFFIXES.contains(&s))
         && path.is_file()
     {
-        let text = std::fs::read_to_string(path)
+        let text = String::from_utf8(budget.read(path)?)
             .map_err(|e| SpecError::new(format!("cannot read config {p}: {e}")))?;
         let raw: Value = if suffix.as_deref() == Some("json") {
             serde_json::from_str(&text)

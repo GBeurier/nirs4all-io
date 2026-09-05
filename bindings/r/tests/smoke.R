@@ -59,6 +59,9 @@ stopifnot(isTRUE(nio_validate(rs)))
 
 summary <- nio_load(c(xcsv, ycsv))
 stopifnot(is.list(summary), length(summary$blocks) >= 1L)
+stopifnot(identical(summary, nio_load(c(xcsv, ycsv), limits = "unlimited")))
+stopifnot(inherits(try(nio_load(c(xcsv, ycsv), limits = list(max_file_bytes = 1)),
+                      silent = TRUE), "try-error"))
 
 # Public R surface parity guard: load_summary is bytes-free JSON, so specs must
 # preserve the same loading controls used by the Python and WASM surfaces when

@@ -8,22 +8,25 @@
 //! resolve `source.input` (glob/dir/list), read each file's bytes (the loaders
 //! handle gzip/zip), read `partitions.index_file`s, and parse `folds.file`. It
 //! then gathers everything into named in-memory payloads and delegates to
-//! [`assemble_in_memory`], so the native (path) and browser (no-fs) paths share
+//! [`assemble_in_memory_with_tabular_limits`], so native and browser paths share
 //! one assembly core and produce byte-identical `AssembledDataset`s.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use nirs4all_io_core::materialize::loaders::effective_params;
-use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
+use nirs4all_io_core::materialize::{
+    assemble_in_memory_with_tabular_limits, InMemorySource, SourcePayload,
+};
 use nirs4all_io_core::spec::dataset_spec::DatasetSpec;
 use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::enums::PartitionBy;
 use nirs4all_io_core::spec::SpecError;
 use serde_json::Value;
 
-use super::folds::{parse_fold_file, Fold};
-use super::loaders::read_parquet_frame;
+use super::folds::{parse_fold_file_with_budget, Fold};
+use super::limits::{LoadLimits, ReadBudget};
+use super::loaders::read_parquet_frame_with_budget;
 
 pub use nirs4all_io_core::materialize::{
     AssembledDataset, FoldProvenance, IdentityProvenance, PartitionBlock, ASSEMBLED_DATASET_VERSION,
@@ -164,7 +167,11 @@ fn gather_parquet_projections(
 
 /// Gather every input referenced by `spec` (sources + variations) into named
 /// in-memory payloads, reading each unique file once.
-fn gather_sources(spec: &DatasetSpec, base_dir: &Path) -> Result<Vec<InMemorySource>, SpecError> {
+fn gather_sources(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    budget: &mut ReadBudget,
+) -> Result<Vec<InMemorySource>, SpecError> {
     let parquet_projections = gather_parquet_projections(spec, base_dir)?;
     let mut seen: HashMap<String, ()> = HashMap::new();
     let mut out: Vec<InMemorySource> = Vec::new();
@@ -176,7 +183,7 @@ fn gather_sources(spec: &DatasetSpec, base_dir: &Path) -> Result<Vec<InMemorySou
             let parquet_columns = parquet_projections
                 .get(&path_key(&path))
                 .and_then(|columns| columns.as_deref());
-            let payload = source_payload(&path, parquet_columns)?;
+            let payload = source_payload(&path, parquet_columns, budget)?;
             out.push(InMemorySource { name, payload });
         }
         Ok(())
@@ -203,56 +210,23 @@ fn is_parquet_path(path: &Path) -> bool {
 fn source_payload(
     path: &Path,
     parquet_columns: Option<&[String]>,
+    budget: &mut ReadBudget,
 ) -> Result<SourcePayload, SpecError> {
     if is_parquet_path(path) {
-        return Ok(SourcePayload::Frame(read_parquet_frame(
+        return Ok(SourcePayload::Frame(read_parquet_frame_with_budget(
             path,
             parquet_columns,
+            budget,
         )?));
     }
-    Ok(SourcePayload::Bytes(read_maybe_compressed(path)?))
-}
-
-/// Read a file, transparently decompressing `.gz` / `.zip`.
-fn read_maybe_compressed(path: &Path) -> Result<Vec<u8>, SpecError> {
-    use std::io::Read;
-    let raw = std::fs::read(path)
-        .map_err(|e| SpecError::new(format!("file not found: {} ({e})", path.display())))?;
-    let lower = path.to_string_lossy().to_lowercase();
-    if lower.ends_with(".gz") {
-        let mut buf = Vec::new();
-        flate2::read::GzDecoder::new(&raw[..])
-            .read_to_end(&mut buf)
-            .map_err(|e| {
-                SpecError::new(format!("gzip decode failed for {}: {e}", path.display()))
-            })?;
-        Ok(buf)
-    } else if lower.ends_with(".zip") {
-        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(raw))
-            .map_err(|e| SpecError::new(format!("zip open failed for {}: {e}", path.display())))?;
-        if archive.is_empty() {
-            return Err(SpecError::new(format!(
-                "empty zip archive: {}",
-                path.display()
-            )));
-        }
-        let mut entry = archive.by_index(0).map_err(|e| {
-            SpecError::new(format!("zip entry read failed for {}: {e}", path.display()))
-        })?;
-        let mut buf = Vec::new();
-        entry.read_to_end(&mut buf).map_err(|e| {
-            SpecError::new(format!("zip decompress failed for {}: {e}", path.display()))
-        })?;
-        Ok(buf)
-    } else {
-        Ok(raw)
-    }
+    Ok(SourcePayload::Bytes(budget.read(path)?))
 }
 
 /// Read `partitions.index_file` lists referenced by `spec` into `index_lists`.
 fn gather_index_lists(
     spec: &DatasetSpec,
     base_dir: &Path,
+    budget: &mut ReadBudget,
 ) -> Result<HashMap<String, Vec<i64>>, SpecError> {
     let mut out = HashMap::new();
     let Some(p) = &spec.partitions else {
@@ -267,14 +241,21 @@ fn gather_index_lists(
         ("predict", &p.predict_file),
     ] {
         if let Some(file) = file {
-            out.insert(part.to_string(), read_index_file(&base_dir.join(file))?);
+            out.insert(
+                part.to_string(),
+                read_index_file(&base_dir.join(file), budget)?,
+            );
         }
     }
     Ok(out)
 }
 
 /// Parse `folds.file` (when set) into folds; `None` otherwise.
-fn gather_folds(spec: &DatasetSpec, base_dir: &Path) -> Result<Option<Vec<Fold>>, SpecError> {
+fn gather_folds(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    budget: &mut ReadBudget,
+) -> Result<Option<Vec<Fold>>, SpecError> {
     let Some(folds) = &spec.folds else {
         return Ok(None);
     };
@@ -283,9 +264,10 @@ fn gather_folds(spec: &DatasetSpec, base_dir: &Path) -> Result<Option<Vec<Fold>>
         return Ok(None);
     }
     if let Some(file) = folds.file.as_deref().filter(|s| !s.is_empty()) {
-        return Ok(Some(parse_fold_file(
+        return Ok(Some(parse_fold_file_with_budget(
             &base_dir.join(file),
             folds.format.value(),
+            budget,
         )?));
     }
     Ok(None)
@@ -294,22 +276,45 @@ fn gather_folds(spec: &DatasetSpec, base_dir: &Path) -> Result<Option<Vec<Fold>>
 /// Load, role-split, join and partition `spec` into an [`AssembledDataset`].
 ///
 /// The facade reads every input from `base_dir`, then delegates to the shared
-/// fs-free core [`assemble_in_memory`].
+/// fs-free core [`assemble_in_memory_with_tabular_limits`].
 pub fn assemble(spec: &DatasetSpec, base_dir: &Path) -> Result<AssembledDataset, SpecError> {
-    let sources = gather_sources(spec, base_dir)?;
-    let index_lists = gather_index_lists(spec, base_dir)?;
-    let fold_inline = gather_folds(spec, base_dir)?;
-    assemble_in_memory(spec, &sources, &index_lists, fold_inline.as_deref())
+    assemble_with_limits(spec, base_dir, LoadLimits::default())
 }
 
-fn read_index_file(path: &Path) -> Result<Vec<i64>, SpecError> {
+/// Assemble with explicit host-selected read/decompression/shape budgets.
+pub fn assemble_with_limits(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    limits: LoadLimits,
+) -> Result<AssembledDataset, SpecError> {
+    assemble_with_budget(spec, base_dir, &mut ReadBudget::new(limits)?)
+}
+
+pub(crate) fn assemble_with_budget(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    budget: &mut ReadBudget,
+) -> Result<AssembledDataset, SpecError> {
+    let sources = gather_sources(spec, base_dir, budget)?;
+    let index_lists = gather_index_lists(spec, base_dir, budget)?;
+    let fold_inline = gather_folds(spec, base_dir, budget)?;
+    assemble_in_memory_with_tabular_limits(
+        spec,
+        &sources,
+        &index_lists,
+        fold_inline.as_deref(),
+        Some(budget.limits.tabular()),
+    )
+}
+
+fn read_index_file(path: &Path, budget: &mut ReadBudget) -> Result<Vec<i64>, SpecError> {
     if !path.exists() {
         return Err(SpecError::new(format!(
             "partitions.index_file: file not found: {}",
             path.display()
         )));
     }
-    let text = std::fs::read_to_string(path)
+    let text = String::from_utf8(budget.read(path)?)
         .map_err(|e| SpecError::new(format!("cannot read index file {}: {e}", path.display())))?;
     let text = text.trim();
     if text.is_empty() {

@@ -40,6 +40,32 @@ pub struct TabularReadLimits {
 }
 
 impl TabularReadLimits {
+    /// Check a rectangular allocation before creating/copying its cells.
+    pub fn check_shape(self, rows: u64, columns: u64) -> Result<(), SpecError> {
+        if rows > self.max_rows {
+            return Err(SpecError::new(format!(
+                "load limit exceeded: rows (maximum {})",
+                self.max_rows
+            )));
+        }
+        if columns > self.max_columns {
+            return Err(SpecError::new(format!(
+                "load limit exceeded: columns (maximum {})",
+                self.max_columns
+            )));
+        }
+        let cells = rows
+            .checked_mul(columns)
+            .ok_or_else(|| SpecError::new("load limit exceeded: shape overflow"))?;
+        if cells > self.max_cells {
+            return Err(SpecError::new(format!(
+                "load limit exceeded: cells (maximum {})",
+                self.max_cells
+            )));
+        }
+        Ok(())
+    }
+
     pub const fn new(
         max_record_bytes: u64,
         max_field_bytes: u64,

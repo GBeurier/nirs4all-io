@@ -12,15 +12,15 @@
 
 use std::ffi::{c_char, CStr, CString};
 
-use nirs4all_io::api::{load_assembled, to_spec, Input};
+use nirs4all_io::api::{to_spec, Input};
 use nirs4all_io::canonical_json;
 use nirs4all_io::core::spec::{validate_spec, DatasetSpec};
 use serde_json::Value;
 
 /// ABI version string. Independent of crate semver (D-R6); bump on ABI change.
-pub const N4IO_ABI_VERSION: &str = "0.2.0";
+pub const N4IO_ABI_VERSION: &str = "0.3.0";
 const ABI_MAJOR: u32 = 0;
-const ABI_MINOR: u32 = 2;
+const ABI_MINOR: u32 = 3;
 
 /// Status code returned by every fallible call. `N4IO_OK == 0`.
 #[repr(C)]
@@ -327,6 +327,23 @@ pub unsafe extern "C" fn n4io_load_summary(
     conventions_json: *const c_char,
     out: *mut *mut c_char,
 ) -> n4io_status_t {
+    n4io_load_summary_with_limits(ctx, input_json, conventions_json, std::ptr::null(), out)
+}
+
+/// Materialize with a host-selected limits JSON object, or explicit JSON string
+/// `"unlimited"` for trusted inputs. NULL selects the documented defaults.
+/// Limits are not read from the DatasetSpec and do not change its fingerprint.
+///
+/// # Safety
+/// All non-NULL pointers must be valid for the call; `out` writable.
+#[no_mangle]
+pub unsafe extern "C" fn n4io_load_summary_with_limits(
+    ctx: *mut n4io_context_t,
+    input_json: *const c_char,
+    conventions_json: *const c_char,
+    limits_json: *const c_char,
+    out: *mut *mut c_char,
+) -> n4io_status_t {
     clear_error(ctx);
     if out.is_null() {
         set_error(ctx, "out pointer is null");
@@ -351,7 +368,26 @@ pub unsafe extern "C" fn n4io_load_summary(
             return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
         }
     };
-    match load_assembled(&input, conv.as_deref(), None) {
+    let limits = if limits_json.is_null() {
+        nirs4all_io::api::LoadLimits::default()
+    } else {
+        let parsed = cstr_to_str(limits_json)
+            .ok_or_else(|| "limits_json is not UTF-8".to_string())
+            .and_then(|text| {
+                serde_json::from_str::<Value>(text).map_err(|e| format!("invalid limits JSON: {e}"))
+            })
+            .and_then(|value| {
+                nirs4all_io::api::LoadLimits::from_value(&value).map_err(|e| e.message)
+            });
+        match parsed {
+            Ok(limits) => limits,
+            Err(message) => {
+                set_error(ctx, &message);
+                return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
+            }
+        }
+    };
+    match nirs4all_io::api::load_assembled_with_limits(&input, conv.as_deref(), None, limits) {
         Ok(assembled) => match canonical_json(&assembled.to_summary_value()) {
             Ok(s) => write_out(ctx, out, s),
             Err(e) => {

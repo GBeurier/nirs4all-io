@@ -15,6 +15,74 @@ shapes below are identical across both; some Python accessor spellings differ.
 
 ## Entry points
 
+### Native resource budgets (published wheel and Rust facade)
+
+The native materialization path accepts a **host-owned** `LoadLimits` policy,
+separate from `DatasetSpec`. It never reads a policy from dataset contents and
+does not change the spec, canonical JSON or package fingerprint. Existing calls
+use finite defaults; the Python parity oracle described below does **not** expose
+this option and is not covered by this resource policy.
+
+```python
+# Published native wheel, not the src/ Python parity oracle:
+import nirs4all_io as nio
+
+summary = nio.load("X.csv", limits={"max_rows": 200_000, "max_cells": 10_000_000})
+package = nio.to_dataset_package("X.csv", limits={"max_file_bytes": 64 * 1024**2})
+# Explicit trusted-host choice; never infer this from the input:
+summary = nio.load("X.csv", limits="unlimited")
+```
+
+All fields are positive integers; omitted fields keep their defaults. Unknown
+fields and zero values fail before reading data. `None` selects defaults.
+
+| Field | Default |
+| --- | ---: |
+| `max_file_bytes` | 2 GiB |
+| `max_total_bytes` | 8 GiB |
+| `max_decoded_file_bytes` | 4 GiB |
+| `max_decoded_total_bytes` | 16 GiB |
+| `max_files` | 100,000 reads |
+| `max_record_bytes` | 64 MiB (CSV record) |
+| `max_field_bytes` | 16 MiB (CSV field) |
+| `max_rows` | 10,000,000 |
+| `max_columns` | 1,000,000 |
+| `max_cells` | 1,073,741,824 |
+
+These are compatibility ceilings, **not guarantees of adequate RAM**: a billion
+cells can consume many GiB plus assembly overhead. Application hosts should
+tighten them; Studio's separate role-tagged policy remains stricter. Legitimate
+larger workloads may raise individual fields or explicitly choose `"unlimited"`;
+integer-overflow checks still apply.
+
+One load accounts for config, sources/variations, index files and fold files,
+including repeated reads. Regular-file size and actual bounded reads are checked;
+gzip/ZIP decompression stops at the decoded allowance. CSV decoding enforces
+record/field and table shape limits. Parquet checks declared rows, projected
+columns and uncompressed column sizes before decoding, then checks actual Arrow
+batch size and rows before copying into owned cells. Concatenation and joins
+check their resulting shapes before output allocation, including one-to-many
+join expansion. Shape ceilings apply to each intermediate/result table, not the
+sum of all retained tables. Decoded bytes are not a process RSS bound: third-party
+decoder internals, cell objects, cloning and host-owned inputs add overhead.
+
+Rust exposes `api::load_assembled_with_limits`,
+`materialize::assemble_with_limits` and `materialize::loaders::read_table_with_limits`.
+CLI: `nirs4all-io load X.csv --limits '{"max_rows":200000}'` (trusted opt-out:
+`--limits '"unlimited"'`). C ABI 0.3 adds
+`n4io_load_summary_with_limits(ctx, input, conventions, limits_json, out)`;
+the old `n4io_load_summary` remains ABI-compatible and uses defaults. R accepts
+`nio_load(input, limits=list(max_rows=200000))`; MATLAB/Octave accepts
+`nirs4all_io.load_summary(input, [], struct('max_rows', 200000))`.
+
+Scope: native file-backed CSV, gzip/ZIP CSV, Parquet and assembly. The Python
+oracle's NumPy/Excel/vendor readers and the filesystem-free WASM API are not
+protected by this native read policy. Already-materialized `DatasetPackage`
+objects are returned/adapted without reading or revalidating their memory use.
+`infer`, `validate` and `to_spec` are not configurable materialization entry
+points. Hosts remain responsible for their own input buffers, directory
+enumeration, decoder isolation and stricter process-level resource limits.
+
 ```python
 import nirs4all_io as nio
 
