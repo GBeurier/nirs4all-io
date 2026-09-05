@@ -55,6 +55,12 @@ def test_missing_array_values_are_preserved_without_dropping_rows_or_features():
     np.testing.assert_array_equal(block.X[0], x)
 
 
+@pytest.mark.parametrize("value", [float("inf"), -float("inf")])
+def test_infinite_array_values_are_not_silently_replaced_by_missing_values(value):
+    with pytest.raises(ValueError, match="infinite"):
+        nio.load(np.array([[1., value]]), target="package")
+
+
 def test_yaml_relative_refs_false_header_and_aggregate_budget(tmp_path):
     (tmp_path / "X.csv").write_text("1;2\n3;4\n")
     (tmp_path / "Y.csv").write_text("10\n20\n")

@@ -9,7 +9,7 @@ use nirs4all_io_facade::core::materialize::{
 use nirs4all_io_facade::core::spec::{validate_spec, DatasetSpec};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyString;
+use pyo3::types::{PyFloat, PyString};
 use pythonize::depythonize;
 use serde_json::Value;
 
@@ -71,6 +71,13 @@ pub fn assemble_frames(
             let row_start = bytes;
             for cell in row.try_iter()? {
                 let cell = cell?;
+                if let Ok(value) = cell.cast::<PyFloat>() {
+                    if value.value().is_infinite() {
+                        return Err(PyValueError::new_err(
+                            "infinite array values cannot be represented by the dataset wire",
+                        ));
+                    }
+                }
                 let size = if let Ok(text) = cell.cast::<PyString>() {
                     text.to_str()?.len() as u64
                 } else {
