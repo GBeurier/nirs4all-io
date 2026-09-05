@@ -19,5 +19,7 @@ def test_headerless_role_params_keep_first_targets_and_metadata(tmp_path):
         # This boundary preserves loaded values. Numeric target encoding is a
         # separate library-owned processing, not IO's file-row contract.
         np.testing.assert_array_equal(np.asarray(dataset.y({"partition": partition, "y": "raw"})).reshape(-1), [101, 102, 103])
-        assert dataset.metadata_columns == ["0"]
-        assert dataset.metadata({"partition": partition})[0, 0] == "first"
+        # Headerless metadata receives source-qualified column identities.
+        assert dataset.metadata_columns == ["train_m__0", "test_m__0"]
+        column = dataset.metadata_columns.index(f"{partition}_m__0")
+        assert dataset.metadata({"partition": partition})[0, column] == "first"
