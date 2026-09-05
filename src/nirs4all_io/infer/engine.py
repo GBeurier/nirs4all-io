@@ -33,6 +33,10 @@ _DEFAULT_CONVENTIONS = ["nirs4all-classic"]
 
 def infer(inp: object, *, conventions: list[str] | None = None, hints: dict | None = None) -> DatasetPlan:
     """Inspect ``inp`` and propose a confidence-scored :class:`DatasetPlan`."""
+    if hints is not None and not isinstance(hints, dict):
+        raise TypeError("hints must be a mapping or None")
+    if hints:
+        raise ValueError("Non-empty inference hints are not implemented; edit the resolved_spec explicitly")
     iset = resolve(inp)
     profiles = resolve_profiles(conventions or _DEFAULT_CONVENTIONS)
     result = match_items(iset.names, profiles)

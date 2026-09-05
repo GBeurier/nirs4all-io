@@ -111,6 +111,10 @@ def _absolutize_dataset_spec_refs(spec: dict[str, Any], base_dir: Path) -> None:
 
 
 def _adapt_to_io_spec(input: Any, *, base_dir: str | Path | None = None) -> Any:
+    if isinstance(input, DatasetPlan):
+        input = input.resolved_spec
+        if input is None:
+            raise ValueError("plan has no resolved_spec")
     adapter = getattr(input, "to_io_spec", None)
     if not callable(adapter):
         raw = input
@@ -118,7 +122,7 @@ def _adapt_to_io_spec(input: Any, *, base_dir: str | Path | None = None) -> Any:
     else:
         raw = adapter()
         explicit_base = Path(base_dir) if base_dir is not None else None
-    if isinstance(raw, tuple):
+    if callable(adapter) and isinstance(raw, tuple):
         if len(raw) != 2:
             raise ValueError("to_io_spec() must return a spec dict or a (spec, base_dir) pair")
         raw, base = raw
@@ -163,6 +167,19 @@ class DatasetSpec(dict):
         return f"DatasetSpec(name={self.name!r}, schema_version={self.schema_version}, sources=[{head}])"
 
 
+class Decision(dict):
+    """A native decision with mapping and historical attribute access."""
+
+    def __getattr__(self, key: str) -> Any:
+        try:
+            return self[key]
+        except KeyError as error:
+            raise AttributeError(key) from error
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self)
+
+
 class DatasetPlan(dict):
     """A scored ``DatasetPlan`` returned by :func:`infer`.
 
@@ -173,14 +190,31 @@ class DatasetPlan(dict):
 
     __slots__ = ()
 
+    def __getattr__(self, key: str) -> Any:
+        try:
+            value = self[key]
+        except KeyError as error:
+            raise AttributeError(key) from error
+        return Decision(value) if isinstance(value, dict) and {"value", "score", "ambiguous"} <= value.keys() else value
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self)
+
+    def accept(self, **overrides: Any) -> DatasetSpec:
+        """Return a validated copy of the resolved spec with explicit overrides."""
+        if not isinstance(self.get("resolved_spec"), dict):
+            raise ValueError("plan has no resolved_spec")
+        return to_spec({**self.resolved_spec, **overrides})
+
     @property
     def overall_score(self) -> float | None:
         return self.get("overall_score")
 
     @property
-    def resolved_spec(self) -> DatasetSpec:
+    def resolved_spec(self) -> DatasetSpec | None:
         """The editable spec produced by inference, as a :class:`DatasetSpec`."""
-        return DatasetSpec(self.get("resolved_spec", {}))
+        value = self.get("resolved_spec")
+        return DatasetSpec(value) if isinstance(value, dict) else None
 
     @property
     def recommendations(self) -> list[str]:
@@ -203,7 +237,7 @@ class DatasetPlan(dict):
         return f"DatasetPlan(overall_score={self.overall_score}, {decs})"
 
 
-def infer(input: Any, conventions: list[str] | None = None) -> DatasetPlan:
+def infer(input: Any, conventions: list[str] | None = None, *, hints: dict | None = None) -> DatasetPlan:
     """Inspect a data input and return a scored :class:`DatasetPlan`.
 
     Args:
@@ -214,6 +248,10 @@ def infer(input: Any, conventions: list[str] | None = None) -> DatasetPlan:
         A :class:`DatasetPlan` (a ``dict`` subclass) with ``resolved_spec``,
         the scored decisions, ``recommendations`` and ``warnings``.
     """
+    if hints is not None and not isinstance(hints, dict):
+        raise TypeError("hints must be a mapping or None")
+    if hints:
+        raise ValueError("Non-empty inference hints are not implemented; edit the resolved_spec explicitly")
     plan = _native_infer(_normalize_input(input), conventions)
     return DatasetPlan(plan)
 
@@ -231,7 +269,11 @@ def to_spec(input: Any, conventions: list[str] | None = None, name: str | None =
         A :class:`DatasetSpec` (a ``dict`` subclass) that round-trips through
         :func:`validate` and :func:`load`.
     """
+    from ._inputs import yaml_config
+    input, config_base, _ = yaml_config(input)
     spec = _native_to_spec(_normalize_input(_adapt_to_io_spec(input)), conventions, name)
+    if config_base is not None:
+        _absolutize_dataset_spec_refs(spec, config_base)
     return DatasetSpec(spec)
 
 
@@ -278,7 +320,24 @@ def load(
             return to_spectrodataset(input._full, spectro_dataset_cls=spectro_dataset_cls)
         if target == "assembled":
             return input.to_assembled()
+    from ._inputs import array_payload, yaml_config
+    from ._native import assemble_frames
+    memory = array_payload(input, name, limits)
+    if memory is not None:
+        spec, frames = memory
+        full = assemble_frames(spec, frames, limits=limits, summary=target == "assembled")
+        if target == "assembled":
+            return full
+        if target in {"dataset_package", "package"}:
+            return DatasetPackage(full)
+        if target == "spectrodataset":
+            return to_spectrodataset(full, spectro_dataset_cls=spectro_dataset_cls)
+        raise ValueError(f"unknown target {target!r}")
+    input, config_base, limits = yaml_config(input, limits)
     native_input = _normalize_input(_adapt_to_io_spec(input, base_dir=base_dir))
+    if config_base is not None:
+        native_input = _native_to_spec(native_input, conventions, name)
+        _absolutize_dataset_spec_refs(native_input, Path(base_dir) if base_dir is not None else config_base)
     load_options = {} if limits is None else {"limits": limits}
     if target == "assembled":
         summary = load_summary(native_input, conventions, name, **load_options)

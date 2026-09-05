@@ -19,6 +19,8 @@ use pyo3::prelude::*;
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 
+mod memory;
+
 /// Convert a Python argument into a facade [`Input`]: `str` → path, a sequence of
 /// `str` → file list, a `dict`/mapping → spec.
 fn to_input(obj: &Bound<'_, PyAny>) -> PyResult<Input> {
@@ -156,5 +158,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(load_summary, m)?)?;
     m.add_function(wrap_pyfunction!(assembled_full, m)?)?;
+    m.add_function(wrap_pyfunction!(memory::resolved_load_limits, m)?)?;
+    m.add_function(wrap_pyfunction!(memory::assemble_frames, m)?)?;
     Ok(())
 }
