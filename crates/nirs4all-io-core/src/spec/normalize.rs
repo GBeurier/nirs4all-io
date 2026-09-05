@@ -522,6 +522,13 @@ pub fn legacy_to_spec_dict(config: &Map<String, Value>) -> Value {
             ysrc.insert("role".into(), Value::from("targets"));
             ysrc.insert("input".into(), y_val.clone());
             ysrc.insert("partition".into(), Value::from(partition));
+            let params = merge_params(&[
+                config.get(&format!("{partition}_params")),
+                config.get(&format!("{partition}_y_params")),
+            ]);
+            if !params.is_empty() {
+                ysrc.insert("params".into(), Value::Object(params));
+            }
             if let Some(yf) = &y_filter {
                 ysrc.insert(
                     "columns".into(),
@@ -540,6 +547,13 @@ pub fn legacy_to_spec_dict(config: &Map<String, Value>) -> Value {
             gsrc.insert("role".into(), Value::from("metadata"));
             gsrc.insert("input".into(), g_val.clone());
             gsrc.insert("partition".into(), Value::from(partition));
+            let params = merge_params(&[
+                config.get(&format!("{partition}_params")),
+                config.get(&format!("{partition}_group_params")),
+            ]);
+            if !params.is_empty() {
+                gsrc.insert("params".into(), Value::Object(params));
+            }
             if let Some(gf) = &g_filter {
                 gsrc.insert(
                     "columns".into(),
@@ -636,5 +650,35 @@ mod tests {
         let cfg = json!({"sources": [{"id": "x", "role": "features", "input": "X.csv"}]});
         let spec = normalize_to_spec_dict(&cfg);
         assert_eq!(spec, cfg);
+    }
+
+    #[test]
+    fn legacy_target_and_metadata_params_preserve_partition_and_role_precedence() {
+        use crate::materialize::loaders::effective_params;
+        use crate::spec::DatasetSpec;
+        let spec = normalize_to_spec_dict(&json!({
+            "train_x":"x.csv","train_y":"y.csv","train_group":"m.csv",
+            "test_x":"xt.csv","test_y":"yt.csv","test_group":"mt.csv",
+            "global_params":{"delimiter":";","has_header":true,"encoding":"utf-8"},
+            "train_params":{"has_header":false,"decimal_separator":","},
+            "train_y_params":{"delimiter":"|"},
+            "train_group_params":{"has_header":true},
+            "test_y_params":{"has_header":false},
+            "test_group_params":{"has_header":false}
+        }));
+        let typed = DatasetSpec::from_value(&spec).unwrap();
+        for source in &typed.sources {
+            let params = effective_params(&typed.params, &source.params);
+            assert_eq!(params.encoding.as_deref(), Some("utf-8"));
+            let expected_header = matches!(source.id.as_str(), "train_m" | "test_x");
+            assert_eq!(params.has_header, Some(expected_header), "{}", source.id);
+            assert_eq!(
+                params.delimiter.as_deref(),
+                Some(if source.id == "train_y" { "|" } else { ";" })
+            );
+            if source.id.starts_with("train") {
+                assert_eq!(params.decimal_separator.as_deref(), Some(","));
+            }
+        }
     }
 }
