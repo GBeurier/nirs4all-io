@@ -10,7 +10,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 
-use nirs4all_io::api::{load_assembled, to_spec, Input};
+use nirs4all_io::api::{load_assembled_with_limits, to_spec, Input, LoadLimits};
 use nirs4all_io::canonical_json;
 use nirs4all_io::core::spec::{validate_spec, DatasetSpec};
 use nirs4all_io::infer::{infer_path, infer_paths};
@@ -65,6 +65,9 @@ enum Command {
         /// Override the dataset name.
         #[arg(long)]
         name: Option<String>,
+        /// Host budget JSON object, or JSON string "unlimited" for trusted input.
+        #[arg(long)]
+        limits: Option<String>,
     },
     /// Point to the dag-ml-data bridge crate that emits CoordinatorDataPlanEnvelope JSON.
     EmitDagMlData {
@@ -151,11 +154,17 @@ fn main() -> Result<()> {
             inputs,
             conventions,
             name,
+            limits,
         } => {
-            let assembled = load_assembled(
+            let limits = limits.as_deref().map(|text| {
+                let value: Value = serde_json::from_str(text).context("parse --limits JSON")?;
+                LoadLimits::from_value(&value).map_err(|e| anyhow!(e.message))
+            }).transpose()?.unwrap_or_default();
+            let assembled = load_assembled_with_limits(
                 &make_input(&inputs),
                 conv_opt(&conventions),
                 name.as_deref(),
+                limits,
             )
             .map_err(|e| anyhow!(e.message))?;
             emit(&assembled.to_summary_value())

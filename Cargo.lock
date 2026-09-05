@@ -911,6 +911,7 @@ version = "0.1.14"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "bytes",
  "cap-std",
  "csv",
  "flate2",

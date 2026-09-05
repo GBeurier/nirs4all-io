@@ -20,7 +20,7 @@ use arrow_array::{
 };
 use arrow_schema::DataType;
 use nirs4all_io_core::infer::table::{ColDtype, NumericKind};
-use nirs4all_io_core::materialize::loaders::{apply_na_policy, read_table_bytes};
+use nirs4all_io_core::materialize::loaders::{apply_na_policy, read_table_bytes_with_limits};
 use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::SpecError;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -28,44 +28,9 @@ use parquet::arrow::ProjectionMask;
 use serde_json::Value;
 
 use super::frame::{Cell, Column, Frame};
+use super::limits::{limit_error, LoadLimits, ReadBudget};
 
 pub use nirs4all_io_core::materialize::loaders::{effective_params, LoadedTable};
-
-/// Read a file, transparently decompressing `.gz` / `.zip` so compressed CSVs parse.
-fn read_maybe_compressed(path: &Path) -> Result<Vec<u8>, SpecError> {
-    use std::io::Read;
-    let raw = std::fs::read(path)
-        .map_err(|e| SpecError::new(format!("file not found: {} ({e})", path.display())))?;
-    let lower = path.to_string_lossy().to_lowercase();
-    if lower.ends_with(".gz") {
-        let mut out = Vec::new();
-        flate2::read::GzDecoder::new(&raw[..])
-            .read_to_end(&mut out)
-            .map_err(|e| {
-                SpecError::new(format!("gzip decode failed for {}: {e}", path.display()))
-            })?;
-        Ok(out)
-    } else if lower.ends_with(".zip") {
-        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(raw))
-            .map_err(|e| SpecError::new(format!("zip open failed for {}: {e}", path.display())))?;
-        if archive.is_empty() {
-            return Err(SpecError::new(format!(
-                "empty zip archive: {}",
-                path.display()
-            )));
-        }
-        let mut entry = archive.by_index(0).map_err(|e| {
-            SpecError::new(format!("zip entry read failed for {}: {e}", path.display()))
-        })?;
-        let mut out = Vec::new();
-        entry.read_to_end(&mut out).map_err(|e| {
-            SpecError::new(format!("zip decompress failed for {}: {e}", path.display()))
-        })?;
-        Ok(out)
-    } else {
-        Ok(raw)
-    }
-}
 
 fn is_parquet_path(path: &Path) -> bool {
     matches!(
@@ -281,13 +246,48 @@ fn column_from_parquet_cells(
     }
 }
 
-fn read_parquet_raw(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| SpecError::new(format!("file not found: {} ({e})", path.display())))?;
-    let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)
+fn read_parquet_raw_with_budget(
+    path: &Path,
+    params: &LoadingParams,
+    budget: &mut ReadBudget,
+) -> Result<Frame, SpecError> {
+    let bytes = bytes::Bytes::from(budget.read_raw(path)?);
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
         .map_err(|e| SpecError::new(format!("parquet open failed for {}: {e}", path.display())))?;
 
     let requested = parquet_requested_columns(params)?;
+    let rows = u64::try_from(builder.metadata().file_metadata().num_rows())
+        .map_err(|_| SpecError::new("negative parquet row count"))?;
+    let columns = requested
+        .as_ref()
+        .map_or(builder.schema().fields().len(), Vec::len) as u64;
+    budget.limits.tabular().check_shape(rows, columns)?;
+    let mut decoded = 0u64;
+    for group in builder.metadata().row_groups() {
+        for column in group.columns() {
+            if requested.as_ref().is_some_and(|names| {
+                !column
+                    .column_path()
+                    .parts()
+                    .first()
+                    .is_some_and(|name| names.contains(name))
+            }) {
+                continue;
+            }
+            let size = u64::try_from(column.uncompressed_size())
+                .map_err(|_| SpecError::new("negative parquet uncompressed size"))?;
+            decoded = decoded.checked_add(size).ok_or_else(|| {
+                limit_error("parquet decoded bytes overflow", budget.decoded_allowance())
+            })?;
+            if decoded > budget.decoded_allowance() {
+                return Err(limit_error(
+                    "parquet decoded bytes",
+                    budget.decoded_allowance(),
+                ));
+            }
+        }
+    }
+
     if let Some(columns) = &requested {
         let available: Vec<String> = builder
             .schema()
@@ -324,6 +324,7 @@ fn read_parquet_raw(path: &Path, params: &LoadingParams) -> Result<Frame, SpecEr
         .collect();
     let mut cells_by_column: Vec<Vec<Cell>> = fields.iter().map(|_| Vec::new()).collect();
     let mut n_rows = 0usize;
+    let mut actual_bytes = 0u64;
 
     for batch in &mut reader {
         let batch = batch.map_err(|e| {
@@ -337,7 +338,24 @@ fn read_parquet_raw(path: &Path, params: &LoadingParams) -> Result<Frame, SpecEr
                 batch.num_columns()
             )));
         }
-        n_rows += batch.num_rows();
+        n_rows = n_rows
+            .checked_add(batch.num_rows())
+            .ok_or_else(|| limit_error("parquet rows overflow", budget.limits.max_rows))?;
+        budget
+            .limits
+            .tabular()
+            .check_shape(n_rows as u64, fields.len() as u64)?;
+        actual_bytes = actual_bytes
+            .checked_add(batch.get_array_memory_size() as u64)
+            .ok_or_else(|| {
+                limit_error("parquet decoded bytes overflow", budget.decoded_allowance())
+            })?;
+        if actual_bytes > budget.decoded_allowance() {
+            return Err(limit_error(
+                "parquet decoded bytes",
+                budget.decoded_allowance(),
+            ));
+        }
         for (idx, cells) in cells_by_column.iter_mut().enumerate() {
             append_array_cells(&fields[idx].0, batch.column(idx).as_ref(), cells)?;
         }
@@ -356,12 +374,14 @@ fn read_parquet_raw(path: &Path, params: &LoadingParams) -> Result<Frame, SpecEr
     if let Some(columns) = requested {
         frame = frame.select(&columns);
     }
+    budget.charge_decoded(actual_bytes.max(decoded))?;
     Ok(frame)
 }
 
-pub(crate) fn read_parquet_frame(
+pub(crate) fn read_parquet_frame_with_budget(
     path: &Path,
     columns: Option<&[String]>,
+    budget: &mut ReadBudget,
 ) -> Result<Frame, SpecError> {
     let mut params = LoadingParams::default();
     if let Some(columns) = columns {
@@ -370,12 +390,7 @@ pub(crate) fn read_parquet_frame(
             Value::Array(columns.iter().cloned().map(Value::from).collect()),
         );
     }
-    read_parquet_raw(path, &params)
-}
-
-fn read_parquet(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError> {
-    let frame = read_parquet_raw(path, params)?;
-    apply_na_policy(&frame, &params.na)
+    read_parquet_raw_with_budget(path, &params, budget)
 }
 
 /// Read a tabular file into a [`Frame`]: read bytes (+ gzip/zip), then run the
@@ -383,11 +398,24 @@ fn read_parquet(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError>
 /// readers land with the broader load path; until then unknown extensions fall
 /// back to CSV (nirs4all's own fallback).
 pub fn read_table(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError> {
+    read_table_with_limits(path, params, LoadLimits::default())
+}
+
+/// Read one table with explicit host budgets (including gzip/ZIP/Parquet).
+pub fn read_table_with_limits(
+    path: &Path,
+    params: &LoadingParams,
+    limits: LoadLimits,
+) -> Result<Frame, SpecError> {
+    let mut budget = ReadBudget::new(limits)?;
     if is_parquet_path(path) {
-        return read_parquet(path, params);
+        return apply_na_policy(
+            &read_parquet_raw_with_budget(path, params, &mut budget)?,
+            &params.na,
+        );
     }
-    let bytes = read_maybe_compressed(path)?;
-    read_table_bytes(&bytes, params)
+    let bytes = budget.read(path)?;
+    read_table_bytes_with_limits(&bytes, params, limits.tabular())
         .map_err(|e| SpecError::new(format!("{} in {}", e.message, path.display())))
 }
 

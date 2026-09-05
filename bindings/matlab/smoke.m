@@ -17,7 +17,7 @@ n4io('validate', spec);
 plan = n4io('infer', json_path(fullfile(corpus, 'single_combined')));
 assert(~isempty(strfind(plan, '"resolved_spec"')), 'plan missing resolved_spec'); %#ok<STREMP>
 
-load_json = n4io('load_summary', json_path(fullfile(corpus, 'single_combined')));
+load_json = n4io('load_summary', json_path(fullfile(corpus, 'train_test')));
 assert(~isempty(strfind(load_json, '"assembled_schema_version": 2')), 'summary missing schema version'); %#ok<STREMP>
 
 % a bad spec is rejected.
@@ -65,8 +65,16 @@ flist = {fullfile(corpus, 'x_y_separate', 'X.csv'), fullfile(corpus, 'x_y_separa
 fpl = nirs4all_io.infer(flist);
 assert(isstruct(fpl) && isfield(fpl, 'resolved_spec'), 'file-list infer failed');
 
-lsum = nirs4all_io.load_summary(fullfile(corpus, 'single_combined'));
+lsum = nirs4all_io.load_summary(fullfile(corpus, 'train_test'));
 assert(isstruct(lsum) && lsum.assembled_schema_version == 2, 'idiomatic load_summary failed');
+assert(isequal(lsum, nirs4all_io.load_summary(fullfile(corpus, 'train_test'), [], 'unlimited')));
+limited = false;
+try
+  nirs4all_io.load_summary(fullfile(corpus, 'train_test'), [], struct('max_file_bytes', 1));
+catch
+  limited = true;
+end
+assert(limited, 'host read limits were ignored');
 
 % validate rejects a bad spec struct.
 bad_struct = struct('partitions', struct('by', 'random'));

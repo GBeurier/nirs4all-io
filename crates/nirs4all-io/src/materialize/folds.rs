@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use super::limits::{LoadLimits, ReadBudget};
 use nirs4all_io_core::materialize::folds::parse_fold_str;
 use nirs4all_io_core::spec::SpecError;
 
@@ -29,6 +30,14 @@ fn ext_format(path: &Path) -> &'static str {
 
 /// Parse a fold file (`fmt` `"auto"` infers from the extension).
 pub fn parse_fold_file(path: &Path, fmt: &str) -> Result<Vec<Fold>, SpecError> {
+    parse_fold_file_with_budget(path, fmt, &mut ReadBudget::new(LoadLimits::default())?)
+}
+
+pub(crate) fn parse_fold_file_with_budget(
+    path: &Path,
+    fmt: &str,
+    budget: &mut ReadBudget,
+) -> Result<Vec<Fold>, SpecError> {
     if !path.exists() {
         return Err(SpecError::new(format!(
             "fold file not found: {}",
@@ -47,7 +56,7 @@ pub fn parse_fold_file(path: &Path, fmt: &str) -> Result<Vec<Fold>, SpecError> {
     } else {
         fmt
     };
-    let text = std::fs::read_to_string(path)
+    let text = String::from_utf8(budget.read(path)?)
         .map_err(|e| SpecError::new(format!("cannot read fold file {}: {e}", path.display())))?;
     parse_fold_str(&text, fmt)
 }

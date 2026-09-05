@@ -252,6 +252,7 @@ def load(
     name: str | None = None,
     base_dir: str | Path | None = None,
     spectro_dataset_cls: type | None = None,
+    limits: dict[str, int] | str | None = None,
 ) -> Any:
     """Materialize ``input``.
 
@@ -264,6 +265,8 @@ def load(
         name: Optional dataset name override.
         spectro_dataset_cls: A recording double can be injected here to exercise
             the ``"spectrodataset"`` adapter without nirs4all installed.
+        limits: Host read/decompression/shape budgets; omitted fields use defaults.
+            ``"unlimited"`` is an explicit trusted-input opt-out.
 
     Returns:
         The assembled summary ``dict`` or a ``SpectroDataset``.
@@ -276,14 +279,15 @@ def load(
         if target == "assembled":
             return input.to_assembled()
     native_input = _normalize_input(_adapt_to_io_spec(input, base_dir=base_dir))
+    load_options = {} if limits is None else {"limits": limits}
     if target == "assembled":
-        summary = load_summary(native_input, conventions, name)
+        summary = load_summary(native_input, conventions, name, **load_options)
         require_assembled_dataset_v2(summary)
         return summary
     if target in {"dataset_package", "package"}:
-        return DatasetPackage(assembled_full(native_input, conventions, name))
+        return DatasetPackage(assembled_full(native_input, conventions, name, **load_options))
     if target == "spectrodataset":
-        full = assembled_full(native_input, conventions, name)
+        full = assembled_full(native_input, conventions, name, **load_options)
         return to_spectrodataset(full, spectro_dataset_cls=spectro_dataset_cls)
     if target in {"dag-ml-data", "dag_ml_data"}:
         raise NotImplementedError(
@@ -299,11 +303,12 @@ def to_dataset_package(
     conventions: list[str] | None = None,
     base_dir: str | Path | None = None,
     name: str | None = None,
+    limits: dict[str, int] | str | None = None,
 ) -> DatasetPackage:
     """Materialize ``input`` into a target-agnostic :class:`DatasetPackage`."""
     if isinstance(input, DatasetPackage):
         return input
-    package = load(input, target="dataset_package", conventions=conventions, base_dir=base_dir, name=name)
+    package = load(input, target="dataset_package", conventions=conventions, base_dir=base_dir, name=name, limits=limits)
     if not isinstance(package, DatasetPackage):
         raise TypeError(f"target 'dataset_package' returned {type(package).__name__}, expected DatasetPackage")
     return package
@@ -316,7 +321,8 @@ def describe_dataset_package(
     base_dir: str | Path | None = None,
     name: str | None = None,
     canonical: bool = False,
+    limits: dict[str, int] | str | None = None,
 ) -> dict[str, Any] | str:
     """Return a bytes-free package summary for ``input``."""
-    package = to_dataset_package(input, conventions=conventions, base_dir=base_dir, name=name)
+    package = to_dataset_package(input, conventions=conventions, base_dir=base_dir, name=name, limits=limits)
     return package.to_canonical_summary() if canonical else package.to_summary_dict()

@@ -68,6 +68,9 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     }
 
     const char *input = opt_arg(nrhs, prhs, 1);
+    if (strcmp(cmd, "load_summary") == 0 && nrhs > 3 &&
+        !mxIsEmpty(prhs[3]) && !mxIsChar(prhs[3]))
+        mexErrMsgIdAndTxt("n4io:error", "limits_json must be a JSON character string");
     const char *conv = opt_arg(nrhs, prhs, 2);
     if (input == NULL) {
         n4io_context_destroy(ctx);
@@ -80,7 +83,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     else if (strcmp(cmd, "infer") == 0)
         st = n4io_infer(ctx, input, conv, &out);
     else if (strcmp(cmd, "load_summary") == 0)
-        st = n4io_load_summary(ctx, input, conv, &out);
+        st = n4io_load_summary_with_limits(ctx, input, conv, opt_arg(nrhs, prhs, 3), &out);
     else {
         n4io_context_destroy(ctx);
         mexErrMsgIdAndTxt("n4io:cmd", "unknown command '%s'", cmd);

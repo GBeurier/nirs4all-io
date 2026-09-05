@@ -13,6 +13,7 @@ use crate::spec::enums::{Cardinality, Coverage};
 use crate::spec::SpecError;
 
 use super::frame::{Cell, Column, Frame, JoinKey};
+use super::loaders::TabularReadLimits;
 
 /// A join error is a `SpecError` (cardinality / duplicate-key / coverage).
 pub type JoinError = SpecError;
@@ -111,6 +112,36 @@ pub fn concat_features(
     names: &[String],
     key: Option<&[String]>,
 ) -> Result<(Frame, JoinAudit), SpecError> {
+    concat_features_with_limits(frames, names, key, None)
+}
+
+/// Check the exact schema-union allocation before concatenating sample rows.
+pub fn concat_samples_with_limits(
+    frames: &[Frame],
+    names: &[String],
+    limits: Option<TabularReadLimits>,
+) -> Result<(Frame, Vec<String>, JoinAudit), SpecError> {
+    if let Some(limits) = limits {
+        let rows = frames
+            .iter()
+            .try_fold(0u64, |count, frame| count.checked_add(frame.n_rows as u64))
+            .ok_or_else(|| SpecError::new("load limit exceeded: concat rows overflow"))?;
+        let columns: HashSet<_> = frames
+            .iter()
+            .flat_map(|frame| frame.columns.iter().map(|column| &column.name))
+            .collect();
+        limits.check_shape(rows, columns.len() as u64)?;
+    }
+    Ok(concat_samples(frames, names))
+}
+
+/// Concatenate feature blocks with checks before each rectangular allocation.
+pub fn concat_features_with_limits(
+    frames: &[Frame],
+    names: &[String],
+    key: Option<&[String]>,
+    limits: Option<TabularReadLimits>,
+) -> Result<(Frame, JoinAudit), SpecError> {
     if frames.is_empty() {
         return Ok((
             Frame::empty(),
@@ -127,7 +158,7 @@ pub fn concat_features(
     if let Some(key) = key {
         let mut out = frames[0].clone();
         for (frame, name) in frames[1..].iter().zip(&names[1..]) {
-            let (merged, step) = join_tables(
+            let (merged, step) = join_tables_with_limits(
                 &out,
                 frame,
                 key,
@@ -136,6 +167,7 @@ pub fn concat_features(
                 Coverage::Complete,
                 &names[0],
                 name,
+                limits,
             )?;
             out = merged;
             audit.warnings.extend(step.warnings);
@@ -152,6 +184,15 @@ pub fn concat_features(
         )));
     }
     let mut seen: HashSet<String> = HashSet::new();
+    if let Some(limits) = limits {
+        let columns = frames
+            .iter()
+            .try_fold(0u64, |count, frame| {
+                count.checked_add(frame.columns.len() as u64)
+            })
+            .ok_or_else(|| SpecError::new("load limit exceeded: concat columns overflow"))?;
+        limits.check_shape(frames[0].n_rows as u64, columns)?;
+    }
     let mut columns: Vec<Column> = Vec::new();
     for (frame, name) in frames.iter().zip(names) {
         for col in &frame.columns {
@@ -183,6 +224,32 @@ pub fn join_tables(
     coverage: Coverage,
     left_name: &str,
     right_name: &str,
+) -> Result<(Frame, JoinAudit), SpecError> {
+    join_tables_with_limits(
+        left,
+        right,
+        left_on,
+        right_on,
+        cardinality,
+        coverage,
+        left_name,
+        right_name,
+        None,
+    )
+}
+
+/// Join with exact result cardinality checked before allocating output cells.
+#[allow(clippy::too_many_arguments)]
+pub fn join_tables_with_limits(
+    left: &Frame,
+    right: &Frame,
+    left_on: &[String],
+    right_on: &[String],
+    cardinality: Cardinality,
+    coverage: Coverage,
+    left_name: &str,
+    right_name: &str,
+    limits: Option<TabularReadLimits>,
 ) -> Result<(Frame, JoinAudit), SpecError> {
     let lkeys = keys(left_on);
     let rkeys = keys(right_on);
@@ -280,6 +347,26 @@ pub fn join_tables(
         .collect();
 
     let drop = coverage == Coverage::Drop;
+    if let Some(limits) = limits {
+        let columns = left
+            .columns
+            .len()
+            .checked_add(right_extra.len())
+            .ok_or_else(|| SpecError::new("load limit exceeded: join columns overflow"))?
+            as u64;
+        limits.check_shape(0, columns)?;
+        let mut rows = 0u64;
+        for key in &left_tuples {
+            let count = key
+                .as_ref()
+                .and_then(|key| right_map.get(key))
+                .map_or(u64::from(!drop), |matches| matches.len() as u64);
+            rows = rows
+                .checked_add(count)
+                .ok_or_else(|| SpecError::new("load limit exceeded: join rows overflow"))?;
+            limits.check_shape(rows, columns)?;
+        }
+    }
     let mut left_out: Vec<Vec<Cell>> = vec![Vec::new(); left.columns.len()];
     let mut right_out: Vec<Vec<Cell>> = vec![Vec::new(); right_extra.len()];
     let mut n_matched = 0;
@@ -357,6 +444,17 @@ pub fn merge_by_key(
     key: &[String],
     coverage: Coverage,
 ) -> Result<(Frame, JoinAudit), SpecError> {
+    merge_by_key_with_limits(frames, names, key, coverage, None)
+}
+
+/// Merge by key, checking each intermediate join before allocation.
+pub fn merge_by_key_with_limits(
+    frames: &[Frame],
+    names: &[String],
+    key: &[String],
+    coverage: Coverage,
+    limits: Option<TabularReadLimits>,
+) -> Result<(Frame, JoinAudit), SpecError> {
     if frames.is_empty() {
         return Ok((
             Frame::empty(),
@@ -373,7 +471,7 @@ pub fn merge_by_key(
         ..Default::default()
     };
     for (frame, name) in frames[1..].iter().zip(&names[1..]) {
-        let (merged, step) = join_tables(
+        let (merged, step) = join_tables_with_limits(
             &out,
             frame,
             key,
@@ -382,6 +480,7 @@ pub fn merge_by_key(
             coverage,
             &names[0],
             name,
+            limits,
         )?;
         out = merged;
         audit.warnings.extend(step.warnings);
@@ -394,6 +493,42 @@ pub fn merge_by_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limits_check_exact_join_cardinality_before_copying_cells() {
+        let left = Frame::from_columns(vec![col("id", &[1, 2]), col("x", &[10, 20])], "text");
+        let right = Frame::from_columns(vec![col("id", &[1, 1]), col("y", &[30, 40])], "text");
+        let limits = TabularReadLimits::new(100, 100, 2, 10, 100);
+        let error = join_tables_with_limits(
+            &left,
+            &right,
+            &["id".into()],
+            &["id".into()],
+            Cardinality::OneToMany,
+            Coverage::Warn,
+            "x",
+            "y",
+            Some(limits),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("rows"));
+        let (result, _) = join_tables_with_limits(
+            &left,
+            &right,
+            &["id".into()],
+            &["id".into()],
+            Cardinality::OneToMany,
+            Coverage::Warn,
+            "x",
+            "y",
+            Some(TabularReadLimits {
+                max_rows: 3,
+                ..limits
+            }),
+        )
+        .unwrap();
+        assert_eq!(result.n_rows, 3);
+    }
     use crate::materialize::frame::Frame;
 
     fn col(name: &str, vals: &[i64]) -> Column {

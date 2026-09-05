@@ -53,6 +53,24 @@ fn load_emits_assembled_summary() {
 }
 
 #[test]
+fn load_limits_are_configurable_without_changing_output() {
+    let path = corpus("train_test");
+    let (ok, expected, error) = run(&["load", &path]);
+    assert!(ok, "{error}");
+    for policy in ["{}", "\"unlimited\"", "{\"max_rows\":1000000}"] {
+        let (ok, output, error) = run(&["load", &path, "--limits", policy]);
+        assert!(ok, "{error}");
+        assert_eq!(output, expected);
+    }
+    for policy in ["{\"max_file_bytes\":1}", "{\"max_row\":1}"] {
+        let (ok, output, error) = run(&["load", &path, "--limits", policy]);
+        assert!(!ok);
+        assert!(output.is_empty());
+        assert!(error.contains("limit"), "{error}");
+    }
+}
+
+#[test]
 fn to_spec_output_validates() {
     let (ok, spec, _) = run(&["to-spec", &corpus("x_y_separate")]);
     assert!(ok);

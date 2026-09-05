@@ -120,10 +120,13 @@ nio_to_spec <- function(input, conventions = NULL) {
 #' @param conventions Optional character vector of convention names, or
 #'   \code{NULL}.
 #' @return The parsed assembled summary as a list.
+#' @param limits Host resource budgets as a named list, \code{NULL} for defaults,
+#'   or \code{"unlimited"} for explicitly trusted inputs. See docs/API.md.
 #' @seealso [n4io_load_summary()] for the raw JSON surface.
 #' @export
-nio_load <- function(input, conventions = NULL) {
-  json <- n4io_load_summary(.nio_input_json(input), .nio_conventions_json(conventions))
+nio_load <- function(input, conventions = NULL, limits = NULL) {
+  limits_json <- if (is.null(limits)) NULL else jsonlite::toJSON(limits, auto_unbox = TRUE)
+  json <- n4io_load_summary(.nio_input_json(input), .nio_conventions_json(conventions), limits_json)
   .nio_parse(json)
 }
 

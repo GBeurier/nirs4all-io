@@ -9,7 +9,9 @@
 //! full-precision arrays for the SpectroDataset adapter) return native Python
 //! objects via `pythonize`. Nothing here imports `nirs4all`.
 
-use nirs4all_io_facade::api::{load_assembled, to_spec as facade_to_spec, Input};
+use nirs4all_io_facade::api::{
+    load_assembled_with_limits, to_spec as facade_to_spec, Input, LoadLimits,
+};
 use nirs4all_io_facade::core::spec::{validate_spec, DatasetSpec};
 use nirs4all_io_facade::infer::{infer_path, infer_paths};
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -97,31 +99,53 @@ fn validate(spec: &Bound<'_, PyAny>) -> PyResult<()> {
 /// Materialize an input and return the rounded structural summary dict
 /// (target="assembled").
 #[pyfunction]
-#[pyo3(signature = (input, conventions=None, name=None))]
+#[pyo3(signature = (input, conventions=None, name=None, *, limits=None))]
 fn load_summary(
     py: Python<'_>,
     input: &Bound<'_, PyAny>,
     conventions: Option<Vec<String>>,
     name: Option<String>,
+    limits: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
-    let assembled = load_assembled(&to_input(input)?, conventions.as_deref(), name.as_deref())
-        .map_err(|e| PyValueError::new_err(e.message))?;
+    let assembled = load_assembled_with_limits(
+        &to_input(input)?,
+        conventions.as_deref(),
+        name.as_deref(),
+        parse_load_limits(limits)?,
+    )
+    .map_err(|e| PyValueError::new_err(e.message))?;
     to_py(py, &assembled.to_summary_value())
 }
 
 /// Materialize an input and return the full-precision arrays dict consumed by the
 /// Python SpectroDataset adapter (X/y/processing matrices, metadata, weights, folds).
 #[pyfunction]
-#[pyo3(signature = (input, conventions=None, name=None))]
+#[pyo3(signature = (input, conventions=None, name=None, *, limits=None))]
 fn assembled_full(
     py: Python<'_>,
     input: &Bound<'_, PyAny>,
     conventions: Option<Vec<String>>,
     name: Option<String>,
+    limits: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
-    let assembled = load_assembled(&to_input(input)?, conventions.as_deref(), name.as_deref())
-        .map_err(|e| PyValueError::new_err(e.message))?;
+    let assembled = load_assembled_with_limits(
+        &to_input(input)?,
+        conventions.as_deref(),
+        name.as_deref(),
+        parse_load_limits(limits)?,
+    )
+    .map_err(|e| PyValueError::new_err(e.message))?;
     to_py(py, &assembled.to_full_value())
+}
+
+fn parse_load_limits(limits: Option<&Bound<'_, PyAny>>) -> PyResult<LoadLimits> {
+    limits
+        .map(|limits| {
+            let value: Value = depythonize(limits)
+                .map_err(|e| PyTypeError::new_err(format!("invalid load limits: {e}")))?;
+            LoadLimits::from_value(&value).map_err(|e| PyValueError::new_err(e.message))
+        })
+        .unwrap_or_else(|| Ok(LoadLimits::default()))
 }
 
 #[pymodule]

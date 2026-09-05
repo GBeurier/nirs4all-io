@@ -27,9 +27,11 @@ n4io_infer <- function(input_json, conventions_json = NULL) {
 #'   \code{'"/data/run"'}), or a file-list array (e.g. \code{'["a.csv","b.csv"]'}).
 #' @param conventions_json Optional JSON array of convention names, or NULL.
 #' @return The assembled dataset summary as a JSON string.
+#' @param limits_json Host limits JSON object, JSON string \code{'"unlimited"'},
+#'   or NULL for defaults; never taken from the dataset specification.
 #' @export
-n4io_load_summary <- function(input_json, conventions_json = NULL) {
-  .Call("r_n4io_load_summary", input_json, conventions_json)
+n4io_load_summary <- function(input_json, conventions_json = NULL, limits_json = NULL) {
+  .Call("r_n4io_load_summary", input_json, conventions_json, limits_json)
 }
 
 #' Validate a DatasetSpec JSON string; raises an error if invalid.

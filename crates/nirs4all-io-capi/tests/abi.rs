@@ -56,8 +56,49 @@ fn abi_version_round_trips() {
     unsafe {
         let p = n4io_abi_version();
         assert!(!p.is_null());
-        assert_eq!(CStr::from_ptr(p).to_str().unwrap(), "0.2.0");
+        assert_eq!(CStr::from_ptr(p).to_str().unwrap(), "0.3.0");
         n4io_string_free(p);
+    }
+}
+
+#[test]
+fn load_limits_are_additive_and_never_silently_ignored() {
+    unsafe {
+        let mut ctx = std::ptr::null_mut();
+        assert_eq!(n4io_context_create(&mut ctx), n4io_status_t::N4IO_OK);
+        let input_json = serde_json::to_string(&corpus_case("train_test")).unwrap();
+        let (old_status, old_result) = call2(n4io_load_summary, ctx, &input_json);
+        assert_eq!(old_status, n4io_status_t::N4IO_OK);
+        let input = CString::new(input_json).unwrap();
+        for (limits, expected) in [
+            ("{}", n4io_status_t::N4IO_OK),
+            ("\"unlimited\"", n4io_status_t::N4IO_OK),
+            ("{\"max_file_bytes\":1}", n4io_status_t::N4IO_ERR_SPEC),
+            ("{\"max_rows\":0}", n4io_status_t::N4IO_ERR_INVALID_ARGUMENT),
+            ("{\"max_row\":1}", n4io_status_t::N4IO_ERR_INVALID_ARGUMENT),
+        ] {
+            let limits = CString::new(limits).unwrap();
+            let mut out = std::ptr::null_mut();
+            let status = n4io_load_summary_with_limits(
+                ctx,
+                input.as_ptr(),
+                std::ptr::null(),
+                limits.as_ptr(),
+                &mut out,
+            );
+            assert_eq!(status, expected, "{}", last_error(ctx));
+            if status == n4io_status_t::N4IO_OK {
+                assert_eq!(
+                    CStr::from_ptr(out).to_str().unwrap(),
+                    old_result.as_deref().unwrap()
+                );
+                n4io_string_free(out);
+            } else {
+                assert!(out.is_null());
+                assert!(!last_error(ctx).is_empty());
+            }
+        }
+        n4io_context_destroy(ctx);
     }
 }
 
@@ -66,9 +107,10 @@ fn abi_compatibility_matrix() {
     assert_eq!(n4io_check_abi_compatibility(0, 0), n4io_status_t::N4IO_OK);
     assert_eq!(n4io_check_abi_compatibility(0, 1), n4io_status_t::N4IO_OK);
     assert_eq!(n4io_check_abi_compatibility(0, 2), n4io_status_t::N4IO_OK);
+    assert_eq!(n4io_check_abi_compatibility(0, 3), n4io_status_t::N4IO_OK);
     // header wants a newer minor than the library exposes
     assert_eq!(
-        n4io_check_abi_compatibility(0, 3),
+        n4io_check_abi_compatibility(0, 4),
         n4io_status_t::N4IO_ERR_VERSION_INCOMPATIBLE
     );
     // major mismatch

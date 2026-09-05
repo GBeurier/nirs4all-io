@@ -30,7 +30,10 @@ use serde_json::{Map, Value};
 
 use super::folds::Fold;
 use super::frame::{Cell, Column, Frame, Matrix};
-use super::join::{concat_features, concat_samples, join_tables, merge_by_key};
+use super::join::{
+    concat_features_with_limits, concat_samples_with_limits, join_tables_with_limits,
+    merge_by_key_with_limits,
+};
 use super::loaders::{
     apply_na_policy, effective_params, read_table_bytes, read_table_bytes_with_limits,
     TabularReadLimits,
@@ -510,8 +513,13 @@ fn frame_from_source(
             Some(limits) => read_table_bytes_with_limits(bytes, params, limits),
             None => read_table_bytes(bytes, params),
         },
-        SourcePayload::Frame(frame) => frame_with_params(frame, params),
-        SourcePayload::Records(records) => records_to_frame(records, params),
+        SourcePayload::Frame(frame) => {
+            if let Some(limits) = tabular_limits {
+                limits.check_shape(frame.n_rows as u64, frame.columns.len() as u64)?;
+            }
+            frame_with_params(frame, params)
+        }
+        SourcePayload::Records(records) => records_to_frame(records, params, tabular_limits),
     }
 }
 
@@ -585,12 +593,17 @@ fn load_source_frame_mem(
         .collect();
     let (df, origins): (Frame, Option<Vec<String>>) = match source.merge {
         MergeMode::ConcatSamples => {
-            let (df, origins, a) = concat_samples(&frames, &names);
+            let (df, origins, a) = concat_samples_with_limits(&frames, &names, tabular_limits)?;
             audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
             (df, Some(origins))
         }
         MergeMode::ConcatFeatures => {
-            let (df, a) = concat_features(&frames, &names, key_list(&source.key).as_deref())?;
+            let (df, a) = concat_features_with_limits(
+                &frames,
+                &names,
+                key_list(&source.key).as_deref(),
+                tabular_limits,
+            )?;
             audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
             (df, None)
         }
@@ -601,7 +614,13 @@ fn load_source_frame_mem(
                     source.id
                 ))
             })?;
-            let (df, a) = merge_by_key(&frames, &names, &key, Coverage::Complete)?;
+            let (df, a) = merge_by_key_with_limits(
+                &frames,
+                &names,
+                &key,
+                Coverage::Complete,
+                tabular_limits,
+            )?;
             audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
             (df, None)
         }
@@ -627,7 +646,11 @@ fn load_source_frame_mem(
 ///   unchanged. The formats-layer `row_index` provenance counter is dropped: it
 ///   carries no dataset meaning and its numeric "0","1",… cells would otherwise
 ///   be picked up as a phantom feature by the `auto` features selector.
-fn records_to_frame(records: &[Value], params: &LoadingParams) -> Result<Frame, SpecError> {
+fn records_to_frame(
+    records: &[Value],
+    params: &LoadingParams,
+    limits: Option<TabularReadLimits>,
+) -> Result<Frame, SpecError> {
     if records.is_empty() {
         return Ok(Frame {
             columns: vec![],
@@ -668,6 +691,21 @@ fn records_to_frame(records: &[Value], params: &LoadingParams) -> Result<Frame, 
         break;
     }
     let n_features = feature_headers.len();
+    if let Some(limits) = limits {
+        let extra_columns: HashSet<_> = records
+            .iter()
+            .flat_map(|record| {
+                ["targets", "metadata"].into_iter().flat_map(move |key| {
+                    record
+                        .get(key)
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flat_map(move |values| values.keys().map(move |name| (key, name)))
+                })
+            })
+            .collect();
+        limits.check_shape(n as u64, (n_features + extra_columns.len()) as u64)?;
+    }
 
     // Feature columns (one per axis position): coerce each record's signal row.
     let mut feature_cells: Vec<Vec<Cell>> = vec![Vec::with_capacity(n); n_features];
@@ -1105,7 +1143,7 @@ fn read_variation_frame_mem(
         .collect::<Result<_, _>>()?;
     if frames.len() > 1 {
         let names: Vec<String> = (0..frames.len()).map(|i| i.to_string()).collect();
-        Ok(concat_samples(&frames, &names).0)
+        Ok(concat_samples_with_limits(&frames, &names, tabular_limits)?.0)
     } else {
         Ok(frames.into_iter().next().unwrap())
     }
@@ -1190,8 +1228,8 @@ pub fn assemble_in_memory(
 }
 
 /// Assemble in-memory sources while applying parser budgets to every tabular
-/// [`SourcePayload::Bytes`] source. Other payload kinds are already structured
-/// and are unchanged. Passing `None` is identical to [`assemble_in_memory`].
+/// byte source and shape budgets before structured-frame and merge/join
+/// allocations. Passing `None` is identical to [`assemble_in_memory`].
 pub fn assemble_in_memory_with_tabular_limits(
     spec: &DatasetSpec,
     sources: &[InMemorySource],
@@ -1263,13 +1301,24 @@ pub fn assemble_in_memory_with_tabular_limits(
                     t.partition.as_deref() == Some(part) || t.kind == SourceKind::Lookup.value()
                 })
                 .collect();
-            let (block, _) =
-                assemble_block(&part_tables, spec, &mut audits, &mut assembled.warnings)?;
+            let (block, _) = assemble_block(
+                &part_tables,
+                spec,
+                &mut audits,
+                &mut assembled.warnings,
+                tabular_limits,
+            )?;
             assembled.blocks.insert(part.clone(), block);
         }
     } else {
         let all: IndexMap<&String, &SourceTable> = tables.iter().collect();
-        let (block, combined) = assemble_block(&all, spec, &mut audits, &mut assembled.warnings)?;
+        let (block, combined) = assemble_block(
+            &all,
+            spec,
+            &mut audits,
+            &mut assembled.warnings,
+            tabular_limits,
+        )?;
         if spec.partitions.is_none() {
             assembled.blocks.insert("train".into(), block);
         } else {
@@ -1285,17 +1334,23 @@ pub fn assemble_in_memory_with_tabular_limits(
     Ok(assembled)
 }
 
-fn row_align(combined: &Frame, t: &SourceTable, primary_id: &str) -> Result<Frame, SpecError> {
+fn row_align(
+    combined: &Frame,
+    t: &SourceTable,
+    primary_id: &str,
+    limits: Option<TabularReadLimits>,
+) -> Result<Frame, SpecError> {
     if t.df.n_rows != combined.n_rows {
         return Err(SpecError::new(format!(
             "source '{}' ({} rows) is not row-aligned with '{primary_id}' ({} rows); supply a join key",
             t.source_id, t.df.n_rows, combined.n_rows
         )));
     }
-    let (merged, _) = concat_features(
+    let (merged, _) = concat_features_with_limits(
         &[combined.clone(), t.df.clone()],
         &[primary_id.to_string(), t.source_id.clone()],
         None,
+        limits,
     )?;
     Ok(merged)
 }
@@ -1306,6 +1361,7 @@ fn join_onto(
     t: &SourceTable,
     audits: &mut Vec<Value>,
     warnings: &mut Vec<String>,
+    limits: Option<TabularReadLimits>,
 ) -> Result<Frame, SpecError> {
     if let Some(j) = &t.join {
         let left_on = key_list(&j.left_on);
@@ -1321,7 +1377,7 @@ fn join_onto(
                 )));
             }
             let left_name = j.left.clone().unwrap_or_else(|| primary.source_id.clone());
-            let (out, audit) = join_tables(
+            let (out, audit) = join_tables_with_limits(
                 combined,
                 &t.df,
                 left_on,
@@ -1330,13 +1386,14 @@ fn join_onto(
                 j.coverage,
                 &left_name,
                 &t.source_id,
+                limits,
             )?;
             audits.push(serde_json::json!({"join": audit.operation, "dropped": audit.dropped_rows.len(), "warnings": audit.warnings}));
             warnings.extend(audit.warnings);
             return Ok(out);
         }
         if j.cardinality == Cardinality::OneToOne {
-            return row_align(combined, t, &primary.source_id);
+            return row_align(combined, t, &primary.source_id, limits);
         }
         return Err(SpecError::new(format!(
             "source '{}': {} join needs explicit left_on/right_on",
@@ -1348,7 +1405,7 @@ fn join_onto(
     if let (Some(lkeys), Some(rkeys)) = (&primary.key, &t.key) {
         if lkeys.iter().all(|c| combined.has_column(c)) && rkeys.iter().all(|c| t.df.has_column(c))
         {
-            let (out, audit) = join_tables(
+            let (out, audit) = join_tables_with_limits(
                 combined,
                 &t.df,
                 lkeys,
@@ -1357,12 +1414,13 @@ fn join_onto(
                 Coverage::Complete,
                 &primary.source_id,
                 &t.source_id,
+                limits,
             )?;
             warnings.extend(audit.warnings);
             return Ok(out);
         }
     }
-    row_align(combined, t, &primary.source_id)
+    row_align(combined, t, &primary.source_id, limits)
 }
 
 /// column -> (role, owning_source_id), mirroring `_collect_roles` verbatim.
@@ -1426,6 +1484,7 @@ fn assemble_block(
     spec: &DatasetSpec,
     audits: &mut Vec<Value>,
     warnings: &mut Vec<String>,
+    limits: Option<TabularReadLimits>,
 ) -> Result<(PartitionBlock, Frame), SpecError> {
     let feature_tables: Vec<&SourceTable> = tables
         .values()
@@ -1441,7 +1500,7 @@ fn assemble_block(
         if t.source_id == primary.source_id {
             continue;
         }
-        combined = join_onto(&combined, primary, t, audits, warnings)?;
+        combined = join_onto(&combined, primary, t, audits, warnings, limits)?;
     }
 
     let role_cols = collect_roles(&combined, tables);
@@ -2034,7 +2093,7 @@ mod tests {
             })
         };
         let records = vec![mk([0.40, 0.41, 0.42], 0), mk([0.50, 0.51, 0.52], 1)];
-        let frame = records_to_frame(&records, &LoadingParams::default()).unwrap();
+        let frame = records_to_frame(&records, &LoadingParams::default(), None).unwrap();
         let names = frame.column_names();
         assert!(
             !names.iter().any(|c| c == "row_index"),

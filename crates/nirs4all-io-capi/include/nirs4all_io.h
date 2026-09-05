@@ -113,6 +113,18 @@ enum n4io_status_t n4io_load_summary(struct n4io_context_t *ctx,
                                      const char *conventions_json,
                                      char **out);
 
+// Materialize with a host-selected limits JSON object, or explicit JSON string
+// `"unlimited"` for trusted inputs. NULL selects the documented defaults.
+// Limits are not read from the DatasetSpec and do not change its fingerprint.
+//
+// # Safety
+// All non-NULL pointers must be valid for the call; `out` writable.
+enum n4io_status_t n4io_load_summary_with_limits(struct n4io_context_t *ctx,
+                                                 const char *input_json,
+                                                 const char *conventions_json,
+                                                 const char *limits_json,
+                                                 char **out);
+
 // Validate a `DatasetSpec` JSON. Returns `N4IO_OK` if valid, else
 // `N4IO_ERR_SPEC` with the aggregate message in the context error buffer.
 //
