@@ -2,7 +2,7 @@
 [package]
 name = "nirs4all-io-py"
 description = "pyo3/maturin Python binding for nirs4all-io (infer / to_spec / validate / load). Excluded from the cargo workspace; built with maturin."
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 license = "CECILL-2.1 OR AGPL-3.0-or-later"
 authors = ["Gregory Beurier <gregory.beurier@cirad.fr>"]

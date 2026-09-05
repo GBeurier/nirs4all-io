@@ -16,7 +16,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 # Rust crates are dual-licensed because they port nirs4all-derived logic
 # (D-R5); see COPY_PROVENANCE.md.
@@ -31,8 +31,8 @@ readme = "README.md"
 # A `version` is REQUIRED for crates.io publishing: cargo strips the `path` at
 # publish time and resolves the dep from crates.io via this version. It MUST
 # track [workspace.package] version — scripts/bump_version.sh keeps it in sync.
-nirs4all-io-core = { path = "crates/nirs4all-io-core", version = "0.1.17" }
-nirs4all-io = { path = "crates/nirs4all-io", version = "0.1.17" }
+nirs4all-io-core = { path = "crates/nirs4all-io-core", version = "0.1.18" }
+nirs4all-io = { path = "crates/nirs4all-io", version = "0.1.18" }
 # DATA-002 consumes the paired 0.2.11 provider surface. 0.2.11 is qualified
 # from the exact sibling candidate until it is published; keep Cargo.lock on
 # the last registry release rather than manufacturing a release lock entry.
