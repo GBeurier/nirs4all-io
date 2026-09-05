@@ -202,9 +202,10 @@ class DatasetPlan(dict):
 
     def accept(self, **overrides: Any) -> DatasetSpec:
         """Return a validated copy of the resolved spec with explicit overrides."""
-        if not isinstance(self.get("resolved_spec"), dict):
+        spec = self.resolved_spec
+        if spec is None:
             raise ValueError("plan has no resolved_spec")
-        return to_spec({**self.resolved_spec, **overrides})
+        return to_spec({**spec, **overrides})
 
     @property
     def overall_score(self) -> float | None:
