@@ -30,6 +30,29 @@ def _frame(meta: dict) -> pd.DataFrame:
     return pd.DataFrame({c["name"]: c["values"] for c in meta["columns"]})
 
 
+def _decode_targets(y: np.ndarray, headers: list[str], categorical: dict) -> np.ndarray:
+    """Restore categorical labels from the assembled wire's explicit codebooks."""
+    if not categorical:
+        return y
+    restored = y.astype(object)
+    for index, header in enumerate(headers):
+        if header not in categorical:
+            continue
+        categories = categorical[header].get("categories")
+        codes = y[:, index]
+        if (
+            not isinstance(categories, list)
+            or not all(isinstance(label, str) for label in categories)
+            or not np.all(np.isfinite(codes))
+            or not np.all(codes == np.floor(codes))
+            or np.any(codes < 0)
+            or np.any(codes >= len(categories))
+        ):
+            raise ValueError(f"Invalid categorical target codebook for {header!r}")
+        restored[:, index] = np.asarray(categories, dtype=object)[codes.astype(np.intp)]
+    return restored
+
+
 def _one_or_list(values: list[Any]) -> Any:
     return values[0] if len(values) == 1 else values
 
@@ -68,7 +91,7 @@ def to_spectrodataset(full: dict, *, spectro_dataset_cls: type | None = None) ->
             for proc in procs:
                 accumulated[src_idx].setdefault(proc["name"], []).append(_matrix(proc["matrix"]))
         if block["y"] is not None:
-            ds.add_targets(_matrix(block["y"]))
+            ds.add_targets(_decode_targets(_matrix(block["y"]), block["y_headers"], block["y_categorical"]))
         meta_df = _frame(block["metadata"]) if block["metadata"] is not None else None
         if block["weights"] is not None:
             if meta_df is None:

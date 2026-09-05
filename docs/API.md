@@ -244,3 +244,34 @@ def load_dataset(user_input):
 ```
 
 See `REPLUG.md` for the recommended adoption sequence.
+# Native Python input adapters
+
+The production Python binding accepts NumPy `X`, `(X, y)`, `(X, y, split)` and
+`{"X": X, "y": y, "metadata": frame}`. Arrays are transported as typed frames to
+the existing Rust in-memory assembler; the binding does not implement a second
+join or partition engine. Split labels are explicitly `train`, `test` or
+`predict`, exactly one per row; no random split is inferred. X-only input retains
+the historical `predict` partition. Missing array values remain missing without
+dropping observations or features. Shape and byte limits are admitted before
+array-to-list conversion and checked again at the native transport entry.
+Both SpectroDataset adapters decode the assembled target codebooks before
+delegating numeric label conversion to the modelling library. Raw text labels
+and their meaning therefore survive partition-local category ordering; invalid
+codes are rejected, not silently reinterpreted as numeric regression targets.
+
+YAML configuration files in the Python binding use PyYAML's safe YAML 1.1
+loader, then the same native normalizer, validator and assembler as JSON. Paths
+are relative to the config file unless `base_dir` overrides it. Config reads
+count toward the host's aggregate input budget. Default YAML config admission
+is 2 MiB, depth 64 and 100,000 expanded nodes; explicit host `max_file_bytes` can
+raise the byte cap. Cyclic aliases, excessive alias expansion, unsafe tags and
+non-JSON values are rejected before native conversion. This Python-owned YAML
+shim does **not** imply YAML-file support in the Rust CLI or C ABI.
+
+`DatasetPlan` retains its JSON mapping surface and exposes historical decision
+attributes (`plan.structure.value`, `plan.task_type.score`), `calibration`,
+`to_dict()` and `accept(**overrides)`. `load(plan)` materializes only the resolved
+specification, not the plan's scored decision dictionaries. `infer(hints=None)`
+and empty mappings work consistently. Non-empty `hints` were dormant in the
+oracle and are now explicitly rejected before input reads in both Python
+surfaces; edit/review the resolved spec instead of assuming hints were applied.

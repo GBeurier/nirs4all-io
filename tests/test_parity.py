@@ -73,3 +73,18 @@ def test_parity_classification_task_detection(tmp_path):
     ref = DatasetConfigs(dict(cfg)).get_dataset_at(0)
     mine = nio.load(dict(cfg), target="spectrodataset")
     assert ref.task_type.value == mine.task_type.value  # both -> multiclass_classification
+
+
+def test_categorical_labels_survive_partition_local_codebooks(tmp_path):
+    import nirs4all_io as nio
+
+    for part, labels in (("cal", ["b", "a", "b"]), ("val", ["a", "b", "a"])):
+        _write(tmp_path / f"X{part}.csv", pd.DataFrame({"x": [1.5, 2.5, 3.5]}))
+        _write(tmp_path / f"Y{part}.csv", pd.DataFrame({"class": labels}))
+    ds = nio.load({
+        "train_x": str(tmp_path / "Xcal.csv"), "train_y": str(tmp_path / "Ycal.csv"),
+        "test_x": str(tmp_path / "Xval.csv"), "test_y": str(tmp_path / "Yval.csv"),
+        "global_params": {"has_header": True, "delimiter": ";"},
+    }, target="spectrodataset")
+    np.testing.assert_array_equal(ds.y({"y": "raw"}).ravel(), ["b", "a", "b", "a", "b", "a"])
+    np.testing.assert_array_equal(ds.y({"partition": "test"}).ravel(), [0, 1, 0])

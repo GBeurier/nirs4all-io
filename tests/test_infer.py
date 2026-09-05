@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import nirs4all_io as nio
 from nirs4all_io.infer import describe, detect_signal_type, detect_task_type
@@ -12,6 +13,11 @@ from nirs4all_io.infer import describe, detect_signal_type, detect_task_type
 
 def _csv(path, df, sep=";"):
     df.to_csv(path, sep=sep, index=False)
+
+
+def test_dormant_hints_do_not_silently_claim_inference_constraints(tmp_path):
+    with pytest.raises(ValueError, match="Non-empty"):
+        nio.infer(tmp_path / "missing", hints={"task_type": "regression"})
 
 
 # --------------------------------------------------------------------------- #

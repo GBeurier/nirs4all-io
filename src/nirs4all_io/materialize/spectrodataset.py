@@ -28,6 +28,29 @@ _PARTITION_ORDER = ("train", "test", "val", "predict")
 _WEIGHT_COL = "__sample_weight__"
 
 
+def _decode_targets(y: np.ndarray, headers: list[str], categorical: dict) -> np.ndarray:
+    """Restore categorical labels from the assembled wire's explicit codebooks."""
+    if not categorical:
+        return y
+    restored = y.astype(object)
+    for index, header in enumerate(headers):
+        if header not in categorical:
+            continue
+        categories = categorical[header].get("categories")
+        codes = y[:, index]
+        if (
+            not isinstance(categories, list)
+            or not all(isinstance(label, str) for label in categories)
+            or not np.all(np.isfinite(codes))
+            or not np.all(codes == np.floor(codes))
+            or np.any(codes < 0)
+            or np.any(codes >= len(categories))
+        ):
+            raise ValueError(f"Invalid categorical target codebook for {header!r}")
+        restored[:, index] = np.asarray(categories, dtype=object)[codes.astype(np.intp)]
+    return restored
+
+
 def _one_or_list(values: list[Any]) -> Any:
     return values[0] if len(values) == 1 else values
 
@@ -66,7 +89,7 @@ def to_spectrodataset(assembled: AssembledDataset, *, spectro_dataset_cls: type 
             for name, arr in src_procs:
                 accumulated_processings[src_idx].setdefault(name, []).append(arr)
         if block.y is not None:
-            ds.add_targets(block.y)
+            ds.add_targets(_decode_targets(block.y, block.y_headers, block.y_categorical))
         # Augment metadata with the weights column if present; create an
         # otherwise-empty metadata frame just to carry the weights when no
         # other metadata was declared.

@@ -14,7 +14,7 @@ dynamic = ["version"]
 # numpy/pandas back the SpectroDataset adapter (full-array reconstruction). They
 # are NOT nirs4all — the import-boundary test still holds. nirs4all itself is a
 # lazy, call-time import inside the adapter only.
-dependencies = ["numpy>=1.23", "pandas>=1.5"]
+dependencies = ["numpy>=1.23", "pandas>=1.5", "PyYAML>=6.0"]
 
 [tool.maturin]
 # Mixed layout: the Rust extension is `nirs4all_io._native`; the Python package
