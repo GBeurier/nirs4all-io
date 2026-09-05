@@ -616,10 +616,11 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "bytes",
  "cap-std",
  "csv",
  "flate2",
@@ -638,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-capi"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "nirs4all-io",
  "serde_json",
@@ -646,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-core"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "csv",
  "indexmap",
