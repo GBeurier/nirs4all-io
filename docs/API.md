@@ -254,6 +254,8 @@ join or partition engine. Split labels are explicitly `train`, `test` or
 the historical `predict` partition. Missing array values remain missing without
 dropping observations or features. Shape and byte limits are admitted before
 array-to-list conversion and checked again at the native transport entry.
+Infinite values fail explicitly because the JSON dataset wire cannot represent
+them; they are never silently replaced by missing values.
 Both SpectroDataset adapters decode the assembled target codebooks before
 delegating numeric label conversion to the modelling library. Raw text labels
 and their meaning therefore survive partition-local category ordering; invalid
