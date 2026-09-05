@@ -413,6 +413,77 @@ mod tests {
     }
 
     #[test]
+    fn large_integer_keys_align_targets_exactly_in_composite_joins() {
+        let ids = [1_i64 << 53, (1_i64 << 53) + 1, i64::MAX, i64::MIN];
+        let left = Frame::from_columns(vec![col("id", &ids), col("batch", &[1, 1, 1, 1])], "text");
+        let right = Frame::from_columns(
+            vec![
+                col("id", &[ids[3], ids[2], ids[1], ids[0]]),
+                col("batch", &[1, 1, 1, 1]),
+                col("target", &[40, 30, 20, 10]),
+            ],
+            "text",
+        );
+        assert!(!left.has_duplicate_keys(&["id".into()]));
+        assert_eq!(left.column("id").unwrap().nunique_with_na(), 4);
+        let (joined, audit) = join_tables(
+            &left,
+            &right,
+            &["id".into(), "batch".into()],
+            &["id".into(), "batch".into()],
+            Cardinality::OneToOne,
+            Coverage::Complete,
+            "left",
+            "right",
+        )
+        .unwrap();
+        assert_eq!(audit.n_matched, 4);
+        assert_eq!(
+            joined.column("target").unwrap().values,
+            vec![Cell::Int(10), Cell::Int(20), Cell::Int(30), Cell::Int(40)]
+        );
+    }
+
+    #[test]
+    fn distinct_large_ids_never_satisfy_complete_coverage() {
+        let left = Frame::from_columns(vec![col("id", &[1_i64 << 53])], "text");
+        let right = Frame::from_columns(vec![col("id", &[(1_i64 << 53) + 1])], "text");
+        let error = join_tables(
+            &left,
+            &right,
+            &["id".into()],
+            &["id".into()],
+            Cardinality::OneToOne,
+            Coverage::Complete,
+            "left",
+            "right",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("coverage 'complete'"));
+    }
+
+    #[test]
+    fn signed_zero_joins_and_duplicates_have_numeric_semantics() {
+        let left = Frame::from_columns(vec![fcol("id", &[-0.0])], "text");
+        let right = Frame::from_columns(vec![fcol("id", &[0.0])], "text");
+        let (_, audit) = join_tables(
+            &left,
+            &right,
+            &["id".into()],
+            &["id".into()],
+            Cardinality::OneToOne,
+            Coverage::Complete,
+            "left",
+            "right",
+        )
+        .unwrap();
+        assert_eq!(audit.n_matched, 1);
+        let duplicate = Frame::from_columns(vec![fcol("id", &[0.0, -0.0])], "text");
+        assert!(duplicate.has_duplicate_keys(&["id".into()]));
+        assert_eq!(duplicate.column("id").unwrap().nunique_with_na(), 1);
+    }
+
+    #[test]
     fn m1_lookup_join_broadcasts() {
         // x.site in {S1,S2,S1}; lookup sites unique -> region broadcast.
         let x = Frame::from_columns(

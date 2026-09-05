@@ -15,13 +15,35 @@ has **no runtime dependency on `nirs4all`** — the only touch-point is a lazy
 import of the `SpectroDataset` class at materialization time.
 
 ```{note}
-The current published wheel reads the **CSV family** of tabular inputs; the
-vendor-format reader path (delegated to `nirs4all-formats`, never re-parsed
-here) and additional tabular backends (numpy / Parquet / Excel) land with the
-broader load path.
+The native wheel reads **CSV-family and Parquet** files. Generic gzip/ZIP
+inputs unwrap tabular bytes; they are not a universal vendor-file adapter.
+Decoded vendor records are accepted by the explicit in-memory Rust/WASM
+surface and must come from `nirs4all-formats`. Raw NumPy/Excel inputs and the
+Python development oracle have different capabilities; see the API surface
+matrix below. Native `load()` returns a summary by default, not the oracle's
+`SpectroDataset` default.
 ```
 
 ## The pipeline
+
+### Input and output surfaces
+
+| Entry point | Inputs | Output |
+| --- | --- | --- |
+| Native Python wheel / Rust facade / CLI | CSV-family or Parquet paths, file lists, directories, explicit specs; gzip/ZIP tabular input | Assembled summary; Python also full arrays or lazy `SpectroDataset` |
+| C ABI / R `load_summary` | Same filesystem facade through JSON | Assembled summary JSON |
+| Rust core / WASM assembly | Named byte buffers and explicitly decoded records | Assembled dataset; no filesystem access |
+| Python development oracle (`src/nirs4all_io`) | Python loader inputs including arrays and optional tabular backends | `SpectroDataset` by default, `target="assembled"` for the oracle object |
+
+Integer join/group keys retain exact i64 identity, including beyond 2^53.
+Exactly integral in-range floats match integers; `0.0` and `-0.0` match.
+Strings and booleans keep their distinct key types. Missing keys never join.
+This compares sample identities, not rounded spectral measurements.
+
+The generic filesystem facade does not yet provide the confined adapter's
+resource guarantees. Application imports should use the Rust role-tagged
+adapter with explicit read/shape budgets; generic compressed inputs remain a
+trusted-input surface pending the common-budget correction.
 
 Every input flows through the same four stages:
 
