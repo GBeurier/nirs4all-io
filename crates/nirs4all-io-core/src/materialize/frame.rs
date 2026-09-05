@@ -53,13 +53,9 @@ impl Cell {
     }
     /// A hashable identity for `nunique`/grouping (pandas: all NaN are one group).
     fn group_key(&self) -> GroupKey {
-        match self {
-            Cell::Bool(b) => GroupKey::Bool(*b),
-            Cell::Int(i) => GroupKey::Num((*i as f64).to_bits()),
-            Cell::Float(f) if f.is_nan() => GroupKey::Na,
-            Cell::Float(f) => GroupKey::Num(f.to_bits()),
-            Cell::Str(s) => GroupKey::Str(s.clone()),
-            Cell::Na => GroupKey::Na,
+        match self.join_key() {
+            Some(key) => GroupKey::Value(key),
+            None => GroupKey::Na,
         }
     }
 
@@ -68,8 +64,15 @@ impl Cell {
     pub fn join_key(&self) -> Option<JoinKey> {
         match self {
             Cell::Bool(b) => Some(JoinKey::Bool(*b)),
-            Cell::Int(i) => Some(JoinKey::Num((*i as f64).to_bits())),
+            Cell::Int(i) => Some(JoinKey::Int(*i)),
             Cell::Float(f) if f.is_nan() => None,
+            // The upper bound is exclusive: i64::MAX rounds up to 2^63 in
+            // f64. A saturating cast must never equate that float with MAX.
+            Cell::Float(f)
+                if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f < -(i64::MIN as f64) =>
+            {
+                Some(JoinKey::Int(*f as i64))
+            }
             Cell::Float(f) => Some(JoinKey::Num(f.to_bits())),
             Cell::Str(s) => Some(JoinKey::Str(s.clone())),
             Cell::Na => None,
@@ -77,20 +80,79 @@ impl Cell {
     }
 }
 
-/// A hashable join key (numeric values unified by f64 bits; strings verbatim).
+/// Exact numeric identity: integral f64 values within i64 unify with integers;
+/// other floats retain their bits. Both signed zeros represent integer zero.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JoinKey {
     Bool(bool),
+    Int(i64),
     Num(u64),
     Str(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum GroupKey {
-    Bool(bool),
-    Num(u64),
-    Str(String),
+    Value(JoinKey),
     Na,
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn integer_identity_is_exact_at_float_and_i64_boundaries() {
+        for integer in [
+            i64::MIN,
+            i64::MIN + 1,
+            -(1_i64 << 53) - 1,
+            (1_i64 << 53) - 1,
+            1_i64 << 53,
+            i64::MAX - 1,
+        ] {
+            assert_ne!(
+                Cell::Int(integer).join_key(),
+                Cell::Int(integer + 1).join_key()
+            );
+            assert_ne!(
+                Cell::Int(integer).group_key(),
+                Cell::Int(integer + 1).group_key()
+            );
+        }
+        assert_ne!(
+            Cell::Int(i64::MAX).join_key(),
+            Cell::Float(i64::MAX as f64).join_key()
+        );
+        assert_ne!(
+            Cell::Int((1_i64 << 53) + 1).join_key(),
+            Cell::Float((1_i64 << 53) as f64).join_key()
+        );
+    }
+
+    #[test]
+    fn exactly_equal_numeric_keys_unify_without_losing_other_types() {
+        for integer in [i64::MIN, -(1_i64 << 53), -1, 0, 1, 1_i64 << 53] {
+            assert_eq!(
+                Cell::Int(integer).join_key(),
+                Cell::Float(integer as f64).join_key()
+            );
+            assert_eq!(
+                Cell::Int(integer).group_key(),
+                Cell::Float(integer as f64).group_key()
+            );
+        }
+        assert_eq!(Cell::Float(-0.0).join_key(), Cell::Float(0.0).join_key());
+        assert_ne!(Cell::Float(1.5).join_key(), Cell::Int(1).join_key());
+        assert_ne!(
+            Cell::Float(f64::INFINITY).join_key(),
+            Cell::Int(i64::MAX).join_key()
+        );
+        assert_ne!(Cell::Str("1".into()).join_key(), Cell::Int(1).join_key());
+        assert_ne!(Cell::Bool(true).join_key(), Cell::Int(1).join_key());
+        assert_eq!(Cell::Float(f64::NAN).join_key(), None);
+        assert_eq!(Cell::Na.join_key(), None);
+        assert_eq!(Cell::Float(f64::NAN).group_key(), Cell::Na.group_key());
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

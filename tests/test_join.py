@@ -126,6 +126,31 @@ def test_composite_key_join():
     assert list(out["w"]) == [100, 200]
 
 
+def test_large_integer_identity_aligns_composite_keys_without_rounding():
+    ids = [2**53, 2**53 + 1, 2**63 - 1, -(2**63)]
+    left = pd.DataFrame({"id": pd.Series(ids, dtype="int64"), "batch": [1] * 4})
+    right = pd.DataFrame({"id": pd.Series(ids[::-1], dtype="int64"), "batch": [1] * 4, "target": [40, 30, 20, 10]})
+    out, audit = join_tables(left, right, left_on=["id", "batch"], right_on=["id", "batch"], cardinality=Cardinality.ONE_TO_ONE, coverage=Coverage.COMPLETE)
+    assert list(out["target"]) == [10, 20, 30, 40]
+    assert audit.n_matched == 4
+    assert left.id.nunique() == 4
+
+
+def test_distinct_large_integer_ids_do_not_satisfy_coverage():
+    left = pd.DataFrame({"id": pd.Series([2**53], dtype="int64")})
+    right = pd.DataFrame({"id": pd.Series([2**53 + 1], dtype="int64")})
+    with pytest.raises(JoinError, match="coverage 'complete'"):
+        join_tables(left, right, left_on="id", right_on="id", cardinality=Cardinality.ONE_TO_ONE, coverage=Coverage.COMPLETE)
+
+
+def test_signed_zero_uses_numeric_join_and_grouping_identity():
+    left = pd.DataFrame({"id": [-0.0]})
+    right = pd.DataFrame({"id": [0.0]})
+    _, audit = join_tables(left, right, left_on="id", right_on="id", cardinality=Cardinality.ONE_TO_ONE, coverage=Coverage.COMPLETE)
+    assert audit.n_matched == 1
+    assert pd.Series([0.0, -0.0]).nunique() == 1
+
+
 def test_merge_by_key_three_frames():
     a = pd.DataFrame({"id": [1, 2, 3], "a": [1, 2, 3]})
     b = pd.DataFrame({"id": [1, 2, 3], "b": [4, 5, 6]})
