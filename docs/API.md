@@ -15,6 +15,18 @@ shapes below are identical across both; some Python accessor spellings differ.
 
 ## Entry points
 
+### Legacy file loading options
+
+For each train/test X, Y and metadata (`*_group`) source, effective options use
+the same precedence: root shorthand < `global_params` < `train_params` or
+`test_params` < the role-specific `train_y_params`, `test_group_params`, etc.
+The last explicitly supplied value wins; `has_header: false` is not a missing
+value. For example, separate headerless target files require their own
+`*_y_params: {has_header: false}` when the feature/global setting has headers.
+These role settings are retained by both native and oracle normalization,
+including when column filters are present. Existing canonical `sources`
+documents retain their explicit source/global parameter contract.
+
 ### Native resource budgets (published wheel and Rust facade)
 
 The native materialization path accepts a **host-owned** `LoadLimits` policy,

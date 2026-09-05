@@ -107,3 +107,23 @@ def test_concat_samples_alias_not_clobbered_for_new_spec():
     d = {"sources": [{"id": "d", "role": "mixed", "input": ["a.csv", "b.csv"], "merge": "concat_samples"}]}
     spec = DatasetSpec.from_dict(normalize_to_spec_dict(d))
     assert spec.sources[0].merge is MergeMode.CONCAT_SAMPLES
+
+
+def test_target_metadata_role_options_override_split_and_keep_global_params():
+    raw = {
+        "train_x": "x.csv", "train_y": "y.csv", "train_group": "m.csv",
+        "test_x": "xt.csv", "test_y": "yt.csv", "test_group": "mt.csv",
+        "global_params": {"delimiter": ";", "has_header": True, "encoding": "utf-8"},
+        "train_params": {"has_header": False, "decimal_separator": ","},
+        "train_y_params": {"delimiter": "|"}, "train_group_params": {"has_header": True},
+        "test_y_params": {"has_header": False}, "test_group_params": {"has_header": False},
+    }
+    normalized = normalize_to_spec_dict(raw)
+    assert normalized["params"] == raw["global_params"]
+    for source in normalized["sources"]:
+        effective = {**normalized["params"], **source.get("params", {})}
+        assert effective["encoding"] == "utf-8"
+        assert effective["has_header"] is (source["id"] in {"train_m", "test_x"})
+        assert effective["delimiter"] == ("|" if source["id"] == "train_y" else ";")
+        if source["id"].startswith("train"):
+            assert effective["decimal_separator"] == ","

@@ -197,6 +197,9 @@ def legacy_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
         anchor = first_feature_id_by_partition.get(partition)
         if y_val is not None:
             ysrc: dict[str, Any] = {"id": f"{partition}_y", "role": "targets", "input": y_val, "partition": partition}
+            params = _merge_params(config.get(f"{partition}_params"), config.get(f"{partition}_y_params"))
+            if params:
+                ysrc["params"] = params
             if y_filter is not None:
                 ysrc["columns"] = [{"role": "targets", "select": y_filter}]
                 ysrc["role"] = "mixed"
@@ -205,6 +208,9 @@ def legacy_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
             sources.append(ysrc)
         if g_val is not None:
             gsrc: dict[str, Any] = {"id": f"{partition}_m", "role": "metadata", "input": g_val, "partition": partition}
+            params = _merge_params(config.get(f"{partition}_params"), config.get(f"{partition}_group_params"))
+            if params:
+                gsrc["params"] = params
             if g_filter is not None:
                 gsrc["columns"] = [{"role": "metadata", "select": g_filter}]
                 gsrc["role"] = "mixed"
