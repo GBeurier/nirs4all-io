@@ -63,10 +63,16 @@ def test_r_configure_uses_disposable_exact_source_copy(tmp_path: Path, monkeypat
         (crate_root / "Cargo.toml").write_text(f"# {crate}\n", encoding="utf-8")
     monkeypatch.setattr(qualification, "ROOT", source)
 
-    package = qualification.prepare_r_source_tree(tmp_path / "work")
+    work = tmp_path / "work"
+    work.mkdir()
+    package = qualification.prepare_r_source_tree(work)
     (package / "configure").write_text("mutated\n", encoding="utf-8")
+    repeated_package = qualification.prepare_r_source_tree(work)
 
     assert (source / "bindings" / "r" / "configure").read_text(encoding="utf-8") == "original\n"
     assert (package / "configure").read_text(encoding="utf-8") == "mutated\n"
+    assert repeated_package != package
+    assert (repeated_package / "configure").read_text(encoding="utf-8") == "original\n"
     for crate in qualification.R_VENDOR_CRATES:
-        assert (tmp_path / "work" / "r-source" / "crates" / crate / "Cargo.toml").is_file()
+        assert (package.parents[1] / "crates" / crate / "Cargo.toml").is_file()
+        assert (repeated_package.parents[1] / "crates" / crate / "Cargo.toml").is_file()

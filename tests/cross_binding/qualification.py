@@ -65,7 +65,7 @@ def prepend_search_path(entry: pathlib.Path, existing: str | None) -> str:
 
 def prepare_r_source_tree(work: pathlib.Path) -> pathlib.Path:
     """Copy the exact R package/vendor inputs before running its mutating configure."""
-    source_root = work / "r-source"
+    source_root = pathlib.Path(tempfile.mkdtemp(prefix="r-source-", dir=work))
     package = source_root / "bindings" / "r"
     package.parent.mkdir(parents=True)
     shutil.copytree(ROOT / "bindings" / "r", package)
