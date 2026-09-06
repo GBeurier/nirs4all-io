@@ -73,6 +73,9 @@ dagml_data_patch=(
   --config "patch.crates-io.dag-ml-data-core.path='${dmd}/crates/dag-ml-data-core'"
   --config "patch.crates-io.dag-ml-data-provider.path='${dmd}/crates/dag-ml-data-provider'"
 )
+# A hosted runner starts with an empty Cargo registry. Populate the dependency
+# closure before asking Cargo to update the isolated lockfile offline.
+cargo fetch -q --manifest-path "${emit_manifest}" "${dagml_data_patch[@]}"
 cargo update -q --manifest-path "${emit_manifest}" -p dag-ml-data \
   --precise "${dmd_version}" --offline "${dagml_data_patch[@]}"
 metadata_json="${work}/emit-metadata.json"

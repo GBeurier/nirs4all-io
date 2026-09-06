@@ -22,5 +22,6 @@ jobs:
           maturin build -m bindings/python/Cargo.toml --interpreter python3 --out dist
       - name: "Install + test (clean runner: only the binding is importable)"
         run: |
-          pip install dist/*.whl
+          # The suite covers optional SpectroDataset and Parquet integration.
+          pip install pytest pyarrow "nirs4all==1.0.0" dist/*.whl
           python -m pytest bindings/python/tests -q
