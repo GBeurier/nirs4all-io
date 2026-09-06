@@ -67,7 +67,9 @@ assert(isstruct(fpl) && isfield(fpl, 'resolved_spec'), 'file-list infer failed')
 
 lsum = nirs4all_io.load_summary(fullfile(corpus, 'train_test'));
 assert(isstruct(lsum) && lsum.assembled_schema_version == 2, 'idiomatic load_summary failed');
-assert(isequal(lsum, nirs4all_io.load_summary(fullfile(corpus, 'train_test'), [], 'unlimited')));
+% JSON null values decode as NaN in Octave; compare them as equal so this
+% checks payload identity rather than IEEE NaN equality semantics.
+assert(isequaln(lsum, nirs4all_io.load_summary(fullfile(corpus, 'train_test'), [], 'unlimited')));
 limited = false;
 try
   nirs4all_io.load_summary(fullfile(corpus, 'train_test'), [], struct('max_file_bytes', 1));
