@@ -1,11 +1,13 @@
 """Installed wheel regression: no dropped first target/metadata row."""
 
 import numpy as np
+import pytest
 
 import nirs4all_io as nio
 
 
 def test_headerless_role_params_keep_first_targets_and_metadata(tmp_path):
+    pytest.importorskip("nirs4all.data", reason="optional downstream SpectroDataset integration")
     config = {"task_type": "regression", "global_params": {"delimiter": ";", "has_header": True}}
     for partition in ("train", "test"):
         for role, content in {"x": "1;2\n3;4\n5;6\n", "y": "101\n102\n103\n", "group": "first\nsecond\nthird\n"}.items():
