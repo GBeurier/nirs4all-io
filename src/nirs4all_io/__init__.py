@@ -20,6 +20,9 @@ from .api import describe_dataset_package, load, to_dataset_package, to_spec
 from .infer import DatasetPlan, describe, infer
 from .materialize.assemble import AssembledDataset
 from .materialize.package import DatasetPackage
+from .multimodal import MultimodalDataset, TensorSource
+from .provider import DataProvider, ProviderBatches
+from .ragged import RaggedSeriesBatch, RaggedSeriesSource
 from .spec import DatasetSpec, SpecError
 
 __all__ = [
@@ -34,5 +37,11 @@ __all__ = [
     "DatasetPlan",
     "AssembledDataset",
     "DatasetPackage",
+    "MultimodalDataset",
+    "TensorSource",
+    "DataProvider",
+    "ProviderBatches",
+    "RaggedSeriesBatch",
+    "RaggedSeriesSource",
     "SpecError",
 ]
