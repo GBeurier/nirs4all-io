@@ -35,6 +35,9 @@ from ._package import (
     RowPositionFallback,
     repr_ids,
 )
+from .multimodal import MultimodalDataset, TensorSource
+from .provider import DataProvider, ProviderBatches
+from .ragged import RaggedSeriesBatch, RaggedSeriesSource
 
 __all__ = [
     "infer",
@@ -47,6 +50,12 @@ __all__ = [
     "DatasetPlan",
     "DatasetSpec",
     "DatasetPackage",
+    "MultimodalDataset",
+    "TensorSource",
+    "DataProvider",
+    "ProviderBatches",
+    "RaggedSeriesBatch",
+    "RaggedSeriesSource",
     "PayloadManifest",
     "PayloadManifestEntry",
     "PayloadStorageKind",

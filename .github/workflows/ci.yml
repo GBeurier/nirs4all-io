@@ -74,7 +74,7 @@ jobs:
           maturin build -m bindings/python/Cargo.toml --interpreter python3 --out dist
       - name: Install and test published Python surface
         run: |
-          # These tests exercise the optional SpectroDataset and Parquet paths;
-          # keep them explicit so the published wheel remains dependency-light.
-          python -m pip install pytest pyarrow "nirs4all==1.0.0" dist/*.whl
+          # SpectroDataset adapter behavior is covered with an injected test
+          # double; downstream integration runs only when nirs4all is present.
+          python -m pip install pytest pyarrow dist/*.whl
           python -m pytest bindings/python/tests -q

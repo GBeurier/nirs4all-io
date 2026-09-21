@@ -41,7 +41,11 @@ only path that imports `nirs4all`.
 
 The repository also carries a pure-Python Phase-1 implementation under
 `src/nirs4all_io/` that is kept as the dev / parity oracle (it is not the
-published wheel). To work on the library and run its test suite — which uses
+published wheel). Its distribution name is deliberately
+`nirs4all-io-oracle`, distinct from the public Rust-backed `nirs4all-io`
+distribution. Both expose the `nirs4all_io` import package and therefore must
+be developed in separate virtual environments. To work on the oracle and run
+its test suite — which uses
 `nirs4all` and `nirs4all-formats` as read-only oracles — install it editable
 with its dev extras:
 
