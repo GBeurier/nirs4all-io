@@ -171,11 +171,12 @@ jobs:
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
             PKG_VER=$(node -p "require('./exact-npm/package/package.json').version")
             RELEASE_TAG="v${PKG_VER}"
-            test "${RELEASE_TAG}" = "v0.1.14"
+            test "${RELEASE_TAG}" = "v0.2.0"
             git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
             git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" HEAD
             git diff --quiet "${RELEASE_TAG}" -- . \
               ':(exclude).github/workflows/release-npm.yml' \
+              ':(exclude)bindings/wasm/Cargo.lock' \
               ':(exclude)scripts/stage_wasm_package.mjs' \
               ':(exclude)bindings/r/Cargo.lock.rust' \
               ':(exclude)bindings/python/COPY_PROVENANCE.md' \
@@ -186,9 +187,9 @@ jobs:
               ':(exclude)crates/nirs4all-io-capi/COPY_PROVENANCE.md' \
               ':(exclude)crates/nirs4all-io-cli/COPY_PROVENANCE.md'
             test "$(sha256sum scripts/stage_wasm_package.mjs | cut -d ' ' -f1)" = \
-              "a820e1b9a98de60b25265d594e405417144004c886106fd5293dfacb20151440"
+              "47e33490dc84c2999e9540a7b2c7968d008d9f05d225100b979e0207b2944049"
             test "$(sha256sum bindings/r/Cargo.lock.rust | cut -d ' ' -f1)" = \
-              "11f33651168d4663d46f2e97e1a25048c2f9d0bdb1e92c5fde4c66a585e9190d"
+              "33d48a22a1be77a000cde2809680800fa3adc6fbcebbb69a443a4862f3bf4064"
             for mirror in \
               bindings/python/COPY_PROVENANCE.md \
               bindings/r/inst/COPY_PROVENANCE.md \
