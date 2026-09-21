@@ -21,3 +21,5 @@ dependencies = ["numpy>=1.23", "pandas>=1.5", "PyYAML>=6.0"]
 # under `python/nirs4all_io` wraps it and adds the lazy SpectroDataset adapter.
 module-name = "nirs4all_io._native"
 python-source = "python"
+# Local interpreter caches must not become distribution contents.
+exclude = ["**/__pycache__/**", "**/*.pyc", "**/*.pyo"]

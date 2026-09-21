@@ -108,6 +108,7 @@ def test_native_bare_convention_gate_covers_oracle_specific_exception_namespace_
 
 
 def test_array_categorical_targets_keep_labels_across_partitions():
+    pytest.importorskip("nirs4all.data", reason="optional downstream SpectroDataset integration")
     x = np.arange(12).reshape(6, 2)
     labels = np.array(["b", "a", "b", "a", "b", "a"])
     split = np.array(["train", "train", "train", "test", "test", "test"])
