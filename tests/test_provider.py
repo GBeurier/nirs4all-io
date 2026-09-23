@@ -200,6 +200,29 @@ def test_batches_are_bounded_independent_views_preserving_masks_and_order():
     np.testing.assert_array_equal(np.concatenate([item.source_presence()["image"] for item in all_batches]), cohort.source_presence()["image"])
 
 
+@pytest.mark.parametrize("ids", [None, [], ["sample-6", "sample-0", "sample-3"]])
+def test_batch_cursor_construction_does_not_copy_the_selected_cohort(ids, monkeypatch):
+    data = provider()
+    cohort = data.materialize()
+    original_take = MultimodalDataset.take
+    materialized = []
+
+    def tracked_take(self, sample_ids):
+        materialized.append(tuple(sample_ids))
+        return original_take(self, sample_ids)
+
+    monkeypatch.setattr(MultimodalDataset, "take", tracked_take)
+    batches = data.batches(2, sample_ids=ids)
+    expected = cohort.sample_ids if ids is None else tuple(ids)
+    assert batches.state_dict()["sample_ids"] == list(expected)
+    assert materialized == []
+    if expected:
+        assert next(batches).sample_ids == expected[:2]
+        assert materialized == [expected[:2]]
+    else:
+        assert list(batches) == [] and materialized == []
+
+
 def test_json_checkpoint_regenerates_once_and_resumes_exact_unconsumed_batches():
     calls = []
 

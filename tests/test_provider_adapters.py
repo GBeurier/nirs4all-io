@@ -9,9 +9,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from nirs4all_io import MultimodalDataset, TensorSource
+from nirs4all_io import MultimodalDataset, RaggedSeriesBatch, RaggedSeriesSource, TensorSource
 from nirs4all_io.provider import DataProvider
-from nirs4all_io.provider_adapters import SklearnProviderAdapter, collate_provider_samples
+from nirs4all_io.provider_adapters import SklearnProviderAdapter, TorchRaggedSeriesBatch, collate_provider_samples
 
 
 def _cohort(*, masked=False, prediction=False, mixed=True, labels=False):
@@ -72,6 +72,22 @@ except ImportError as error:
     assert 'optional PyTorch' in str(error)
 else:
     raise AssertionError('Torch dependency refusal missing')
+"""
+    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
+
+
+def test_torch_ragged_batch_import_does_not_load_torch_or_nirs4all():
+    script = """
+import sys
+class RejectTorch:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'torch' or fullname.startswith('torch.'):
+            raise ImportError('torch deliberately unavailable')
+sys.meta_path.insert(0, RejectTorch())
+from nirs4all_io.provider_adapters import TorchRaggedSeriesBatch
+assert TorchRaggedSeriesBatch.__name__ == 'TorchRaggedSeriesBatch'
+assert 'torch' not in sys.modules
+assert 'nirs4all' not in sys.modules
 """
     subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
 
@@ -230,3 +246,466 @@ def test_torch_tuple_mode_string_labels_and_prediction_only():
 def test_binding_adapter_mirror_is_identical():
     root = Path(__file__).resolve().parents[1]
     assert (root / "src/nirs4all_io/provider_adapters.py").read_bytes() == (root / "bindings/python/python/nirs4all_io/provider_adapters.py").read_bytes()
+
+
+def _ragged_cohort(*, equal_length=False, shifted_time=False, masked=False):
+    ids = ["row-0", "row-1"]
+    times = np.array([0., 1., 2., 4.])
+    if shifted_time:
+        times = 100 + 10 * times
+    return MultimodalDataset(
+        {
+            "nir": TensorSource(np.arange(4).reshape(2, 2), ids, representation_id="signal_1d"),
+            "series": RaggedSeriesSource(np.arange(8, dtype=np.float32).reshape(4, 2), [0, 2 if equal_length else 1, 4], ids,
+                                         time_coordinates=times, channel_names=["one", "two"], time_unit="h", presence_mask=[not masked, True]),
+        }, sample_ids=ids, y=[1., np.nan if masked else 2.], target_mask=[True, not masked], task_type="regression",
+    )
+
+
+@pytest.mark.parametrize("equal_length", [False, True])
+def test_sklearn_named_ragged_keeps_times_and_lengths_without_regenerating(equal_length):
+    first = _ragged_cohort(equal_length=equal_length)
+    provider, calls = _provider(first)
+    provider.materialize()
+    adapter = SklearnProviderAdapter(provider)
+    x, y = adapter.arrays(["row-1", "row-0"])
+    batch = x["series"]
+    expected = first.sources["series"].take(["row-1", "row-0"]).values
+    assert isinstance(batch, RaggedSeriesBatch)
+    assert batch is not expected and not np.shares_memory(batch.values, provider.cohort.sources["series"].values.values)
+    np.testing.assert_array_equal(batch.values, expected.values)
+    np.testing.assert_array_equal(batch.time_coordinates, expected.time_coordinates)
+    np.testing.assert_array_equal(batch.offsets, expected.offsets)
+    assert not batch.values.flags.writeable and not batch.time_coordinates.flags.writeable
+    np.testing.assert_array_equal(y, [2., 1.])
+    changed, _ = SklearnProviderAdapter(_ragged_cohort(equal_length=equal_length, shifted_time=True)).arrays(["row-1", "row-0"])
+    np.testing.assert_array_equal(batch.values, changed["series"].values)
+    assert not np.array_equal(batch.time_coordinates, changed["series"].time_coordinates)
+    singles = list(adapter.batches(1, sample_ids=["row-1", "row-0"]))
+    assert all(isinstance(item[0]["series"], RaggedSeriesBatch) for item in singles)
+    assert singles[0][0]["series"].time_coordinates.tolist() == expected.time_coordinates[:expected.lengths[0]].tolist()
+    assert len(calls) == 1
+
+
+def test_sklearn_ragged_metadata_keeps_both_masks_and_matrix_selection_stays_explicit():
+    cohort = _ragged_cohort(masked=True)
+    adapter = SklearnProviderAdapter(cohort)
+    with pytest.raises(ValueError, match="source masks"):
+        adapter.arrays()
+    item = adapter.arrays(["row-1", "row-0"], return_metadata=True)
+    assert isinstance(item["X"]["series"], RaggedSeriesBatch)
+    assert item["source_masks"]["series"].tolist() == [True, False]
+    assert item["target_mask"].tolist() == [False, True]
+    assert item["sample_ids"] == ("row-1", "row-0")
+    assert item["X"]["series"].lengths.tolist() == [3, 1]
+    with pytest.raises(ValueError, match="rank 2"):
+        SklearnProviderAdapter(cohort, source="series")
+    matrix, y = SklearnProviderAdapter(cohort, source="nir").arrays(["row-0"])
+    np.testing.assert_array_equal(matrix, [[0, 1]])
+    np.testing.assert_array_equal(y, [1.])
+
+
+def test_sklearn_ragged_can_feed_an_explicit_transformer_and_real_estimator():
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import FunctionTransformer
+
+    cohort = _ragged_cohort()
+    x, y = SklearnProviderAdapter(cohort).arrays()
+
+    def summarize(batch):
+        assert isinstance(batch, RaggedSeriesBatch)
+        return np.vstack([batch[index].mean(axis=0) for index in range(len(batch))])
+
+    estimator = make_pipeline(FunctionTransformer(summarize, validate=False), Ridge(alpha=0.3))
+    estimator.fit(x["series"], y)
+    reference = Ridge(alpha=0.3).fit(summarize(cohort.sources["series"].values), y)
+    np.testing.assert_allclose(estimator.predict(x["series"]), reference.predict(summarize(x["series"])))
+
+
+@pytest.mark.parametrize("kind", ["TorchMapDataset", "TorchIterableDataset"])
+@pytest.mark.parametrize("equal_length", [False, True])
+@pytest.mark.parametrize("return_metadata", [False, True])
+def test_torch_ragged_refuses_before_time_coordinates_can_be_discarded(kind, equal_length, return_metadata, monkeypatch):
+    pytest.importorskip("torch")
+    from nirs4all_io import provider_adapters
+
+    def forbid_sample(*args, **kwargs):
+        pytest.fail("ragged data reached Torch sample extraction")
+
+    monkeypatch.setattr(provider_adapters._TorchSamples, "_sample", forbid_sample)
+    for shifted_time in (False, True):
+        provider, calls = _provider(_ragged_cohort(equal_length=equal_length, shifted_time=shifted_time))
+        provider.materialize()
+        for selection in (None, ["row-0"]):
+            with pytest.raises(ValueError, match="ragged sources.*typed collation.*time coordinates"):
+                getattr(provider_adapters, kind)(provider, sample_ids=selection, return_metadata=return_metadata)
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize("kind", ["TorchMapDataset", "TorchIterableDataset"])
+def test_torch_ragged_refuses_even_empty_or_entirely_absent_sources(kind):
+    pytest.importorskip("torch")
+    from nirs4all_io import provider_adapters
+
+    cohort = MultimodalDataset(
+        {"series": RaggedSeriesSource(np.empty((0, 2)), [0], [])},
+        sample_ids=["row-0", "row-1"], source_alignment="left",
+    )
+    for selection in (None, []):
+        with pytest.raises(ValueError, match="ragged sources.*typed collation"):
+            getattr(provider_adapters, kind)(cohort, sample_ids=selection, return_metadata=True)
+
+
+def _packed_cohort(*, with_times=True, prediction=False):
+    ids = ["a", "b", "hidden", "empty", "c"]
+    values = np.arange(16, dtype=np.float32).reshape(8, 2)
+    values[3:5] = np.nan
+    source = RaggedSeriesSource(
+        values, [0, 2, 3, 3, 5, 8], ["c", "a", "empty", "hidden", "b"],
+        time_coordinates=np.array([0., 1.5, 7., 4., 5., 1., 3., 9.]) if with_times else None,
+        channel_names=["temperature", "humidity"], time_unit="h", presence_mask=[True, True, False, False, True],
+    )
+    y = np.arange(10, dtype=np.float64).reshape(5, 2)
+    y[2, 1] = np.nan
+    mask = np.ones((5, 2), dtype=bool)
+    mask[2, 1] = False
+    return MultimodalDataset(
+        {"series": source, "metadata": TensorSource([[float(i), name] for i, name in enumerate(ids)], ids, representation_id="tabular_mixed")},
+        sample_ids=ids, y=None if prediction else y, target_mask=None if prediction else mask,
+        groups=[f"unit-{name}" for name in ids], partitions=["train"] * 3 + ["test"] * 2,
+        task_type="regression",
+    )
+
+
+def _assert_packed_records(batch, cohort):
+    torch = pytest.importorskip("torch")
+    packed = batch["X"]["series"]
+    assert isinstance(packed, TorchRaggedSeriesBatch)
+    rows = [cohort.sample_ids.index(sample_id) for sample_id in batch["sample_id"]]
+    source = cohort.sources["series"]
+    expected = source.values.take_rows(rows)
+    np.testing.assert_array_equal(packed.values.numpy(), expected.values)
+    np.testing.assert_array_equal(packed.offsets.numpy(), expected.offsets)
+    np.testing.assert_array_equal(packed.lengths.numpy(), expected.lengths)
+    np.testing.assert_array_equal(packed.presence_mask.numpy(), source.presence_mask[rows])
+    np.testing.assert_array_equal(packed.presence_mask.numpy(), batch["source_masks"]["series"].numpy())
+    assert packed.values.dtype == torch.float32
+    assert packed.offsets.dtype == packed.lengths.dtype == torch.int64
+    assert packed.presence_mask.dtype == torch.bool
+    assert packed.channel_names == source.channel_names and packed.time_unit == source.time_unit
+    assert len(packed) == len(rows)
+    if expected.time_coordinates is None:
+        assert packed.time_coordinates is None
+    else:
+        assert packed.time_coordinates.dtype == torch.float64
+        np.testing.assert_array_equal(packed.time_coordinates.numpy(), expected.time_coordinates)
+    assert batch["partition"] == cohort.partitions[rows].tolist()
+    assert batch["group"] == cohort.groups[rows].tolist()
+    assert batch["X"]["metadata"] == cohort.sources["metadata"].values[rows].tolist()
+    if cohort.y is None:
+        assert "y" not in batch and "target_mask" not in batch
+    else:
+        np.testing.assert_array_equal(batch["y"].numpy(), cohort.y[rows])
+        np.testing.assert_array_equal(batch["target_mask"].numpy(), cohort.target_mask[rows])
+
+
+@pytest.mark.parametrize("equal_length", [False, True])
+def test_torch_packed_preserves_distinct_times_and_supports_device_only_moves(equal_length):
+    torch = pytest.importorskip("torch")
+    from nirs4all_io.provider_adapters import TorchMapDataset
+
+    outputs = []
+    for shifted in (False, True):
+        cohort = _ragged_cohort(equal_length=equal_length, shifted_time=shifted)
+        dataset = TorchMapDataset(cohort, sample_ids=["row-1", "row-0"], ragged_policy="packed", return_metadata=True)
+        assert isinstance(dataset[0]["X"]["series"], RaggedSeriesSource)
+        item = collate_provider_samples([dataset[0], dataset[1]])
+        packed = item["X"]["series"]
+        expected = dataset.cohort.sources["series"]
+        np.testing.assert_array_equal(packed.values.numpy(), expected.values.values)
+        np.testing.assert_array_equal(packed.time_coordinates.numpy(), expected.time_coordinates)
+        np.testing.assert_array_equal(packed.offsets.numpy(), expected.offsets)
+        assert item["sample_id"] == ["row-1", "row-0"]
+        assert packed.channel_names == ("one", "two") and packed.time_unit == "h"
+        moved = pickle.loads(pickle.dumps(packed)).to(torch.device("cpu"), non_blocking=True)
+        torch.testing.assert_close(moved.values, packed.values)
+        assert moved.values.dtype == torch.float32 and moved.time_coordinates.dtype == torch.float64
+        assert moved.offsets.dtype == moved.lengths.dtype == torch.int64 and moved.presence_mask.dtype == torch.bool
+        meta = packed.to("meta")
+        assert meta.values.device.type == meta.offsets.device.type == meta.time_coordinates.device.type == "meta"
+        assert meta.channel_names == packed.channel_names and meta.time_unit == packed.time_unit
+        with pytest.raises(TypeError):
+            packed.to(torch.float64)
+        outputs.append(packed)
+        packed.values[0, 0] = -99
+        assert dataset.cohort.sources["series"].values.values[0, 0] != -99
+    torch.testing.assert_close(outputs[0].values, outputs[1].values)
+    assert not torch.equal(outputs[0].time_coordinates, outputs[1].time_coordinates)
+
+
+def test_torch_packed_sample_owns_storage_without_an_intermediate_batch(monkeypatch):
+    pytest.importorskip("torch")
+    from nirs4all_io.provider_adapters import TorchMapDataset
+
+    cohort = _packed_cohort()
+    source = cohort.sources["series"]
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("one sample must not allocate an intermediate ragged batch")
+
+    monkeypatch.setattr(type(source.values), "take_rows", forbidden)
+    dataset = TorchMapDataset(cohort, ragged_policy="packed", return_metadata=True)
+    for position, sample_id in enumerate(cohort.sample_ids):
+        sample = dataset[position]
+        row = sample["X"]["series"]
+        begin, end = source.offsets[position:position + 2]
+        assert row.sample_ids == (sample_id,)
+        assert row.offsets.tolist() == [0, end - begin]
+        assert row.presence_mask.tolist() == [source.presence_mask[position]]
+        np.testing.assert_array_equal(row.values.values, source.values[position])
+        np.testing.assert_array_equal(row.time_coordinates, source.time_coordinates[begin:end])
+        assert not np.shares_memory(row.values.values, source.values.values)
+        assert not np.shares_memory(row.time_coordinates, source.time_coordinates)
+        assert not row.values.values.flags.writeable and not row.time_coordinates.flags.writeable
+
+
+@pytest.mark.parametrize("with_times", [False, True])
+@pytest.mark.parametrize("prediction", [False, True])
+def test_torch_packed_keeps_empty_and_hidden_series_and_target_masks(with_times, prediction):
+    torch = pytest.importorskip("torch")
+    from nirs4all_io.provider_adapters import TorchMapDataset
+
+    cohort = _packed_cohort(with_times=with_times, prediction=prediction)
+    dataset = TorchMapDataset(cohort, ragged_policy="packed", return_metadata=True)
+    batch = next(iter(torch.utils.data.DataLoader(dataset, batch_size=5, collate_fn=collate_provider_samples)))
+    _assert_packed_records(batch, cohort)
+    packed = batch["X"]["series"]
+    assert packed.lengths.tolist() == [1, 3, 2, 0, 2]
+    assert packed.presence_mask.tolist() == [True, True, False, False, True]
+    assert torch.isnan(packed.values[4:6]).all()
+    absent = MultimodalDataset({"series": RaggedSeriesSource(np.empty((0, 2), dtype=np.float32), [0], [],
+        time_coordinates=np.empty(0, dtype=np.float64) if with_times else None)}, sample_ids=["x", "y"], source_alignment="left")
+    empty_dataset = TorchMapDataset(absent, ragged_policy="packed", return_metadata=True)
+    empty = collate_provider_samples([empty_dataset[1], empty_dataset[0]])["X"]["series"]
+    assert empty.values.shape == (0, 2) and empty.offsets.tolist() == [0, 0, 0]
+    assert empty.lengths.tolist() == [0, 0] and empty.presence_mask.tolist() == [False, False]
+    assert (empty.time_coordinates is None) == (not with_times)
+    assert list(torch.utils.data.DataLoader(TorchMapDataset(absent, sample_ids=[], ragged_policy="packed", return_metadata=True), collate_fn=collate_provider_samples)) == []
+
+
+@pytest.mark.parametrize("kind", ["TorchMapDataset", "TorchIterableDataset"])
+@pytest.mark.parametrize("workers", [0, 2])
+def test_torch_packed_real_workers_preserve_sampler_identity_and_never_regenerate(kind, workers):
+    torch = pytest.importorskip("torch")
+    from nirs4all_io import provider_adapters
+
+    provider, calls = _provider(_packed_cohort())
+    provider.materialize()
+    dataset = getattr(provider_adapters, kind)(provider, sample_ids=list(reversed(provider.cohort.sample_ids)), ragged_policy="packed", return_metadata=True)
+    restored = pickle.loads(pickle.dumps(dataset))
+    kwargs = {"multiprocessing_context": "spawn"} if workers else {}
+    if kind == "TorchMapDataset":
+        kwargs["sampler"] = [4, 0, 2, 1, 2, 3]
+    loader = torch.utils.data.DataLoader(restored, batch_size=2, num_workers=workers, pin_memory=True,
+        collate_fn=collate_provider_samples, generator=torch.Generator().manual_seed(17), **kwargs)
+    seen = []
+    for batch in loader:
+        _assert_packed_records(batch, dataset.cohort)
+        seen.extend(batch["sample_id"])
+    if kind == "TorchMapDataset":
+        assert seen == [dataset.cohort.sample_ids[i] for i in [4, 0, 2, 1, 2, 3]]
+    else:
+        assert len(seen) == len(set(seen)) == len(dataset)
+        assert set(seen) == set(dataset.cohort.sample_ids)
+        if workers == 0:
+            assert seen == list(dataset.cohort.sample_ids)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("kind", ["TorchMapDataset", "TorchIterableDataset"])
+def test_torch_packed_requires_explicit_metadata_and_supported_dtypes_before_sampling(kind, monkeypatch):
+    pytest.importorskip("torch")
+    from nirs4all_io import provider_adapters
+
+    monkeypatch.setattr(provider_adapters._TorchSamples, "_sample", lambda *args: pytest.fail("Invalid input reached sample extraction"))
+    factory = getattr(provider_adapters, kind)
+    for policy in (None, True, "pad", [], {}):
+        with pytest.raises(ValueError, match="ragged_policy"):
+            factory(_ragged_cohort(), ragged_policy=policy, return_metadata=True)
+    with pytest.raises(ValueError, match="return_metadata=True"):
+        factory(_ragged_cohort(), ragged_policy="packed")
+    non_native = np.dtype("float32").newbyteorder("S")
+    dtypes = [(non_native, np.dtype("float64")), (np.dtype("float32"), non_native)]
+    if np.dtype(np.longdouble).itemsize > 8:
+        dtypes.extend([(np.dtype(np.longdouble), np.dtype("float64")), (np.dtype("float32"), np.dtype(np.longdouble))])
+    for dtype, time_dtype in dtypes:
+        source = RaggedSeriesSource(np.ones((2, 1), dtype=dtype), [0, 2], ["a"], time_coordinates=np.array([0, 1], dtype=time_dtype))
+        cohort = MultimodalDataset({"series": source}, sample_ids=["a"])
+        with pytest.raises(ValueError, match="dtype"):
+            factory(cohort, ragged_policy="packed", return_metadata=True)
+
+
+@pytest.mark.parametrize("change", ["dtype", "time_dtype", "coordinates", "unit", "names", "channels", "metadata_keys", "identity", "presence"])
+def test_torch_packed_rejects_inconsistent_collation_without_dtype_promotion(change):
+    pytest.importorskip("torch")
+    from nirs4all_io.provider_adapters import TorchMapDataset
+
+    dataset = TorchMapDataset(_ragged_cohort(), ragged_policy="packed", return_metadata=True)
+    samples = [dataset[0], dataset[1]]
+    source = samples[1]["X"]["series"]
+    kwargs = dict(values=source.values.values, offsets=source.offsets, sample_ids=source.sample_ids,
+                  time_coordinates=source.time_coordinates, time_unit=source.time_unit, channel_names=source.channel_names)
+    if change == "dtype":
+        kwargs["values"] = source.values.values.astype(np.float64)
+    elif change == "time_dtype":
+        kwargs["time_coordinates"] = source.time_coordinates.astype(np.float32)
+    elif change == "coordinates":
+        kwargs["time_coordinates"] = None
+    elif change == "unit":
+        kwargs["time_unit"] = "s"
+    elif change == "names":
+        kwargs["channel_names"] = list(reversed(source.channel_names))
+    elif change == "channels":
+        kwargs["values"] = source.values.values[:, :1]
+        kwargs["channel_names"] = ["one"]
+    elif change == "metadata_keys":
+        samples[1].pop("target_mask")
+    elif change == "identity":
+        samples[1]["sample_id"] = "another"
+    else:
+        samples[1]["source_masks"]["series"] = False
+    samples[1]["X"]["series"] = RaggedSeriesSource(**kwargs)
+    with pytest.raises(ValueError, match="schema|metadata"):
+        collate_provider_samples(samples)
+
+
+def test_torch_packed_pin_memory_on_real_cuda_allocator():
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("Physical pinned memory qualification requires a CUDA allocator")
+    from nirs4all_io.provider_adapters import TorchMapDataset
+
+    dataset = TorchMapDataset(_packed_cohort(), ragged_policy="packed", return_metadata=True)
+    original = collate_provider_samples([dataset[0], dataset[1]])["X"]["series"]
+    pinned = original.pin_memory()
+    assert pinned is not original and not original.values.is_pinned()
+    batch = next(iter(torch.utils.data.DataLoader(dataset, batch_size=5, collate_fn=collate_provider_samples, pin_memory=True)))
+    for packed in (pinned, batch["X"]["series"]):
+        assert all(tensor.is_pinned() for tensor in (packed.values, packed.offsets, packed.lengths, packed.presence_mask, packed.time_coordinates))
+        moved = packed.to("cuda", non_blocking=True).to("cpu")
+        torch.testing.assert_close(moved.values, packed.values, equal_nan=True)
+        assert moved.values.dtype == packed.values.dtype and moved.channel_names == packed.channel_names
+
+
+@pytest.mark.parametrize("value_dtype,time_dtype", [(np.bool_, np.int64), (np.int16, np.float32), (np.float64, np.float64)])
+def test_torch_packed_preserves_numeric_dtypes_and_unencoded_labels(value_dtype, time_dtype):
+    torch = pytest.importorskip("torch")
+    from nirs4all_io.provider_adapters import TorchMapDataset
+
+    values = np.arange(4).reshape(2, 2).astype(value_dtype)
+    times = np.array([0, 2], dtype=time_dtype)
+    cohort = MultimodalDataset(
+        {"series": RaggedSeriesSource(values, [0, 1, 2], ["a", "b"], time_coordinates=times)},
+        sample_ids=["a", "b"], y=["red", "green"], task_type="classification", groups=np.array([11, 12], dtype=np.int32),
+    )
+    dataset = TorchMapDataset(cohort, ragged_policy="packed", return_metadata=True)
+    batch = next(iter(torch.utils.data.DataLoader(dataset, batch_size=2, collate_fn=collate_provider_samples)))
+    packed = batch["X"]["series"]
+    assert packed.values.numpy().dtype == values.dtype
+    assert packed.time_coordinates.numpy().dtype == times.dtype
+    np.testing.assert_array_equal(packed.values.numpy(), values)
+    np.testing.assert_array_equal(packed.time_coordinates.numpy(), times)
+    assert packed.channel_names is None and packed.time_unit is None
+    assert batch["y"] == ["red", "green"] and batch["group"].tolist() == [11, 12]
+
+
+def test_sklearn_matrix_selection_never_materializes_unrequested_modalities(monkeypatch):
+    original = _cohort(masked=True)
+    sources = dict(original.sources)
+    sources["series"] = RaggedSeriesSource(
+        np.arange(44, dtype=np.int16).reshape(22, 2), np.arange(0, 23, 2), original.sample_ids,
+        time_coordinates=np.tile([0., 1.5], 11), channel_names=["a", "b"], time_unit="s",
+    )
+    cohort = MultimodalDataset(sources, sample_ids=original.sample_ids, y=original.y, target_mask=original.target_mask,
+        groups=original.groups, partitions=original.partitions, task_type="regression")
+    adapter = SklearnProviderAdapter(cohort, source="nir")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Selecting nir must not materialize a cohort or project another modality")
+
+    monkeypatch.setattr(MultimodalDataset, "take", forbidden)
+    monkeypatch.setattr(TensorSource, "take", forbidden)
+    monkeypatch.setattr(RaggedSeriesSource, "take", forbidden)
+    monkeypatch.setattr(RaggedSeriesBatch, "take_rows", forbidden)
+    ids = ["row-8", "row-1", "row-5", "row-3"]
+    rows = [8, 1, 5, 3]
+    # row-5's absent image and missing targets outside this view are irrelevant.
+    x, y = adapter.arrays(ids)
+    np.testing.assert_array_equal(x, cohort.sources["nir"].values[rows])
+    np.testing.assert_array_equal(y, cohort.y[rows])
+    assert x.flags.writeable and y.flags.writeable
+    assert not np.shares_memory(x, cohort.sources["nir"].values)
+    x[0, 0], y[0, 0] = -999, -999
+    assert cohort.sources["nir"].values[8, 0] != -999 and cohort.y[8, 0] != -999
+    item = adapter.arrays(ids, return_metadata=True)
+    assert item["sample_ids"] == tuple(ids) and set(item["source_masks"]) == {"nir"}
+    np.testing.assert_array_equal(item["target_mask"], cohort.target_mask[rows])
+    np.testing.assert_array_equal(item["groups"], cohort.groups[rows])
+    np.testing.assert_array_equal(item["partitions"], cohort.partitions[rows])
+    for array in (item["source_masks"]["nir"], item["target_mask"], item["groups"], item["partitions"]):
+        assert array.flags.writeable
+    batches = list(adapter.batches(2, sample_ids=iter(ids), start=1, drop_last=True, return_metadata=True))
+    assert [batch["sample_ids"] for batch in batches] == [("row-1", "row-5")]
+    np.testing.assert_array_equal(batches[0]["X"], cohort.sources["nir"].values[[1, 5]])
+    empty_x, empty_y = adapter.arrays([])
+    assert empty_x.shape == (0, 4) and empty_y.shape == (0, 2)
+    assert empty_x.dtype == x.dtype and empty_y.dtype == y.dtype
+
+
+def test_sklearn_named_selection_keeps_ragged_times_and_masks_without_cohort_copy(monkeypatch):
+    cohort = _packed_cohort()
+    ids = ["c", "empty", "hidden", "a"]
+    rows = [cohort.sample_ids.index(sample_id) for sample_id in ids]
+    expected = cohort.sources["series"].values.take_rows(rows)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Named array selection must project requested buffers directly")
+
+    monkeypatch.setattr(MultimodalDataset, "take", forbidden)
+    monkeypatch.setattr(TensorSource, "take", forbidden)
+    monkeypatch.setattr(RaggedSeriesSource, "take", forbidden)
+    adapter = SklearnProviderAdapter(cohort)
+    item = adapter.arrays(ids, return_metadata=True)
+    batch = item["X"]["series"]
+    assert isinstance(batch, RaggedSeriesBatch) and not batch.values.flags.writeable
+    np.testing.assert_array_equal(batch.values, expected.values)
+    np.testing.assert_array_equal(batch.offsets, expected.offsets)
+    np.testing.assert_array_equal(batch.time_coordinates, expected.time_coordinates)
+    np.testing.assert_array_equal(item["y"], cohort.y[rows])
+    np.testing.assert_array_equal(item["target_mask"], cohort.target_mask[rows])
+    np.testing.assert_array_equal(item["source_masks"]["series"], [True, False, False, True])
+    assert item["sample_ids"] == tuple(ids) and list(item["X"]) == list(cohort.sources)
+    assert item["X"]["metadata"].flags.writeable and item["X"]["metadata"].dtype == object
+    batches = list(adapter.batches(2, sample_ids=iter(ids), return_metadata=True))
+    assert [part["sample_ids"] for part in batches] == [("c", "empty"), ("hidden", "a")]
+    np.testing.assert_array_equal(np.concatenate([part["X"]["series"].time_coordinates for part in batches]), expected.time_coordinates)
+
+
+@pytest.mark.parametrize("ids", ["row-0", b"row-0", ["row-0", "row-0"], [""], [1], ["missing"], ["row-0", "missing"]])
+def test_sklearn_selection_validates_identity_before_any_source_projection(ids, monkeypatch):
+    adapter = SklearnProviderAdapter(_cohort(), source="nir")
+    monkeypatch.setattr(MultimodalDataset, "take", lambda *args: pytest.fail("Selection rebuilt a cohort"))
+    with pytest.raises(ValueError, match="sample IDs|sample_ids|ID"):
+        adapter.arrays(ids)
+    with pytest.raises(ValueError, match="sample IDs|sample_ids|ID"):
+        list(adapter.batches(2, sample_ids=ids, start=0, drop_last=True))
+
+
+def test_sklearn_batches_validate_completeness_only_for_emitted_rows():
+    cohort = _cohort(masked=True)
+    adapter = SklearnProviderAdapter(cohort)
+    batches = list(adapter.batches(2, sample_ids=["row-10", "row-0", "row-1", "row-5"], start=1, drop_last=True))
+    assert len(batches) == 1
+    np.testing.assert_array_equal(batches[0][0]["nir"], cohort.sources["nir"].values[:2])
+    np.testing.assert_array_equal(batches[0][1], cohort.y[:2])
