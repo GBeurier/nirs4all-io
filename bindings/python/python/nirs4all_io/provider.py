@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from .multimodal import MultimodalDataset
+from .multimodal import MultimodalDataset, _identities
 
 _DATA_FIELDS = {
     "sources", "sample_ids", "y", "target_names", "target_mask", "task_type",
@@ -324,7 +324,10 @@ class ProviderBatches(Iterator[MultimodalDataset]):
             raise ValueError("drop_last must be boolean")
         self._drop_last = drop_last
         self._cohort = provider.cohort
-        self._sample_ids = self._cohort.take(self._cohort.sample_ids if sample_ids is None else sample_ids).sample_ids
+        self._sample_ids = self._cohort.sample_ids if sample_ids is None else _identities(sample_ids, "selection sample_ids")
+        missing = set(self._sample_ids) - set(self._cohort.sample_ids)
+        if missing:
+            raise ValueError(f"Unknown sample IDs in dataset selection: {sorted(missing)}")
         self._provider_state = provider.state_dict()
         self._position = _unsigned(start, "start", maximum=len(self._sample_ids))
 

@@ -404,6 +404,10 @@ class TensorSource:
 class MultimodalDataset:
     """Named, sample-aligned raw sources with explicit targets and partitions.
 
+    Sources may be dense ``TensorSource`` instances or ``RaggedSeriesSource``
+    instances with packed variable-length series. Ragged sources retain their
+    typed batch through ``source_values``; selection never pads their values.
+
     With default ``source_alignment='strict'``, every source must have the same
     set of sample IDs. Assembly reorders source rows to ``sample_ids`` and
     rejects missing, extra or duplicated identities. Explicit ``'left'`` allows
@@ -578,15 +582,43 @@ class MultimodalDataset:
             self.source_alignment,
         ))
 
-    def source_values(self, row_indices: Sequence[int] | None = None) -> list[np.ndarray | RaggedSeriesBatch]:
-        """Return dense arrays or typed ragged batches, preserving source order."""
+    def source_values(
+        self, row_indices: Sequence[int] | None = None, *, source_names: Sequence[str] | None = None,
+    ) -> list[np.ndarray | RaggedSeriesBatch]:
+        """Return read-only source blocks in canonical or explicitly requested order.
+
+        ``source_names`` selects a unique ordered subset before reading any row
+        buffers. Unselected modalities are not materialized. Positional row
+        selection preserves order and duplicate rows; ``take`` selects by ID.
+        """
+        if source_names is None:
+            names = tuple(self.sources)
+        else:
+            if isinstance(source_names, (str, bytes)):
+                raise ValueError("source_names must be a sequence of names, not a string")
+            names = tuple(source_names)
+            if any(not isinstance(name, str) or not name.strip() for name in names):
+                raise ValueError("source_names must contain non-empty strings")
+            if len(set(names)) != len(names):
+                raise ValueError("source_names contains duplicate names")
+            unknown = set(names) - self.sources.keys()
+            if unknown:
+                raise ValueError(f"Unknown source names: {sorted(unknown)}")
         if row_indices is None:
-            return [source.values for source in self.sources.values()]
+            return [self.sources[name].values for name in names]
         indices = _row_positions(row_indices, len(self))
-        return [
-            source.values.take_rows(indices) if isinstance(source, RaggedSeriesSource) else _readonly(source.values[indices])
-            for source in self.sources.values()
-        ]
+        blocks: list[np.ndarray | RaggedSeriesBatch] = []
+        for name in names:
+            source = self.sources[name]
+            if isinstance(source, RaggedSeriesSource):
+                blocks.append(source.values.take_rows(indices))
+            else:
+                # Integer advanced indexing already owns a new array; do not
+                # copy large image blocks a second time just to freeze them.
+                selected = source.values[indices]
+                selected.setflags(write=False)
+                blocks.append(selected)
+        return blocks
 
     def source_presence(self, rows: Sequence[int] | None = None) -> dict[str, np.ndarray]:
         """Return read-only modality-presence flags in canonical sample order.
@@ -660,6 +692,9 @@ class MultimodalDataset:
         JSON format and raise ``ValueError`` without decoding or rounding them.
         This is an in-memory interchange surface, not a file parser or an ML
         artifact. No source is encoded, imputed or flattened during export.
+        Ragged source records use ``source_kind='ragged_series'`` and carry
+        packed values, offsets and optional per-point time coordinates. Dense
+        source records and their existing version-1 fingerprints stay unchanged.
         """
         return {
             "schema": _JSON_SCHEMA,
@@ -703,6 +738,8 @@ class MultimodalDataset:
         contain missing values; loading never infers which labels to withhold.
         Omitted ``source_alignment`` defaults to strict; omitted source
         ``presence_mask`` marks all its supplied rows present.
+        Explicit ragged records are validated with ``RaggedSeriesSource``;
+        their variable lengths never relax the existing dense source contract.
         """
         record = _closed_fields(
             payload, {"schema", "schema_version", "name", "sample_ids", "sources", "y", "groups", "partitions"},
