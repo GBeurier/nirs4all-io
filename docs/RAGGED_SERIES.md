@@ -96,6 +96,10 @@ reject an otherwise complete tuple result. IDs must remain unique and known.
 including equal-length series and empty selections. Choose packed collation
 explicitly and retain the metadata:
 
+This tightens the behavior of IO 0.2.0, which could silently discard time
+coordinates when passing ragged rows to Torch's default collator. Existing
+callers must select `ragged_policy="packed"` and `return_metadata=True`.
+
 ```python
 from torch.utils.data import DataLoader
 from nirs4all_io.provider_adapters import (
