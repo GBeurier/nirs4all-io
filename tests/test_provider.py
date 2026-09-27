@@ -352,7 +352,15 @@ def test_index_validation(index, error):
         data[index]
 
 
-@pytest.mark.parametrize("kwargs", [{"batch_size": 0}, {"batch_size": True}, {"batch_size": 2, "start": 8}, {"batch_size": 2, "drop_last": 1}])
+@pytest.mark.parametrize("kwargs", [
+    {"batch_size": 0},
+    {"batch_size": True},
+    {"batch_size": 2, "start": 8},
+    {"batch_size": 2, "drop_last": 1},
+    {"batch_size": 2, "sample_ids": ["sample-0", "sample-0"]},
+    {"batch_size": 2, "sample_ids": ["unknown"]},
+    {"batch_size": 2, "sample_ids": "sample-0"},
+])
 def test_batch_validation(kwargs):
     data = provider()
     data.materialize()

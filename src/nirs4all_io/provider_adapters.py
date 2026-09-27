@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class TorchRaggedSeriesBatch:
     """Torch tensors in sample order, produced by ``collate_provider_samples``.
 

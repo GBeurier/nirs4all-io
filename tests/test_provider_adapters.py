@@ -306,6 +306,7 @@ def test_sklearn_ragged_metadata_keeps_both_masks_and_matrix_selection_stays_exp
 
 
 def test_sklearn_ragged_can_feed_an_explicit_transformer_and_real_estimator():
+    pytest.importorskip("sklearn")
     from sklearn.linear_model import Ridge
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import FunctionTransformer
