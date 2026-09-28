@@ -29,6 +29,7 @@ _TARGET_FIELDS = {"y", "target_names", "target_mask", "task_type"}
 _STATE_FIELDS = {"schema", "version", "recipe", "seed", "context", "fingerprint"}
 _BATCH_FIELDS = {"schema", "version", "provider", "sample_ids", "batch_size", "drop_last", "position"}
 _VIEW_STATE_FIELDS = {"schema", "version", "recipe", "seed", "context", "sample_ids", "schema_fingerprint", "fingerprint"}
+_KEYED_VIEW_STATE_FIELDS = _VIEW_STATE_FIELDS | {"view_key"}
 
 
 def _json_copy(value: Any, label: str) -> Any:
@@ -83,11 +84,22 @@ def _view_schema_fingerprint(cohort: MultimodalDataset) -> str:
     })
 
 
-def _closed_state(state: Any, *, fields: set[str], schema: str) -> dict[str, Any]:
+def _closed_state(state: Any, *, fields: set[str], schema: str, version: int = 1) -> dict[str, Any]:
     result = _json_mapping(state, "checkpoint")
-    if set(result) != fields or result.get("schema") != schema or type(result.get("version")) is not int or result["version"] != 1:
+    if set(result) != fields or result.get("schema") != schema or type(result.get("version")) is not int or result["version"] != version:
         raise ValueError(f"Invalid {schema} checkpoint fields or version")
     return result
+
+
+def _view_state(state: Any) -> dict[str, Any]:
+    candidate = _json_mapping(state, "view checkpoint")
+    version = candidate.get("version")
+    if type(version) is int and version == 2:
+        saved = _closed_state(candidate, fields=_KEYED_VIEW_STATE_FIELDS, schema="nirs4all.data-provider-view", version=2)
+        if not isinstance(saved["view_key"], str) or not saved["view_key"].strip():
+            raise ValueError("Provider view checkpoint view_key must be non-empty text")
+        return saved
+    return _closed_state(candidate, fields=_VIEW_STATE_FIELDS, schema="nirs4all.data-provider-view")
 
 
 class DataProvider:
@@ -180,6 +192,7 @@ class DataProvider:
         self._state: dict[str, Any] | None = None
         self._view_schema: str | None = None
         self._view_generated = False
+        self._view_key_records: dict[str, dict[str, Any]] = {}
 
     @property
     def provider_id(self) -> str:
@@ -282,7 +295,7 @@ class DataProvider:
 
     def materialize_view(
         self, sample_ids: Sequence[str], *, seed: int | None = None,
-        context: Mapping[str, Any] | None = None,
+        context: Mapping[str, Any] | None = None, view_key: str | None = None,
     ) -> MultimodalDataset:
         """Generate one requested identity view without materializing the run cohort.
 
@@ -293,9 +306,14 @@ class DataProvider:
         the source set and schema; views may replace a declared source but
         cannot introduce a new one. A graph scheduler must pass its authorized
         fold/sample view; this IO method cannot decide CV membership on its own.
+        A scheduler-supplied ``view_key`` binds the requested IDs, seed, context
+        and generated content for this provider instance. Keyed checkpoints use
+        version 2; unkeyed standalone checkpoints retain version 1.
         """
         if self._generate_view is None or self._base is None:
             raise RuntimeError("View generation requires generate_view and a fixed base cohort")
+        if view_key is not None and (not isinstance(view_key, str) or not view_key.strip()):
+            raise ValueError("view_key must be non-empty text")
         view_base = self._cohort
         if view_base is not None:
             self.state_dict()  # Refuse a mutated PLAN cohort before invoking the view callback.
@@ -307,6 +325,14 @@ class DataProvider:
             raise ValueError("View generation sample IDs must belong to the fixed base cohort")
         effective_seed = self.seed if seed is None else _unsigned(seed, "seed", maximum=2**64 - 1)
         effective_context = _json_mapping(self._context if context is None else context, "context")
+        if view_key is not None and view_key in self._view_key_records:
+            previous = self._view_key_records[view_key]
+            requested_scope = {
+                "recipe": self.recipe(), "seed": effective_seed,
+                "context": effective_context, "sample_ids": list(ids),
+            }
+            if _digest(requested_scope) != _digest({field: previous[field] for field in requested_scope}):
+                raise ValueError("Provider view key was reused with a different request or content")
         output = self._generate_view(
             sample_ids=ids, seed=effective_seed,
             params=_json_mapping(self._params, "params"),
@@ -323,12 +349,18 @@ class DataProvider:
         if self._view_schema is not None and self._view_schema != schema_fingerprint:
             raise ValueError("Provider view schema changed between requests")
         evidence = {
-            "schema": "nirs4all.data-provider-view", "version": 1,
+            "schema": "nirs4all.data-provider-view", "version": 2 if view_key is not None else 1,
             "recipe": self.recipe(), "seed": effective_seed,
             "context": effective_context, "sample_ids": list(ids),
             "schema_fingerprint": schema_fingerprint,
             "fingerprint": _cohort_fingerprint(cohort),
         }
+        if view_key is not None:
+            evidence["view_key"] = view_key
+            previous_evidence = self._view_key_records.get(view_key)
+            if previous_evidence is not None and _digest(previous_evidence) != _digest(evidence):
+                raise ValueError("Provider view key was reused with a different request or content")
+            self._view_key_records[view_key] = _json_mapping(evidence, "view evidence")
         self._view_schema = schema_fingerprint
         object.__setattr__(cohort, "_data_provider_view_evidence", evidence)
         self._view_generated = True
@@ -339,17 +371,19 @@ class DataProvider:
         if not isinstance(cohort, MultimodalDataset):
             raise TypeError("view_state_dict requires a MultimodalDataset")
         state = getattr(cohort, "_data_provider_view_evidence", None)
-        saved = _closed_state(state, fields=_VIEW_STATE_FIELDS, schema="nirs4all.data-provider-view")
+        saved = _view_state(state)
         if (saved["sample_ids"] != list(cohort.sample_ids)
                 or _digest(saved["recipe"]) != _digest(self.recipe())
                 or _view_schema_fingerprint(cohort) != saved["schema_fingerprint"]
                 or _cohort_fingerprint(cohort) != saved["fingerprint"]):
             raise ValueError("Provider view recipe or content changed after generation")
+        if "view_key" in saved and _digest(self._view_key_records.get(saved["view_key"])) != _digest(saved):
+            raise ValueError("Provider view key evidence changed after generation")
         return saved
 
     def restore_view(self, state: Mapping[str, Any]) -> MultimodalDataset:
         """Regenerate an exact view from a checkpoint without changing run state."""
-        saved = _closed_state(state, fields=_VIEW_STATE_FIELDS, schema="nirs4all.data-provider-view")
+        saved = _view_state(state)
         if _digest(saved["recipe"]) != _digest(self.recipe()):
             raise ValueError("Provider view checkpoint recipe does not match this provider")
         seed = _unsigned(saved["seed"], "view checkpoint seed", maximum=2**64 - 1)
@@ -363,8 +397,9 @@ class DataProvider:
             raise ValueError("Provider view checkpoint schema_fingerprint must be a SHA-256 hex digest")
         previous_schema = self._view_schema
         previous_view_generated = self._view_generated
+        previous_view_key_records = self._view_key_records.copy()
         try:
-            cohort = self.materialize_view(ids, seed=seed, context=context)
+            cohort = self.materialize_view(ids, seed=seed, context=context, view_key=saved.get("view_key"))
             if _view_schema_fingerprint(cohort) != schema_fingerprint:
                 raise ValueError("Regenerated provider view schema does not match checkpoint")
             if self.view_state_dict(cohort)["fingerprint"] != fingerprint:
@@ -372,6 +407,7 @@ class DataProvider:
         except Exception:
             self._view_schema = previous_schema
             self._view_generated = previous_view_generated
+            self._view_key_records = previous_view_key_records
             raise
         return cohort
 

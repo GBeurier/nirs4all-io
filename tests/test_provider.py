@@ -215,6 +215,100 @@ def test_view_checkpoint_rejects_mutation_and_nondeterministic_regeneration():
         data.restore_view(malformed)
 
 
+def test_keyed_view_refuses_changed_content_or_scope_and_restores_exact_checkpoint():
+    base = synthetic(seed=0, params={}, context={})
+    ids = ["sample-4", "sample-1"]
+    key = "view:v1:" + "a" * 64
+    calls = 0
+
+    def plan(**_):
+        return {"sample_ids": base.sample_ids, "sources": {
+            "planned": TensorSource(np.ones((len(base), 1)), base.sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    def view_source(*, sample_ids, **_):
+        nonlocal calls
+        calls += 1
+        return {"sample_ids": sample_ids, "sources": {
+            "planned": TensorSource(np.full((len(sample_ids), 1), float(calls)), sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    data = provider(plan, base=base, generate_view=view_source)
+    data.materialize()
+    first = data.materialize_view(ids, seed=31, context={"fold": "one"}, view_key=key)
+    checkpoint = data.view_state_dict(first)
+    assert checkpoint["version"] == 2 and checkpoint["view_key"] == key
+    with pytest.raises(ValueError, match="key was reused"):
+        data.materialize_view(ids, seed=31, context={"fold": "one"}, view_key=key)
+    assert calls == 2
+    assert data.view_state_dict(first) == checkpoint
+
+    stable_calls = 0
+
+    def stable_view(*, sample_ids, **_):
+        nonlocal stable_calls
+        stable_calls += 1
+        return {"sample_ids": sample_ids, "sources": {
+            "planned": TensorSource(np.ones((len(sample_ids), 1)), sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    stable = provider(plan, base=base, generate_view=stable_view)
+    stable.materialize()
+    stable.materialize_view(ids, seed=31, context={"fold": "one"}, view_key=key)
+    with pytest.raises(ValueError, match="key was reused"):
+        stable.materialize_view(["sample-2"], seed=31, context={"fold": "one"}, view_key=key)
+    with pytest.raises(ValueError, match="key was reused"):
+        stable.materialize_view(ids, seed=32, context={"fold": "one"}, view_key=key)
+    with pytest.raises(ValueError, match="key was reused"):
+        stable.materialize_view(ids, seed=31, context={"fold": "two"}, view_key=key)
+    stable.materialize_view(ids, seed=31, context={"flag": True}, view_key="view:v1:" + "c" * 64)
+    with pytest.raises(ValueError, match="key was reused"):
+        stable.materialize_view(ids, seed=31, context={"flag": 1}, view_key="view:v1:" + "c" * 64)
+    assert stable_calls == 2
+
+    restored = provider(plan, base=base, generate_view=stable_view)
+    restored.materialize()
+    assert restored.restore_view(checkpoint).to_dict() == first.to_dict()
+    assert restored.view_state_dict(restored.restore_view(checkpoint)) == checkpoint
+
+
+def test_failed_keyed_view_restore_rolls_back_key_registry_and_invalid_key_is_preflight_refused():
+    base = synthetic(seed=0, params={}, context={})
+    ids = ["sample-1"]
+    key = "view:v1:" + "b" * 64
+    calls = 0
+
+    def plan(**_):
+        return {"sample_ids": base.sample_ids, "sources": {
+            "planned": TensorSource(np.ones((len(base), 1)), base.sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    def view_source(*, sample_ids, **_):
+        nonlocal calls
+        calls += 1
+        return {"sample_ids": sample_ids, "sources": {
+            "planned": TensorSource(np.full((len(sample_ids), 1), 3.0), sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    original = provider(plan, base=base, generate_view=view_source)
+    original.materialize()
+    checkpoint = original.view_state_dict(original.materialize_view(ids, view_key=key))
+
+    changed = provider(plan, base=base, generate_view=lambda *, sample_ids, **_: {
+        "sample_ids": sample_ids, "sources": {
+            "planned": TensorSource(np.full((len(sample_ids), 1), 4.0), sample_ids, representation_id="tabular_numeric"),
+        },
+    })
+    changed.materialize()
+    with pytest.raises(ValueError, match="does not match checkpoint fingerprint"):
+        changed.restore_view(checkpoint)
+    assert changed.materialize_view(ids, view_key=key).sources["planned"].values[0, 0] == 4
+    for invalid in ("", " ", 3):
+        with pytest.raises(ValueError, match="view_key"):
+            original.materialize_view(ids, view_key=invalid)
+    assert calls == 1
+
+
 def test_view_generation_freezes_source_contract_across_requested_views():
     base = synthetic(seed=0, params={}, context={})
     calls = 0
