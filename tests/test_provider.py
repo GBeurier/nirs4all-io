@@ -128,6 +128,127 @@ def test_partial_y_and_source_assembly_aligns_by_identity_preserving_fixed_bound
     assert data.recipe()["params"]["_io_assembly"]["base_fingerprint"] is not None
 
 
+def test_view_generation_produces_only_requested_ids_and_restores_exact_content():
+    base = synthetic(seed=0, params={}, context={})
+    calls = []
+
+    def view_source(*, sample_ids, seed, params, context):
+        calls.append((sample_ids, seed, params, context))
+        ids = tuple(reversed(sample_ids))
+        return {
+            "sample_ids": ids,
+            "sources": {"aux": TensorSource(np.array([[seed + int(item.rsplit("-", 1)[1])] for item in ids]), ids,
+                                          representation_id="tabular_numeric")},
+        }
+
+    data = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base, generate_view=view_source)
+    view = data.materialize_view(["sample-4", "sample-1"], seed=31, context={"fold": "outer-1"})
+    assert calls == [(('sample-4', 'sample-1'), 31, {}, {"fold": "outer-1"})]
+    assert view.sample_ids == ("sample-4", "sample-1")
+    assert view.groups.tolist() == ["group-4", "group-1"]
+    assert view.partitions.tolist() == ["train", "train"]
+    np.testing.assert_array_equal(view.y, base.y[[4, 1]])
+    np.testing.assert_array_equal(view.sources["aux"].values, [[35], [32]])
+    assert data.recipe()["params"]["_io_assembly"]["view_generation"] is True
+    with pytest.raises(RuntimeError, match="materialized"):
+        _ = data.cohort
+
+    checkpoint = json.loads(json.dumps(data.view_state_dict(view), allow_nan=False))
+    restored_provider = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base, generate_view=view_source)
+    restored = restored_provider.restore_view(checkpoint)
+    assert restored.to_dict() == view.to_dict()
+    assert restored_provider.view_state_dict(restored) == checkpoint
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("output", [
+    {"sample_ids": ["sample-0", "sample-1"], "y": [1, 2]},
+    {"sample_ids": ["sample-0", "sample-1"], "groups": ["other", "other"]},
+    {"sample_ids": ["sample-0", "sample-1"], "partitions": ["test", "test"]},
+    {"sample_ids": ["sample-0", "sample-2"]},
+    {"sample_ids": ["sample-0", "sample-1", "sample-2"]},
+])
+def test_view_generation_refuses_target_boundary_or_identity_changes(output):
+    base = synthetic(seed=0, params={}, context={})
+    data = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base,
+                    generate_view=lambda **_: output)
+    with pytest.raises(ValueError):
+        data.materialize_view(["sample-0", "sample-1"])
+
+
+def test_view_generation_validates_fixed_targets_and_requested_ids_before_callback():
+    empty_targets = MultimodalDataset(
+        {"nir": TensorSource(np.ones((2, 2)), ["one", "two"], representation_id="signal_1d")},
+        sample_ids=["one", "two"], groups=["g1", "g2"], partitions=["train", "test"],
+    )
+    with pytest.raises(ValueError, match="targets fixed"):
+        provider(lambda **_: {"sample_ids": empty_targets.sample_ids}, base=empty_targets,
+                 generate_view=lambda **_: pytest.fail("view callback ran"))
+
+    base = synthetic(seed=0, params={}, context={})
+    data = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base,
+                    generate_view=lambda **_: pytest.fail("view callback ran"))
+    for ids in ([], ["sample-0", "sample-0"], ["foreign"], "sample-0"):
+        with pytest.raises(ValueError):
+            data.materialize_view(ids)
+
+
+def test_view_checkpoint_rejects_mutation_and_nondeterministic_regeneration():
+    base = synthetic(seed=0, params={}, context={})
+    def output(value):
+        return {"sample_ids": ["sample-1"],
+                "sources": {"aux": TensorSource(np.array([[value]]), ["sample-1"], representation_id="tabular_numeric")}}
+    data = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base,
+                    generate_view=lambda **_: output(7))
+    view = data.materialize_view(["sample-1"], seed=9)
+    checkpoint = data.view_state_dict(view)
+    view.name = "changed"
+    with pytest.raises(ValueError, match="content changed"):
+        data.view_state_dict(view)
+    changed = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base,
+                       generate_view=lambda **_: output(8))
+    with pytest.raises(ValueError, match="does not match checkpoint fingerprint"):
+        changed.restore_view(checkpoint)
+    malformed = {**checkpoint, "sample_ids": ["foreign"]}
+    with pytest.raises(ValueError):
+        data.restore_view(malformed)
+
+
+def test_view_generation_freezes_source_contract_across_requested_views():
+    base = synthetic(seed=0, params={}, context={})
+    calls = 0
+
+    def generate_view(*, sample_ids, **_):
+        nonlocal calls
+        calls += 1
+        coordinates = [1, 2] if calls == 1 else [1, 3]
+        return {"sample_ids": sample_ids, "sources": {
+            "aux": TensorSource(np.ones((len(sample_ids), 2)), sample_ids,
+                                representation_id="signal_1d",
+                                axis_coordinates={"wavelength": coordinates}),
+        }}
+
+    data = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base,
+                    generate_view=generate_view)
+    first = data.materialize_view(["sample-1"])
+    checkpoint = data.view_state_dict(first)
+    with pytest.raises(ValueError, match="schema changed"):
+        data.materialize_view(["sample-3", "sample-2"])
+    assert data.view_state_dict(first) == checkpoint
+
+
+@pytest.mark.parametrize("change", [
+    {"name": "other"},
+    {"source_alignment": "left"},
+])
+def test_view_generation_refuses_base_metadata_changes(change):
+    base = synthetic(seed=0, params={}, context={})
+    data = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base,
+                    generate_view=lambda **_: {"sample_ids": ["sample-1"], **change})
+    with pytest.raises(ValueError, match="fixed base"):
+        data.materialize_view(["sample-1"])
+
+
 def test_target_only_generation_and_explicit_replacement_rules():
     base = synthetic(seed=0, params={}, context={})
 
