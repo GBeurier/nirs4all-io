@@ -179,6 +179,7 @@ class DataProvider:
         self._cohort: MultimodalDataset | None = None
         self._state: dict[str, Any] | None = None
         self._view_schema: str | None = None
+        self._view_generated = False
 
     @property
     def provider_id(self) -> str:
@@ -220,7 +221,11 @@ class DataProvider:
             "learned": False, "context": _json_mapping(self._context, "context"),
         }
 
-    def _assemble(self, result: MultimodalDataset | Mapping[str, Any], *, base_ids: Sequence[str] | None = None) -> MultimodalDataset:
+    def _assemble(
+        self, result: MultimodalDataset | Mapping[str, Any], *,
+        base_ids: Sequence[str] | None = None,
+        view_base: MultimodalDataset | None = None,
+    ) -> MultimodalDataset:
         if isinstance(result, MultimodalDataset):
             if self._base is not None:
                 raise ValueError("A provider with a fixed base must return an explicit partial mapping")
@@ -235,17 +240,26 @@ class DataProvider:
             if "sources" not in payload:
                 raise ValueError("A complete provider output requires sources when no base is given")
             return MultimodalDataset(**payload)
-        base = self._base if base_ids is None else self._base.take(base_ids)
+        fixed_base = self._base if view_base is None else view_base
+        base = fixed_base if base_ids is None else fixed_base.take(base_ids)
         ordered = base.take(payload["sample_ids"])
         if len(ordered) != len(base):
             raise ValueError("Provider output sample_ids must equal the fixed base universe")
         sources = payload.get("sources", {})
         if not isinstance(sources, Mapping):
             raise ValueError("Provider sources must be a mapping of names to TensorSource")
+        allowed_replacements = set(self._replace_sources)
+        if view_base is not None:
+            # PLAN may add a source before any fold exists. A view may replace
+            # that planned source, but cannot introduce another source later.
+            allowed_replacements.update(view_base.sources.keys() - self._base.sources.keys())
+            new_sources = sources.keys() - view_base.sources.keys()
+            if new_sources:
+                raise ValueError(f"Provider view cannot add sources after PLAN: {sorted(new_sources)}")
         collisions = sources.keys() & base.sources.keys()
-        if collisions - set(self._replace_sources):
-            raise ValueError(f"Replacing sources requires replace_sources: {sorted(collisions - set(self._replace_sources))}")
-        if set(self._replace_sources) - sources.keys():
+        if collisions - allowed_replacements:
+            raise ValueError(f"Replacing sources requires replace_sources: {sorted(collisions - allowed_replacements)}")
+        if view_base is None and set(self._replace_sources) - sources.keys():
             raise ValueError("Provider output must supply every declared replace_sources entry")
         if base.y is not None and payload.keys() & _TARGET_FIELDS and not self._replace_targets:
             raise ValueError("Replacing existing targets requires replace_targets=True")
@@ -275,15 +289,21 @@ class DataProvider:
         ``generate_view(sample_ids=..., seed=..., params=..., context=...)``
         must return a partial constructor mapping over exactly those IDs. The
         fixed base supplies immutable identities, groups, partitions and
-        targets. A graph scheduler must pass its authorized fold/sample view;
-        this IO method cannot decide CV membership on its own.
+        targets. After ``materialize``, the effective PLAN cohort also fixes
+        the source set and schema; views may replace a declared source but
+        cannot introduce a new one. A graph scheduler must pass its authorized
+        fold/sample view; this IO method cannot decide CV membership on its own.
         """
         if self._generate_view is None or self._base is None:
             raise RuntimeError("View generation requires generate_view and a fixed base cohort")
+        view_base = self._cohort
+        if view_base is not None:
+            self.state_dict()  # Refuse a mutated PLAN cohort before invoking the view callback.
+        fixed_base = self._base if view_base is None else view_base
         ids = _identities(sample_ids, "view sample_ids")
         if not ids:
             raise ValueError("View generation requires at least one sample ID")
-        if set(ids) - set(self._base.sample_ids):
+        if set(ids) - set(fixed_base.sample_ids):
             raise ValueError("View generation sample IDs must belong to the fixed base cohort")
         effective_seed = self.seed if seed is None else _unsigned(seed, "seed", maximum=2**64 - 1)
         effective_context = _json_mapping(self._context if context is None else context, "context")
@@ -294,11 +314,11 @@ class DataProvider:
         )
         if not isinstance(output, Mapping):
             raise TypeError("generate_view must return a partial constructor-field mapping")
-        if "name" in output and output["name"] != self._base.name:
+        if "name" in output and output["name"] != fixed_base.name:
             raise ValueError("Provider view cannot change fixed base name")
-        if "source_alignment" in output and output["source_alignment"] != self._base.source_alignment:
+        if "source_alignment" in output and output["source_alignment"] != fixed_base.source_alignment:
             raise ValueError("Provider view cannot change fixed base source alignment")
-        cohort = self._assemble(output, base_ids=ids)
+        cohort = self._assemble(output, base_ids=ids, view_base=view_base)
         schema_fingerprint = _view_schema_fingerprint(cohort)
         if self._view_schema is not None and self._view_schema != schema_fingerprint:
             raise ValueError("Provider view schema changed between requests")
@@ -311,6 +331,7 @@ class DataProvider:
         }
         self._view_schema = schema_fingerprint
         object.__setattr__(cohort, "_data_provider_view_evidence", evidence)
+        self._view_generated = True
         return cohort
 
     def view_state_dict(self, cohort: MultimodalDataset) -> dict[str, Any]:
@@ -341,6 +362,7 @@ class DataProvider:
         if not isinstance(schema_fingerprint, str) or len(schema_fingerprint) != 64 or any(c not in "0123456789abcdef" for c in schema_fingerprint):
             raise ValueError("Provider view checkpoint schema_fingerprint must be a SHA-256 hex digest")
         previous_schema = self._view_schema
+        previous_view_generated = self._view_generated
         try:
             cohort = self.materialize_view(ids, seed=seed, context=context)
             if _view_schema_fingerprint(cohort) != schema_fingerprint:
@@ -349,6 +371,7 @@ class DataProvider:
                 raise ValueError("Regenerated provider view content does not match checkpoint fingerprint")
         except Exception:
             self._view_schema = previous_schema
+            self._view_generated = previous_view_generated
             raise
         return cohort
 
@@ -371,7 +394,11 @@ class DataProvider:
         effective_seed = self.seed if seed is None else _unsigned(seed, "seed", maximum=2**64 - 1)
         effective_context = _json_mapping(self._context if context is None else context, "context")
         cohort, state = self._produce(effective_seed, effective_context)
+        view_schema = _view_schema_fingerprint(cohort) if self._generate_view is not None else None
+        if self._view_generated and view_schema != self._view_schema:
+            raise ValueError("Provider PLAN schema changed after a view was generated")
         self._cohort, self._state = cohort, state
+        self._view_schema = view_schema
         return cohort
 
     def state_dict(self) -> dict[str, Any]:
@@ -395,7 +422,11 @@ class DataProvider:
         cohort, restored = self._produce(seed, context)
         if restored["fingerprint"] != fingerprint:
             raise ValueError("Regenerated provider content does not match checkpoint fingerprint")
+        view_schema = _view_schema_fingerprint(cohort) if self._generate_view is not None else None
+        if self._view_generated and view_schema != self._view_schema:
+            raise ValueError("Provider PLAN schema changed after a view was generated")
         self._cohort, self._state = cohort, restored
+        self._view_schema = view_schema
 
     def __len__(self) -> int:
         return len(self.cohort)
