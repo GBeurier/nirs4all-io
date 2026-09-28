@@ -209,6 +209,7 @@ def test_view_checkpoint_rejects_mutation_and_nondeterministic_regeneration():
                        generate_view=lambda **_: output(8))
     with pytest.raises(ValueError, match="does not match checkpoint fingerprint"):
         changed.restore_view(checkpoint)
+    assert changed.materialize().sample_ids == base.sample_ids
     malformed = {**checkpoint, "sample_ids": ["foreign"]}
     with pytest.raises(ValueError):
         data.restore_view(malformed)
@@ -235,6 +236,111 @@ def test_view_generation_freezes_source_contract_across_requested_views():
     with pytest.raises(ValueError, match="schema changed"):
         data.materialize_view(["sample-3", "sample-2"])
     assert data.view_state_dict(first) == checkpoint
+
+
+def test_view_generation_after_plan_uses_effective_cohort_and_frozen_schema():
+    base = synthetic(seed=0, params={}, context={})
+
+    def plan(**_):
+        return {"sample_ids": base.sample_ids, "sources": {
+            "planned": TensorSource(np.full((len(base), 1), 5.0), base.sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    def view_source(*, sample_ids, **_):
+        return {"sample_ids": sample_ids, "sources": {
+            "planned": TensorSource(np.full((len(sample_ids), 1), 9.0), sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    data = provider(plan, base=base, generate_view=view_source)
+    planned = data.materialize()
+    view = data.materialize_view(["sample-4", "sample-1"])
+    assert set(view.sources) == set(planned.sources)
+    assert view.sample_ids == ("sample-4", "sample-1")
+    np.testing.assert_array_equal(view.sources["planned"].values, [[9.0], [9.0]])
+    np.testing.assert_array_equal(view.y, planned.y[[4, 1]])
+
+    checkpoint = data.view_state_dict(view)
+    restored_provider = provider(plan, base=base, generate_view=view_source)
+    restored_provider.load_state_dict(data.state_dict())
+    assert restored_provider.restore_view(checkpoint).to_dict() == view.to_dict()
+
+    reuse_planned = provider(plan, base=base,
+                             generate_view=lambda *, sample_ids, **_: {"sample_ids": sample_ids})
+    reuse_planned.materialize()
+    unchanged = reuse_planned.materialize_view(["sample-1"])
+    np.testing.assert_array_equal(unchanged.sources["planned"].values, [[5.0]])
+
+
+def test_view_generation_after_plan_rejects_new_source_and_first_view_schema_change():
+    base = synthetic(seed=0, params={}, context={})
+
+    def plan(**_):
+        return {"sample_ids": base.sample_ids, "sources": {
+            "planned": TensorSource(np.ones((len(base), 1)), base.sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    def view_output(name, width):
+        return {"sample_ids": ["sample-1"], "sources": {
+            name: TensorSource(np.ones((1, width)), ["sample-1"], representation_id="tabular_numeric"),
+        }}
+
+    new_source = provider(plan, base=base, generate_view=lambda **_: view_output("late", 1))
+    new_source.materialize()
+    with pytest.raises(ValueError, match="cannot add sources after PLAN"):
+        new_source.materialize_view(["sample-1"])
+
+    changed_shape = provider(plan, base=base, generate_view=lambda **_: view_output("planned", 2))
+    changed_shape.materialize()
+    with pytest.raises(ValueError, match="schema changed"):
+        changed_shape.materialize_view(["sample-1"])
+
+    forbidden_replacement = provider(plan, base=base, generate_view=lambda **_: view_output("nir", 3))
+    forbidden_replacement.materialize()
+    with pytest.raises(ValueError, match="replace_sources"):
+        forbidden_replacement.materialize_view(["sample-1"])
+
+
+def test_view_generation_after_plan_rejects_mutated_plan_before_callback():
+    base = synthetic(seed=0, params={}, context={})
+    data = provider(lambda **_: {"sample_ids": base.sample_ids}, base=base,
+                    generate_view=lambda **_: pytest.fail("view callback ran"))
+    cohort = data.materialize()
+    cohort.name = "modified"
+    with pytest.raises(ValueError, match="content changed"):
+        data.materialize_view(["sample-1"])
+
+
+def test_plan_rejects_schema_drift_after_a_standalone_view_without_losing_prior_state():
+    base = synthetic(seed=0, params={}, context={})
+    data = provider(
+        lambda **_: {"sample_ids": base.sample_ids}, base=base,
+        generate_view=lambda *, sample_ids, **_: {"sample_ids": sample_ids, "sources": {
+            "late": TensorSource(np.ones((len(sample_ids), 1)), sample_ids, representation_id="tabular_numeric"),
+        }},
+    )
+    first = data.materialize_view(["sample-1"])
+    checkpoint = data.view_state_dict(first)
+    with pytest.raises(ValueError, match="PLAN schema changed"):
+        data.materialize()
+    with pytest.raises(RuntimeError, match="materialized"):
+        _ = data.cohort
+    assert data.view_state_dict(first) == checkpoint
+
+
+def test_plan_can_change_schema_before_any_view_was_generated():
+    base = synthetic(seed=0, params={}, context={})
+
+    def plan(*, context, **_):
+        width = context["width"]
+        return {"sample_ids": base.sample_ids, "sources": {
+            "planned": TensorSource(np.ones((len(base), width)), base.sample_ids, representation_id="tabular_numeric"),
+        }}
+
+    data = provider(plan, base=base, generate_view=lambda **_: pytest.fail("view callback ran"))
+    first = data.materialize(context={"width": 1})
+    second = data.materialize(context={"width": 2})
+    assert first.sources["planned"].values.shape == (len(base), 1)
+    assert second.sources["planned"].values.shape == (len(base), 2)
 
 
 @pytest.mark.parametrize("change", [
