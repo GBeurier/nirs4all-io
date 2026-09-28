@@ -111,6 +111,49 @@ def test_adapters_require_materialization_and_never_call_generator():
     assert len(calls) == 1
 
 
+def test_generated_view_is_consumable_by_sklearn_and_torch_without_regeneration():
+    torch = pytest.importorskip("torch")
+    Ridge = pytest.importorskip("sklearn.linear_model").Ridge
+    from nirs4all_io.provider_adapters import TorchMapDataset
+
+    base = _cohort()
+    callbacks = []
+
+    def generate(**_):
+        return {"sample_ids": list(base.sample_ids), "sources": {"nir": base.sources["nir"]}}
+
+    def generate_view(*, sample_ids, **_):
+        callbacks.append(tuple(sample_ids))
+        source = base.take(sample_ids).sources["nir"]
+        return {"sample_ids": list(sample_ids), "sources": {"nir": TensorSource(
+            np.asarray(source.values) + 10.0, sample_ids, representation_id=source.representation_id,
+        )}}
+
+    provider = DataProvider(
+        generate, generate_view=generate_view, provider_id="tests.frameworks.view",
+        base=base, replace_sources=["nir"],
+    )
+    provider.materialize()
+    ids = ["row-7", "row-2", "row-5"]
+    view = provider.materialize_view(ids, view_key="view:v1:" + "a" * 64)
+    sklearn_x, sklearn_y = SklearnProviderAdapter(view).arrays()
+    assert set(sklearn_x) == set(base.sources)
+    np.testing.assert_array_equal(sklearn_x["nir"], base.take(ids).sources["nir"].values + 10.0)
+    np.testing.assert_array_equal(sklearn_x["image"], base.take(ids).sources["image"].values)
+    np.testing.assert_array_equal(sklearn_y, base.take(ids).y)
+    Ridge().fit(SklearnProviderAdapter(view, source="nir").arrays()[0], sklearn_y)
+
+    loader = torch.utils.data.DataLoader(
+        TorchMapDataset(view, return_metadata=True), batch_size=len(ids), collate_fn=collate_provider_samples,
+    )
+    batch = next(iter(loader))
+    assert batch["sample_id"] == ids
+    np.testing.assert_array_equal(batch["X"]["nir"].numpy(), sklearn_x["nir"])
+    np.testing.assert_array_equal(batch["X"]["image"].numpy(), sklearn_x["image"])
+    np.testing.assert_array_equal(batch["y"].numpy(), sklearn_y)
+    assert callbacks == [tuple(ids)]
+
+
 def test_sklearn_matrix_fit_is_the_same_real_ridge_fit():
     Ridge = pytest.importorskip("sklearn.linear_model").Ridge
     cohort = _cohort()
