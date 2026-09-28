@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 """Finite host data providers, explicit assembly and resumable cohort views.
 
-Providers generate a fixed universe once per explicit ``materialize`` call.
-They do not split data, learn transformations, schedule folds, or invoke a
-framework. A DAG controller can supply its task seed; standalone callers use
-the provider's own seed. Callback code remains in the host and is never loaded
-from a recipe or checkpoint.
+Providers can generate a fixed universe per explicit ``materialize`` call, or
+sources for an explicitly requested identity view against a fixed base. They
+do not split data, learn transformations, schedule folds, or invoke a framework.
+A DAG controller can supply its task seed; standalone callers use the provider's
+own seed. Callback code remains in the host and is never loaded from a recipe
+or checkpoint.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ _DATA_FIELDS = {
 _TARGET_FIELDS = {"y", "target_names", "target_mask", "task_type"}
 _STATE_FIELDS = {"schema", "version", "recipe", "seed", "context", "fingerprint"}
 _BATCH_FIELDS = {"schema", "version", "provider", "sample_ids", "batch_size", "drop_last", "position"}
+_VIEW_STATE_FIELDS = {"schema", "version", "recipe", "seed", "context", "sample_ids", "schema_fingerprint", "fingerprint"}
 
 
 def _json_copy(value: Any, label: str) -> Any:
@@ -68,6 +70,19 @@ def _cohort_fingerprint(cohort: MultimodalDataset) -> str:
     return _digest(cohort.to_dict())
 
 
+def _view_schema_fingerprint(cohort: MultimodalDataset) -> str:
+    """Bind source contracts and target layout without binding view cardinality."""
+    targets = cohort.target_descriptor()
+    targets.pop("shape", None)
+    if targets["target_mask"] is not None:
+        targets["target_mask"].pop("shape", None)
+    return _digest({
+        "sources": cohort.schema_descriptors(),
+        "source_alignment": cohort.source_alignment,
+        "targets": targets,
+    })
+
+
 def _closed_state(state: Any, *, fields: set[str], schema: str) -> dict[str, Any]:
     result = _json_mapping(state, "checkpoint")
     if set(result) != fields or result.get("schema") != schema or type(result.get("version")) is not int or result["version"] != 1:
@@ -87,11 +102,19 @@ class DataProvider:
     Existing sources/targets can be replaced only with the corresponding
     opt-in. Groups and partitions of a base can never be changed by generation.
 
+    With a fixed ``base``, optional ``generate_view`` produces only the sources
+    requested for a finite identity view. Its callback receives explicit
+    ``sample_ids`` plus the usual seed, params and context. Targets cannot be
+    replaced per view: they must be frozen before CV planning. This IO method
+    is an on-demand building block; only a scheduler can authorize fold views.
+    The fixed base must already contain targets for this fit-capable profile.
+
     Recipe params reserve ``_io_assembly`` for the fixed-base fingerprint and
     replacement rules. Callback params contain only the caller's parameters.
     Parameters/context must be finite JSON values. This initial profile is
     run-scoped, finite and unlearned. It does not promise lazy out-of-core
-    generation: all indexed/batch views read the already materialized cohort.
+    generation: indexed/batch views read the materialized cohort; explicit
+    ``materialize_view`` invokes the separate view callback on demand.
 
     Checkpoints contain data identities and configuration, never executable
     callback code. To resume, construct the same provider and call
@@ -103,6 +126,7 @@ class DataProvider:
         self,
         generate: Callable[..., MultimodalDataset | Mapping[str, Any]],
         *,
+        generate_view: Callable[..., Mapping[str, Any]] | None = None,
         provider_id: str,
         provider_version: str = "1",
         params: Mapping[str, Any] | None = None,
@@ -114,6 +138,8 @@ class DataProvider:
     ) -> None:
         if not callable(generate):
             raise TypeError("generate must be callable")
+        if generate_view is not None and not callable(generate_view):
+            raise TypeError("generate_view must be callable")
         for label, value in (("provider_id", provider_id), ("provider_version", provider_version)):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{label} must be a non-empty string")
@@ -128,9 +154,16 @@ class DataProvider:
             raise ValueError("replace_targets must be boolean")
         if (replacements or replace_targets) and base is None:
             raise ValueError("Replacement rules require an explicit base cohort")
+        if generate_view is not None and base is None:
+            raise ValueError("View generation requires a fixed base cohort with stable identities")
+        if generate_view is not None and base is not None and base.y is None:
+            raise ValueError("View generation requires targets fixed in the base before CV planning")
+        if generate_view is not None and replace_targets:
+            raise ValueError("View generation cannot replace targets after fold planning")
         if base is not None and set(replacements) - base.sources.keys():
             raise ValueError("replace_sources names must exist in the fixed base")
         self._generate = generate
+        self._generate_view = generate_view
         self._provider_id = provider_id
         self._provider_version = provider_version
         self._params = _json_mapping({} if params is None else params, "params")
@@ -145,6 +178,7 @@ class DataProvider:
         self._replace_targets = replace_targets
         self._cohort: MultimodalDataset | None = None
         self._state: dict[str, Any] | None = None
+        self._view_schema: str | None = None
 
     @property
     def provider_id(self) -> str:
@@ -178,13 +212,15 @@ class DataProvider:
             "replace_sources": list(self._replace_sources),
             "replace_targets": self._replace_targets,
         }
+        if self._generate_view is not None:
+            params["_io_assembly"]["view_generation"] = True
         return {
             "provider_id": self.provider_id, "provider_version": self.provider_version,
             "params": params, "seed": self.seed, "scope": "run", "finite": True,
             "learned": False, "context": _json_mapping(self._context, "context"),
         }
 
-    def _assemble(self, result: MultimodalDataset | Mapping[str, Any]) -> MultimodalDataset:
+    def _assemble(self, result: MultimodalDataset | Mapping[str, Any], *, base_ids: Sequence[str] | None = None) -> MultimodalDataset:
         if isinstance(result, MultimodalDataset):
             if self._base is not None:
                 raise ValueError("A provider with a fixed base must return an explicit partial mapping")
@@ -199,7 +235,7 @@ class DataProvider:
             if "sources" not in payload:
                 raise ValueError("A complete provider output requires sources when no base is given")
             return MultimodalDataset(**payload)
-        base = self._base
+        base = self._base if base_ids is None else self._base.take(base_ids)
         ordered = base.take(payload["sample_ids"])
         if len(ordered) != len(base):
             raise ValueError("Provider output sample_ids must equal the fixed base universe")
@@ -229,6 +265,92 @@ class DataProvider:
             name=payload.get("name", ordered.name),
         )
         return assembled.take(base.sample_ids)
+
+    def materialize_view(
+        self, sample_ids: Sequence[str], *, seed: int | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> MultimodalDataset:
+        """Generate one requested identity view without materializing the run cohort.
+
+        ``generate_view(sample_ids=..., seed=..., params=..., context=...)``
+        must return a partial constructor mapping over exactly those IDs. The
+        fixed base supplies immutable identities, groups, partitions and
+        targets. A graph scheduler must pass its authorized fold/sample view;
+        this IO method cannot decide CV membership on its own.
+        """
+        if self._generate_view is None or self._base is None:
+            raise RuntimeError("View generation requires generate_view and a fixed base cohort")
+        ids = _identities(sample_ids, "view sample_ids")
+        if not ids:
+            raise ValueError("View generation requires at least one sample ID")
+        if set(ids) - set(self._base.sample_ids):
+            raise ValueError("View generation sample IDs must belong to the fixed base cohort")
+        effective_seed = self.seed if seed is None else _unsigned(seed, "seed", maximum=2**64 - 1)
+        effective_context = _json_mapping(self._context if context is None else context, "context")
+        output = self._generate_view(
+            sample_ids=ids, seed=effective_seed,
+            params=_json_mapping(self._params, "params"),
+            context=_json_mapping(effective_context, "context"),
+        )
+        if not isinstance(output, Mapping):
+            raise TypeError("generate_view must return a partial constructor-field mapping")
+        if "name" in output and output["name"] != self._base.name:
+            raise ValueError("Provider view cannot change fixed base name")
+        if "source_alignment" in output and output["source_alignment"] != self._base.source_alignment:
+            raise ValueError("Provider view cannot change fixed base source alignment")
+        cohort = self._assemble(output, base_ids=ids)
+        schema_fingerprint = _view_schema_fingerprint(cohort)
+        if self._view_schema is not None and self._view_schema != schema_fingerprint:
+            raise ValueError("Provider view schema changed between requests")
+        evidence = {
+            "schema": "nirs4all.data-provider-view", "version": 1,
+            "recipe": self.recipe(), "seed": effective_seed,
+            "context": effective_context, "sample_ids": list(ids),
+            "schema_fingerprint": schema_fingerprint,
+            "fingerprint": _cohort_fingerprint(cohort),
+        }
+        self._view_schema = schema_fingerprint
+        object.__setattr__(cohort, "_data_provider_view_evidence", evidence)
+        return cohort
+
+    def view_state_dict(self, cohort: MultimodalDataset) -> dict[str, Any]:
+        """Return a JSON checkpoint for a view, rejecting post-generation edits."""
+        if not isinstance(cohort, MultimodalDataset):
+            raise TypeError("view_state_dict requires a MultimodalDataset")
+        state = getattr(cohort, "_data_provider_view_evidence", None)
+        saved = _closed_state(state, fields=_VIEW_STATE_FIELDS, schema="nirs4all.data-provider-view")
+        if (saved["sample_ids"] != list(cohort.sample_ids)
+                or _digest(saved["recipe"]) != _digest(self.recipe())
+                or _view_schema_fingerprint(cohort) != saved["schema_fingerprint"]
+                or _cohort_fingerprint(cohort) != saved["fingerprint"]):
+            raise ValueError("Provider view recipe or content changed after generation")
+        return saved
+
+    def restore_view(self, state: Mapping[str, Any]) -> MultimodalDataset:
+        """Regenerate an exact view from a checkpoint without changing run state."""
+        saved = _closed_state(state, fields=_VIEW_STATE_FIELDS, schema="nirs4all.data-provider-view")
+        if _digest(saved["recipe"]) != _digest(self.recipe()):
+            raise ValueError("Provider view checkpoint recipe does not match this provider")
+        seed = _unsigned(saved["seed"], "view checkpoint seed", maximum=2**64 - 1)
+        context = _json_mapping(saved["context"], "view checkpoint context")
+        ids = _identities(saved["sample_ids"], "view checkpoint sample_ids")
+        fingerprint = saved["fingerprint"]
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64 or any(c not in "0123456789abcdef" for c in fingerprint):
+            raise ValueError("Provider view checkpoint fingerprint must be a SHA-256 hex digest")
+        schema_fingerprint = saved["schema_fingerprint"]
+        if not isinstance(schema_fingerprint, str) or len(schema_fingerprint) != 64 or any(c not in "0123456789abcdef" for c in schema_fingerprint):
+            raise ValueError("Provider view checkpoint schema_fingerprint must be a SHA-256 hex digest")
+        previous_schema = self._view_schema
+        try:
+            cohort = self.materialize_view(ids, seed=seed, context=context)
+            if _view_schema_fingerprint(cohort) != schema_fingerprint:
+                raise ValueError("Regenerated provider view schema does not match checkpoint")
+            if self.view_state_dict(cohort)["fingerprint"] != fingerprint:
+                raise ValueError("Regenerated provider view content does not match checkpoint fingerprint")
+        except Exception:
+            self._view_schema = previous_schema
+            raise
+        return cohort
 
     def _produce(self, seed: int, context: dict[str, Any]) -> tuple[MultimodalDataset, dict[str, Any]]:
         result = self._generate(seed=seed, params=_json_mapping(self._params, "params"), context=_json_mapping(context, "context"))
