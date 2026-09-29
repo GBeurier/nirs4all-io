@@ -50,6 +50,8 @@ def test_publication_waits_for_source_oracle_and_binding_validation() -> None:
         ("release-crates.yml", "publish-crates"),
         ("release-npm.yml", "build-and-publish"),
         ("release-r.yml", "publish-release-asset"),
+        ("release-source.yml", "source-release"),
+        ("release-matlab.yml", "matlab-package"),
     ):
         jobs = load(name)["jobs"]
         assert jobs["release-validation"]["uses"] == "./.github/workflows/release-validation.yml"

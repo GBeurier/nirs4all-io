@@ -27,7 +27,11 @@ permissions:
   contents: write   # attach the asset to the Release
 
 jobs:
+  release-validation:
+    uses: ./.github/workflows/release-validation.yml
+
   matlab-package:
+    needs: release-validation
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7.0.0
