@@ -26,3 +26,39 @@ jobs:
           # clean gate validates the self-contained wheel and its adapter seam.
           pip install pytest pyarrow dist/*.whl
           python -m pytest bindings/python/tests -q
+
+  candidate-wheels:
+    name: Candidate wheel (${{ matrix.label }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x86_64
+          - os: macos-14
+            label: macos-aarch64
+          - os: windows-2022
+            label: windows-x64
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6.3.0
+        with:
+          python-version: "3.11"
+      - name: Build candidate Python wheel
+        shell: bash
+        run: |
+          python -m pip install maturin
+          python -m maturin build --locked --release -m bindings/python/Cargo.toml --interpreter python --out dist
+      - name: Install and test candidate wheel
+        shell: bash
+        run: |
+          python -m pip install pytest pyarrow dist/*.whl
+          python -m pytest bindings/python/tests -q
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: candidate-python-wheel-${{ matrix.label }}
+          path: dist/*.whl
+          if-no-files-found: error
