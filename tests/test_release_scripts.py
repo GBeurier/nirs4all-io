@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import shutil
 import subprocess
 import tomllib
 import zipfile
@@ -90,6 +91,54 @@ def test_rust_security_gate_audits_every_lockfile() -> None:
             encoding="utf-8"
         )
         assert "bash scripts/audit_rust_locks.sh" in workflow_source
+
+
+def test_python_candidate_version_is_development_only(tmp_path: Path) -> None:
+    files = (
+        "Cargo.toml",
+        "scripts/bump_version.sh",
+        "bindings/python/Cargo.toml",
+        "bindings/wasm/Cargo.toml",
+        "bindings/r/configure",
+        "bindings/r/Cargo.lock.rust",
+        "bindings/r/DESCRIPTION",
+        "src/nirs4all_io/_version.py",
+        *(f"crates/{name}/Cargo.toml" for name in (
+            "nirs4all-io-core", "nirs4all-io", "nirs4all-io-capi",
+            "nirs4all-io-cli", "nirs4all-io-dagml",
+        )),
+    )
+    for relative in files:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+    # The R closure is covered separately; isolate the candidate-version policy.
+    (tmp_path / "scripts/check_r_reduced_workspace.py").write_text("", encoding="utf-8")
+
+    major, minor, patch = map(int, WORKSPACE_VERSION.split("."))
+    candidate = f"{major}.{minor}.{patch + 1}-dev.0"
+    binding = tmp_path / "bindings/python/Cargo.toml"
+    current_binding = tomllib.loads(binding.read_text(encoding="utf-8"))["package"]["version"]
+    binding.write_text(binding.read_text(encoding="utf-8").replace(
+        f'version = "{current_binding}"', f'version = "{candidate}"', 1,
+    ), encoding="utf-8")
+    lock = tmp_path / "bindings/python/Cargo.lock"
+    lock.write_text(f'[[package]]\nname = "nirs4all-io-py"\nversion = "{candidate}"\n', encoding="utf-8")
+
+    command = [str(tmp_path / "scripts/bump_version.sh")]
+    accepted = subprocess.run([*command, "--check-candidate"], capture_output=True, text=True)
+    assert accepted.returncode == 0, accepted.stderr
+    assert subprocess.run([*command, "--check"], capture_output=True).returncode == 1
+
+    lock.write_text(lock.read_text(encoding="utf-8").replace(candidate, WORKSPACE_VERSION), encoding="utf-8")
+    assert subprocess.run([*command, "--check-candidate"], capture_output=True).returncode == 1
+
+    binding.write_text(binding.read_text(encoding="utf-8").replace(candidate, f"{major}.{minor}.{patch + 2}-dev.0"), encoding="utf-8")
+    assert subprocess.run([*command, "--check-candidate"], capture_output=True).returncode == 1
+
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "rust-security:" in release
+    assert "run: scripts/bump_version.sh --check" in release
 
 
 def test_source_release_removes_sbom_staging_before_clean_tree_gate() -> None:

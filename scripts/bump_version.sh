@@ -10,6 +10,7 @@
 # Usage:
 #   scripts/bump_version.sh                # sync manifests to the SoT (idempotent)
 #   scripts/bump_version.sh --check        # exit 1 if any manifest drifts from the SoT
+#   scripts/bump_version.sh --check-candidate  # allow only the next Python patch dev wheel
 #   scripts/bump_version.sh --bump X.Y.Z[-pre]   # rewrite the SoT then sync
 #   scripts/bump_version.sh --help
 #
@@ -139,6 +140,7 @@ NEW_VERSION=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --check)  MODE="check"; shift ;;
+        --check-candidate) MODE="check-candidate"; shift ;;
         --bump)
             if [[ $# -lt 2 ]]; then
                 echo "error: --bump requires X.Y.Z[-pre]" >&2
@@ -179,11 +181,24 @@ fi
 CARGO_VERSION="$(read_workspace_version)"
 PEP440_VERSION="$(to_pep440 "${CARGO_VERSION}")"
 R_VERSION="$(to_r "${CARGO_VERSION}")"
+PYTHON_BINDING_VERSION="${CARGO_VERSION}"
+if [[ "${MODE}" == "check-candidate" && "${CARGO_VERSION}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    candidate="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((10#${BASH_REMATCH[3]} + 1))-dev.0"
+    binding_version=$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "${ROOT}/bindings/python/Cargo.toml" | head -n1 || true)
+    if [[ "${binding_version}" == "${candidate}" ]]; then
+        PYTHON_BINDING_VERSION="${candidate}"
+    fi
+fi
+CHECK_MODE=false
+[[ "${MODE}" == "check" || "${MODE}" == "check-candidate" ]] && CHECK_MODE=true
 
-if [[ "${MODE}" == "check" ]]; then
+if ${CHECK_MODE}; then
     echo "  canonical Cargo version : ${CARGO_VERSION}"
     echo "  derived PEP 440 version : ${PEP440_VERSION}"
     echo "  derived R version       : ${R_VERSION}"
+    if [[ "${MODE}" == "check-candidate" && "${PYTHON_BINDING_VERSION}" != "${CARGO_VERSION}" ]]; then
+        echo "  Python wheel candidate : ${PYTHON_BINDING_VERSION}"
+    fi
 else
     echo "  syncing manifests to Cargo=${CARGO_VERSION} / PEP440=${PEP440_VERSION} / R=${R_VERSION}"
 fi
@@ -220,7 +235,7 @@ update_with_sed() {
     local found
     found=$(printf '%s\n' "${current}" | sed -E "s|.*${match}.*|\1|" | head -n1)
 
-    if [[ "${MODE}" == "check" ]]; then
+    if ${CHECK_MODE}; then
         if [[ "${found}" != "${expected}" ]]; then
             echo "  DRIFT: ${rel} reports '${found}' (expected '${expected}')" >&2
             DRIFTED+=("${rel}")
@@ -246,11 +261,11 @@ update_cargo_lock_package() {
         echo "  DRIFT: ${rel} has no package '${package}'" >&2
         DRIFTED+=("${rel}:${package}")
         EXIT_CODE=1
-    elif [[ "${MODE}" == "check" && "${current}" != "${expected}" ]]; then
+    elif ${CHECK_MODE} && [[ "${current}" != "${expected}" ]]; then
         echo "  DRIFT: ${rel} package '${package}' reports '${current}' (expected '${expected}')" >&2
         DRIFTED+=("${rel}:${package}")
         EXIT_CODE=1
-    elif [[ "${MODE}" != "check" && "${current}" != "${expected}" ]]; then
+    elif ! ${CHECK_MODE} && [[ "${current}" != "${expected}" ]]; then
         sed -i -E "/^name = \"${package}\"$/,/^\[\[package\]\]/{s/^(version[[:space:]]*=[[:space:]]*\")[^\"]+(\")/\1${expected}\2/}" \
             "${abs}"
         echo "  updated ${rel}:${package}: ${current} → ${expected}"
@@ -279,11 +294,14 @@ update_with_sed \
     "s/^(nirs4all-io[[:space:]]*=.*version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
 
 # Python PyO3 crate (bindings/python/Cargo.toml: line  version = "X.Y.Z[-pre]")
+# A development check may keep exactly the next patch's dev.0 wheel while the
+# published Rust workspace remains at its last release. Release checks are strict.
 update_with_sed \
     "bindings/python/Cargo.toml" \
-    "${CARGO_VERSION}" \
+    "${PYTHON_BINDING_VERSION}" \
     "^version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
-    "s/^(version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
+    "s/^(version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${PYTHON_BINDING_VERSION}\2/"
+update_cargo_lock_package "bindings/python/Cargo.lock" "nirs4all-io-py" "${PYTHON_BINDING_VERSION}"
 
 # WASM crate (bindings/wasm/Cargo.toml)
 update_with_sed \
@@ -325,7 +343,7 @@ for rel in \
     "crates/nirs4all-io-dagml/Cargo.toml"
 do
     if ! grep -Eq "^version\\.workspace[[:space:]]*=[[:space:]]*true" "${ROOT}/${rel}"; then
-        if [[ "${MODE}" == "check" ]]; then
+        if ${CHECK_MODE}; then
             echo "  DRIFT: ${rel} must use version.workspace = true" >&2
             DRIFTED+=("${rel}")
             EXIT_CODE=1
@@ -366,18 +384,20 @@ update_with_sed \
 # ---------------------------------------------------------------------------
 # 8. Summary
 # ---------------------------------------------------------------------------
-if [[ "${MODE}" == "check" ]]; then
+if ${CHECK_MODE}; then
     N4IO_CHECK_PYTHON="$(find_python311)"
     if ! "${N4IO_CHECK_PYTHON}" "${ROOT}/scripts/check_r_reduced_workspace.py" --root "${ROOT}"; then
         DRIFTED+=("bindings/r/reduced-workspace")
         EXIT_CODE=1
     fi
     if [[ ${EXIT_CODE} -eq 0 ]]; then
-        echo "  OK: every manifest is in sync with the Cargo workspace version (${CARGO_VERSION})"
+        echo "  OK: manifests satisfy the ${MODE} version policy (${CARGO_VERSION})"
     else
         echo "" >&2
-        echo "FAIL: ${#DRIFTED[@]} manifest(s) drifted from the Cargo workspace version." >&2
-        echo "      Run scripts/bump_version.sh to re-sync." >&2
+        echo "FAIL: ${#DRIFTED[@]} manifest(s) violate the ${MODE} version policy." >&2
+        if [[ "${MODE}" == "check" ]]; then
+            echo "      Run scripts/bump_version.sh to re-sync before release." >&2
+        fi
     fi
 fi
 exit ${EXIT_CODE}
