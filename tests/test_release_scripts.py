@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from scripts.normalize_cyclonedx import canonicalize_arrays, validate_cyclonedx, verify_subject
-from scripts.normalize_wheel import normalize_wheel
+from scripts.normalize_wheel import binding_pep440_version, normalize_wheel
 from scripts.release_paths import CANONICAL_SOURCE, normalize_source_strings, refuse_source_path_leaks
 from scripts.rust_reproducibility import reproducible_rust_env
 from scripts.scan_artifact_paths import scan_paths
@@ -25,6 +25,7 @@ from scripts.write_release_receipt import reproducibility_covers, required_artif
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+BINDING_VERSION = binding_pep440_version(ROOT)
 
 
 def test_formats_security_repin_is_exact_across_python_and_web() -> None:
@@ -213,8 +214,7 @@ def test_deterministic_zip_has_fixed_metadata(tmp_path: Path) -> None:
         assert all(not info.extra for info in archive.infolist())
 
 
-def _write_fake_wheel(path: Path, *, duplicate: bool = False) -> None:
-    version = WORKSPACE_VERSION
+def _write_fake_wheel(path: Path, *, duplicate: bool = False, version: str = BINDING_VERSION) -> None:
     dist = f"nirs4all_io-{version}.dist-info"
     members = {
         "nirs4all_io/__init__.py": b"",
@@ -236,7 +236,7 @@ def _write_fake_wheel(path: Path, *, duplicate: bool = False) -> None:
 
 
 def test_wheel_normalizer_sets_commit_serial_and_record(tmp_path: Path) -> None:
-    wheel = tmp_path / f"nirs4all_io-{WORKSPACE_VERSION}-py3-none-any.whl"
+    wheel = tmp_path / f"nirs4all_io-{BINDING_VERSION}-py3-none-any.whl"
     _write_fake_wheel(wheel)
     normalize_wheel(wheel, ROOT, 1_700_000_000, "a" * 40)
     with zipfile.ZipFile(wheel) as archive:
@@ -250,9 +250,16 @@ def test_wheel_normalizer_sets_commit_serial_and_record(tmp_path: Path) -> None:
 
 
 def test_wheel_normalizer_refuses_duplicate_members(tmp_path: Path) -> None:
-    wheel = tmp_path / f"nirs4all_io-{WORKSPACE_VERSION}-py3-none-any.whl"
+    wheel = tmp_path / f"nirs4all_io-{BINDING_VERSION}-py3-none-any.whl"
     _write_fake_wheel(wheel, duplicate=True)
     with pytest.raises(SystemExit, match="duplicate"):
+        normalize_wheel(wheel, ROOT, 1_700_000_000, "a" * 40)
+
+
+def test_wheel_normalizer_refuses_wrong_python_binding_version(tmp_path: Path) -> None:
+    wheel = tmp_path / "nirs4all_io-999.0.0-py3-none-any.whl"
+    _write_fake_wheel(wheel, version="999.0.0")
+    with pytest.raises(SystemExit, match="Python binding manifest"):
         normalize_wheel(wheel, ROOT, 1_700_000_000, "a" * 40)
 
 

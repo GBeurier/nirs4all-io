@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import uuid
 import zipfile
 from collections.abc import Iterator
@@ -40,6 +41,20 @@ def record_digest(data: bytes) -> str:
     return f"sha256={value.decode('ascii')}"
 
 
+def binding_pep440_version(root: Path) -> str:
+    """Resolve the Python binding's Cargo version as maturin writes METADATA."""
+    manifest = tomllib.loads((root / "bindings/python/Cargo.toml").read_text(encoding="utf-8"))
+    cargo_version = manifest["package"]["version"]
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-(alpha|beta|rc|dev)(?:\.(0|[1-9]\d*))?)?", cargo_version)
+    if match is None:
+        raise SystemExit(f"unsupported Python binding Cargo version: {cargo_version}")
+    base, kind, number = match.groups()
+    if kind is None:
+        return base
+    suffix = {"alpha": "a", "beta": "b", "rc": "rc", "dev": ".dev"}[kind]
+    return f"{base}{suffix}{number or '0'}"
+
+
 def normalize_wheel(wheel: Path, root: Path, epoch: int, commit: str) -> None:
     with zipfile.ZipFile(wheel, "r") as source:
         names = [info.filename for info in source.infolist()]
@@ -56,14 +71,10 @@ def normalize_wheel(wheel: Path, root: Path, epoch: int, commit: str) -> None:
     metadata_names = [name for name in members if name.endswith(".dist-info/METADATA")]
     if len(metadata_names) != 1:
         raise SystemExit(f"{wheel}: expected exactly one dist-info/METADATA")
-    version_match = re.search(
-        r"\[workspace\.package\][\s\S]*?^version\s*=\s*\"([^\"]+)\"",
-        (root / "Cargo.toml").read_text(encoding="utf-8"),
-        re.MULTILINE,
-    )
+    expected_version = binding_pep440_version(root)
     metadata = members[metadata_names[0]].decode("utf-8")
-    if version_match is None or f"Version: {version_match.group(1)}\n" not in metadata.replace("\r\n", "\n"):
-        raise SystemExit(f"{wheel}: package version does not match the source workspace")
+    if f"Version: {expected_version}\n" not in metadata.replace("\r\n", "\n"):
+        raise SystemExit(f"{wheel}: package version does not match the Python binding manifest")
 
     sboms = sorted(name for name in members if ".dist-info/sboms/" in name)
     if not sboms:
