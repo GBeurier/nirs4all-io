@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.normalize_cyclonedx import canonicalize_arrays, validate_cyclonedx, verify_subject
 from scripts.normalize_wheel import binding_pep440_version, normalize_wheel
@@ -26,6 +27,33 @@ from scripts.write_release_receipt import reproducibility_covers, required_artif
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
 BINDING_VERSION = binding_pep440_version(ROOT)
+
+
+def test_publication_waits_for_source_oracle_and_binding_validation() -> None:
+    workflows = ROOT / ".github" / "workflows"
+
+    def load(name: str) -> dict:
+        return yaml.load((workflows / name).read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+
+    validation = load("release-validation.yml")
+    assert "workflow_call" in validation["on"]
+    assert {job["uses"] for job in validation["jobs"].values()} == {
+        "./.github/workflows/ci.yml",
+        "./.github/workflows/parity-oracle.yml",
+        "./.github/workflows/cross-binding.yml",
+    }
+    for name in ("ci.yml", "parity-oracle.yml", "cross-binding.yml"):
+        assert "workflow_call" in load(name)["on"]
+
+    for name, publisher in (
+        ("release.yml", "publish-pypi"),
+        ("release-crates.yml", "publish-crates"),
+        ("release-npm.yml", "build-and-publish"),
+        ("release-r.yml", "publish-release-asset"),
+    ):
+        jobs = load(name)["jobs"]
+        assert jobs["release-validation"]["uses"] == "./.github/workflows/release-validation.yml"
+        assert "release-validation" in jobs[publisher]["needs"]
 
 
 def test_formats_security_repin_is_exact_across_python_and_web() -> None:

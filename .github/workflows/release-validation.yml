@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+# Re-run the same source, oracle and six-binding gates on the release ref.
+name: Release validation
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    uses: ./.github/workflows/ci.yml
+  oracle:
+    uses: ./.github/workflows/parity-oracle.yml
+  bindings:
+    uses: ./.github/workflows/cross-binding.yml
