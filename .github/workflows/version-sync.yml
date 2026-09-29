@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 # Fail the PR if any downstream binding manifest drifts from the canonical
-# workspace version in the root Cargo.toml ([workspace.package] version):
+# workspace version in the root Cargo.toml ([workspace.package] version).
+# During development only, the Python binding may use the next patch's dev.0
+# version; its Cargo.lock must agree. Releases require strict equality.
 #   - Cargo.toml [workspace.dependencies] nirs4all-io-core / nirs4all-io
 #                                         (internal dep version, for crates.io)
 #   - bindings/python/Cargo.toml          (Cargo SemVer)
@@ -17,7 +19,7 @@
 # bindings/python/pyproject.toml is dynamic-from-Cargo (maturin reads
 # bindings/python/Cargo.toml) so it is NOT a sync target.
 #
-# Local equivalent:  scripts/bump_version.sh --check
+# Local equivalent:  scripts/bump_version.sh --check-candidate
 #
 # Bumping the version on a working branch:
 #   scripts/bump_version.sh --bump X.Y.Z[-pre]   # rewrites the SoT
@@ -58,5 +60,5 @@ jobs:
             exit 1
           fi
 
-      - name: Check every manifest is in sync with the Cargo workspace version
-        run: scripts/bump_version.sh --check
+      - name: Check manifests and the Python development candidate
+        run: scripts/bump_version.sh --check-candidate
