@@ -59,6 +59,24 @@ jobs:
       - name: Pytest (incl. canonical + contract goldens)
         run: pytest -m "not parity"
 
+  provider-framework-adapters:
+    name: Provider sklearn and PyTorch adapters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-python@v6.3.0
+        with:
+          python-version: "3.11"
+      - name: Install provider consumers
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest scikit-learn==1.9.1
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+      - name: Verify real sklearn fits and PyTorch DataLoader workers
+        run: |
+          python -c 'import sklearn, torch; print("sklearn", sklearn.__version__, "torch", torch.__version__)'
+          python -m pytest tests/test_provider_adapters.py -q -rs
+
   python-binding:
     name: Published Python wheel gate
     runs-on: ubuntu-latest
