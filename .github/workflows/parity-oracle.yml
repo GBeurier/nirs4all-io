@@ -4,6 +4,7 @@
 # nirs4all + dag-ml + dag-ml-data; this gate must run for real on main.
 name: Parity oracle
 on:
+  workflow_call:
   push:
     branches: [main]
   pull_request:

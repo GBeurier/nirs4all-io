@@ -33,7 +33,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-validation:
+    uses: ./.github/workflows/release-validation.yml
+
   publish-crates:
+    needs: release-validation
     runs-on: ubuntu-latest
     # Production tags only (non pre-release); dispatch may dry-run any time.
     if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) }}

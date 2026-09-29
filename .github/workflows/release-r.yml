@@ -40,6 +40,9 @@ permissions:
   contents: read
 
 jobs:
+  release-validation:
+    uses: ./.github/workflows/release-validation.yml
+
   # =========================================================================
   # R CMD check --as-cran across the same OS/R matrix CRAN itself uses, against
   # the self-contained vendored tarball (no prebuilt cdylib).
@@ -195,7 +198,7 @@ jobs:
   # =========================================================================
   publish-release-asset:
     name: Attach R tarball to GitHub Release
-    needs: build-tarball
+    needs: [build-tarball, release-validation]
     if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
     runs-on: ubuntu-22.04
     permissions:

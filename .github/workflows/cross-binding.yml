@@ -3,6 +3,7 @@
 # through the Rust core. Missing runtimes are unavailable, never a green skip.
 name: Cross-binding qualification
 on:
+  workflow_call:
   push:
     branches: [main, 'rc/**']
   pull_request:

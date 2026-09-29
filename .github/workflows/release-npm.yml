@@ -44,7 +44,11 @@ env:
   NPM_PKG_NAME: "@nirs4all/io-wasm"
 
 jobs:
+  release-validation:
+    uses: ./.github/workflows/release-validation.yml
+
   build-and-publish:
+    needs: release-validation
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7.0.0
