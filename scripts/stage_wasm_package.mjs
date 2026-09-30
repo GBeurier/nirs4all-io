@@ -21,7 +21,7 @@ const legalMirrors = [
   "crates/nirs4all-io-capi",
   "crates/nirs4all-io-cli",
 ];
-const wasmLicenseClosureChecksum = "829f0ed1e8b6c151d01a36c80ccfd0a9075c6a7bd033ae79bdee6072a5d35ee8";
+const wasmLicenseClosureChecksum = "e0af667e46ecc4c4d0d49cd164ab10bed61b8928f66904b2cd5171377642e3c8";
 const lockedLicenseSources = [
   {
     packageName: "ryu",
