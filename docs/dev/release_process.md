@@ -17,7 +17,7 @@ per-surface workflows are `release-crates.yml`, `release-npm.yml`,
 > `serde`/`sha2`, no C system library). So io ships **macOS binary wheels** and
 > macOS C-ABI archives alongside Linux + Windows with no special handling.
 
-## 0.2.1 — 2026-09-30
+## 0.2.2 — 2026-09-30
 
 The Python provider supports bounded on-demand identity views with an immutable
 effective PLAN schema and scheduler-bound generated-view keys. Ragged temporal
@@ -28,7 +28,7 @@ transport in every non-Python host remain separate work.
 ## Single source of truth
 
 The canonical version is the **`[workspace.package] version` in the root
-`Cargo.toml`** (Cargo SemVer, currently `0.2.1`).
+`Cargo.toml`** (Cargo SemVer, currently `0.2.2`).
 `scripts/bump_version.sh` propagates it to every binding manifest, translating
 the spelling each ecosystem requires:
 
