@@ -58,6 +58,103 @@ def test_publication_waits_for_source_oracle_and_binding_validation() -> None:
         assert "release-validation" in jobs[publisher]["needs"]
 
 
+def test_npm_publication_supports_oidc_and_qualifies_the_published_tarball() -> None:
+    workflow = yaml.load((ROOT / ".github/workflows/release-npm.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    assert workflow["permissions"]["id-token"] == "write"
+    steps = workflow["jobs"]["build-and-publish"]["steps"]
+    node = next(step for step in steps if step.get("uses", "").startswith("actions/setup-node@"))
+    assert node["with"]["node-version"] == "24"
+    assert node["with"]["registry-url"] == "https://registry.npmjs.org"
+    install = next(step for step in steps if step.get("name") == "Install npm with trusted publishing support")
+    assert install["run"] == "npm install --global npm@11.19.1"
+    publish = next(step for step in steps if step.get("name") == "Publish to npm (provenance)")
+    assert publish["env"]["NODE_AUTH_TOKEN"] == "${{ secrets.NPM_TOKEN }}"
+    assert publish["run"].index('test "${PKG_NAME}" = "@nirs4all/io-wasm"') < publish["run"].index("if npm view")
+    assert 'npm publish "./${PACKAGES[0]}" --access public' in publish["run"]
+    qualify = next(step for step in steps if step.get("name") == "Smoke-test the exact retained npm tarball")
+    assert steps.index(install) < steps.index(qualify) < steps.index(publish)
+    assert 'tar -xzf "${PACKAGES[0]}" -C exact-npm' in qualify["run"]
+    assert "node exact-npm/raw/tests/node_smoke.cjs" in qualify["run"]
+    assert "node exact-npm/package/tests/idiomatic_smoke.mjs" in qualify["run"]
+
+
+@pytest.mark.parametrize("changed_path, version, name, tag_state, accepted", [
+    (None, "0.2.2", "@nirs4all/io-wasm", "original", True),
+    (".github/workflows/release-npm.yml", "0.2.2", "@nirs4all/io-wasm", "original", True),
+    ("tests/test_release_scripts.py", "0.2.2", "@nirs4all/io-wasm", "original", True),
+    ("src/nirs4all_io/api.py", "0.2.2", "@nirs4all/io-wasm", "original", False),
+    ("Cargo.toml", "0.2.2", "@nirs4all/io-wasm", "original", False),
+    ("bindings/wasm/Cargo.lock", "0.2.2", "@nirs4all/io-wasm", "original", False),
+    ("bindings/r/Cargo.lock.rust", "0.2.2", "@nirs4all/io-wasm", "original", False),
+    ("scripts/stage_wasm_package.mjs", "0.2.2", "@nirs4all/io-wasm", "original", False),
+    ("bindings/wasm/COPY_PROVENANCE.md", "0.2.2", "@nirs4all/io-wasm", "original", False),
+    (".github/workflows/release-validation.yml", "0.2.2", "@nirs4all/io-wasm", "original", False),
+    (None, "0.2.0", "@nirs4all/io-wasm", "original", False),
+    (None, "0.2.3", "@nirs4all/io-wasm", "original", False),
+    (None, "0.2.2", "@nirs4all/io", "original", False),
+    (None, "0.2.2", "@nirs4all/io-wasm", "missing", False),
+    (".github/workflows/release-npm.yml", "0.2.2", "@nirs4all/io-wasm", "moved", False),
+    (None, "0.2.2", "@nirs4all/io-wasm", "unrelated", False),
+])
+def test_npm_manual_repair_requires_original_tag_and_product_sources(
+    tmp_path: Path, changed_path: str | None, version: str, name: str, tag_state: str, accepted: bool,
+) -> None:
+    workflow = yaml.load((ROOT / ".github/workflows/release-npm.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    gate = next(step["run"] for step in workflow["jobs"]["build-and-publish"]["steps"] if step.get("id") == "gate")
+    branch = 'elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then\n'
+    identity_guard = gate.split(branch, 1)[1].split("for mirror", 1)[0]
+    release_commit = "d3594e26818f334622576efed325db7fe3247e08"
+    assert f'RELEASE_COMMIT="{release_commit}"' in identity_guard
+
+    def git(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.name=Release gate test", "-c", "user.email=release-gate@example.invalid",
+             "-c", "commit.gpgsign=false", *arguments],
+            cwd=tmp_path, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    git("init")
+    for relative in (".github/workflows/release-npm.yml", "tests/test_release_scripts.py", changed_path):
+        if relative is not None:
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "Original release fixture")
+    fixture_commit = git("rev-parse", "HEAD")
+    git("tag", "v0.2.2")
+    if changed_path is not None:
+        (tmp_path / changed_path).write_text("repair change\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-m", "Repair fixture")
+    if tag_state == "missing":
+        git("tag", "-d", "v0.2.2")
+    elif tag_state == "moved":
+        git("tag", "-f", "v0.2.2")
+    elif tag_state == "unrelated":
+        git("checkout", "--orphan", "unrelated")
+        git("commit", "-m", "Unrelated fixture")
+
+    # Execute the workflow's identity guard against a miniature release history.
+    # Substitute only its immutable release commit; stub Node's metadata read.
+    identity_guard = identity_guard.replace(f'RELEASE_COMMIT="{release_commit}"', 'RELEASE_COMMIT="$1"')
+    script = '''NPM_TEST_VERSION="$2"
+NPM_TEST_NAME="$3"
+node() {
+  case "$*" in
+    *.version*) echo "$NPM_TEST_VERSION" ;;
+    *.name*) echo "$NPM_TEST_NAME" ;;
+    *) return 1 ;;
+  esac
+}
+''' + identity_guard
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script, "npm-repair-gate", fixture_commit, version, name],
+        cwd=tmp_path, capture_output=True, text=True,
+    )
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
+
+
 def test_formats_security_repin_is_exact_across_python_and_web() -> None:
     expected = "0.2.9"
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
