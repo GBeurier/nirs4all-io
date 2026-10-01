@@ -12,8 +12,8 @@
 # - push tag v*.*.*  -> build + smoke + (non-rc) publish to npm
 # - workflow_dispatch (publish input) -> build + smoke + (publish=true) publish
 #
-# Publish requires the NPM_TOKEN repository secret (an automation token for the
-# @nirs4all org) AND that the @nirs4all npm scope is owned by the maintainer.
+# Publish uses npm trusted publishing when configured for this repository and
+# workflow, or the NPM_TOKEN repository secret as the token-based fallback.
 # Provenance (publishConfig.provenance=true, injected below) needs the
 # id-token: write permission and a public repo.
 name: release-npm
@@ -83,9 +83,14 @@ jobs:
 
       - uses: actions/setup-node@v6.4.0
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
+
+      - name: Install npm with trusted publishing support
+        # OIDC needs Node >=22.14 and npm >=11.5.1:
+        # https://docs.npmjs.com/trusted-publishers/
+        run: npm install --global npm@11.19.1
 
       - name: Verify WASM Cargo lock
         run: |
@@ -167,6 +172,7 @@ jobs:
       - name: Decide publish
         id: gate
         run: |
+          set -euo pipefail
           # Publish on a non-pre-release tag push, OR on workflow_dispatch with
           # publish=true. Pre-release tags (containing '-', e.g. -alpha.N/-rcN)
           # never publish.
@@ -174,26 +180,18 @@ jobs:
             echo "do=true" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
             PKG_VER=$(node -p "require('./exact-npm/package/package.json').version")
+            PKG_NAME=$(node -p "require('./exact-npm/package/package.json').name")
             RELEASE_TAG="v${PKG_VER}"
-            test "${RELEASE_TAG}" = "v0.2.0"
-            git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
-            git merge-base --is-ancestor "${RELEASE_TAG}^{commit}" HEAD
-            git diff --quiet "${RELEASE_TAG}" -- . \
+            RELEASE_COMMIT="d3594e26818f334622576efed325db7fe3247e08"
+            test "${PKG_NAME}" = "@nirs4all/io-wasm"
+            test "${RELEASE_TAG}" = "v0.2.2"
+            test "$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")" = "${RELEASE_COMMIT}"
+            git merge-base --is-ancestor "${RELEASE_COMMIT}" HEAD
+            # Only this workflow and its release regression tests may differ.
+            # All product sources, locks, staging and legal files stay at the tag.
+            git diff --quiet "${RELEASE_COMMIT}" -- . \
               ':(exclude).github/workflows/release-npm.yml' \
-              ':(exclude)bindings/wasm/Cargo.lock' \
-              ':(exclude)scripts/stage_wasm_package.mjs' \
-              ':(exclude)bindings/r/Cargo.lock.rust' \
-              ':(exclude)bindings/python/COPY_PROVENANCE.md' \
-              ':(exclude)bindings/r/inst/COPY_PROVENANCE.md' \
-              ':(exclude)bindings/wasm/COPY_PROVENANCE.md' \
-              ':(exclude)crates/nirs4all-io-core/COPY_PROVENANCE.md' \
-              ':(exclude)crates/nirs4all-io/COPY_PROVENANCE.md' \
-              ':(exclude)crates/nirs4all-io-capi/COPY_PROVENANCE.md' \
-              ':(exclude)crates/nirs4all-io-cli/COPY_PROVENANCE.md'
-            test "$(sha256sum scripts/stage_wasm_package.mjs | cut -d ' ' -f1)" = \
-              "61a5412231d4d8cdead5b1c9fff69885123bd9dbf8009453ef4e0a1cd3be6557"
-            test "$(sha256sum bindings/r/Cargo.lock.rust | cut -d ' ' -f1)" = \
-              "33d48a22a1be77a000cde2809680800fa3adc6fbcebbb69a443a4862f3bf4064"
+              ':(exclude)tests/test_release_scripts.py'
             for mirror in \
               bindings/python/COPY_PROVENANCE.md \
               bindings/r/inst/COPY_PROVENANCE.md \
@@ -206,7 +204,7 @@ jobs:
               cmp COPY_PROVENANCE.md "${mirror}"
             done
             python scripts/check_r_reduced_workspace.py
-            echo "Manual npm repair is the audited ${RELEASE_TAG} descendant."
+            echo "Manual npm repair retains ${RELEASE_TAG} product sources (${RELEASE_COMMIT})."
             echo "do=true" >> "$GITHUB_OUTPUT"
           else
             echo "do=false" >> "$GITHUB_OUTPUT"
@@ -228,6 +226,7 @@ jobs:
           test "${#PACKAGES[@]}" -eq 1
           PKG_NAME=$(node -p "require('./exact-npm/package/package.json').name")
           PKG_VER=$(node -p "require('./exact-npm/package/package.json').version")
+          test "${PKG_NAME}" = "@nirs4all/io-wasm"
           if npm view "${PKG_NAME}@${PKG_VER}" version >/dev/null 2>&1; then
             echo "${PKG_NAME}@${PKG_VER} already published; skipping."
             exit 0
