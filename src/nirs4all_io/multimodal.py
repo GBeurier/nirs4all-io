@@ -67,7 +67,7 @@ _JSON_SCHEMA_VERSION = 1
 
 
 def _identities(values: Sequence[str], label: str) -> tuple[str, ...]:
-    if isinstance(values, (str, bytes)):
+    if isinstance(values, (str, bytes, Mapping)):
         raise ValueError(f"{label} must be a sequence of sample IDs, not a string")
     ids = tuple(values)
     if any(not isinstance(value, str) or not value.strip() for value in ids):
@@ -81,6 +81,18 @@ def _readonly(values: Any) -> np.ndarray:
     array = np.array(values, copy=True)
     array.setflags(write=False)
     return array
+
+
+def _experimental_labels(values: Any, size: int, label: str) -> tuple[str, ...] | None:
+    """Copy explicit row-aligned labels without deriving experimental identity."""
+    if values is None:
+        return None
+    if isinstance(values, (str, bytes, Mapping)):
+        raise ValueError(f"{label} must be an aligned sequence of non-empty strings")
+    labels = tuple(values)
+    if len(labels) != size or any(not isinstance(value, str) or not value.strip() or "\x00" in value for value in labels):
+        raise ValueError(f"{label} must contain one non-empty string per dataset sample ID")
+    return labels
 
 
 def _row_positions(values: Sequence[int], size: int) -> np.ndarray:
@@ -436,6 +448,12 @@ class MultimodalDataset:
     ``task_type`` optionally declares regression or classification, including
     for prediction-only inputs. Assembly preserves this declaration without
     inferring a task or encoding labels.
+
+    ``independent_unit_ids`` and ``repetition_ids`` explicitly label experimental
+    units and observations within each unit. They are copied, read-only tuples;
+    repeated units require distinct repetition labels, and a unit cannot cross
+    declared partitions. These identities are independent of ``groups`` and do
+    not alter sample IDs or choose split, fit-influence or scoring policies.
     """
 
     def __init__(
@@ -449,6 +467,8 @@ class MultimodalDataset:
         task_type: Literal["regression", "classification"] | None = None,
         source_alignment: Literal["strict", "left"] = "strict",
         groups: Any = None,
+        independent_unit_ids: Sequence[str] | None = None,
+        repetition_ids: Sequence[str] | None = None,
         partitions: Sequence[str] | np.ndarray | None = None,
         name: str = "multimodal",
     ) -> None:
@@ -558,6 +578,19 @@ class MultimodalDataset:
                 previous = ownership.setdefault(group, str(partition))
                 if previous != partition:
                     raise ValueError(f"Group {group!r} crosses partitions {previous!r} and {str(partition)!r}")
+        units = _experimental_labels(independent_unit_ids, len(ids), "independent_unit_ids")
+        repetitions = _experimental_labels(repetition_ids, len(ids), "repetition_ids")
+        if repetitions is not None and units is None:
+            raise ValueError("repetition_ids require explicit independent_unit_ids")
+        if units is not None:
+            if repetitions is None and len(set(units)) != len(units):
+                raise ValueError("Repeated independent_unit_ids require explicit repetition_ids")
+            if repetitions is not None and len(set(zip(units, repetitions, strict=True))) != len(ids):
+                raise ValueError("Each independent unit/repetition pair must be unique")
+            unit_partitions: dict[str, str] = {}
+            for unit, partition in zip(units, partition_values, strict=True):
+                if unit_partitions.setdefault(unit, str(partition)) != partition:
+                    raise ValueError(f"Independent unit {unit!r} crosses partitions")
         self.sources: Mapping[str, TensorSource | RaggedSeriesSource] = MappingProxyType(aligned)
         self.sample_ids = ids
         self.y = target
@@ -566,11 +599,23 @@ class MultimodalDataset:
         self.task_type = task_type
         self.source_alignment = source_alignment
         self.groups = group_values
+        self._independent_unit_ids = units
+        self._repetition_ids = repetitions
         self.partitions = partition_values
         self.name = name
 
     def __len__(self) -> int:
         return len(self.sample_ids)
+
+    @property
+    def independent_unit_ids(self) -> tuple[str, ...] | None:
+        """Explicit experimental units, distinct from split groups and sample IDs."""
+        return self._independent_unit_ids
+
+    @property
+    def repetition_ids(self) -> tuple[str, ...] | None:
+        """Explicit repetitions within each experimental unit, never inferred."""
+        return self._repetition_ids
 
     def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
         """Persist host inputs without serializing the read-only mapping proxy."""
@@ -580,6 +625,7 @@ class MultimodalDataset:
             dict(self.sources), self.sample_ids, self.y, self.groups, self.partitions, self.name,
             self.target_names, self.target_mask, self.task_type, None if self.y is None else str(self.y.dtype),
             self.source_alignment,
+            self.independent_unit_ids, self.repetition_ids,
         ))
 
     def source_values(
@@ -650,6 +696,8 @@ class MultimodalDataset:
             task_type=self.task_type,
             source_alignment=self.source_alignment,
             groups=None if self.groups is None else self.groups[positions],
+            independent_unit_ids=None if self.independent_unit_ids is None else [self.independent_unit_ids[index] for index in positions],
+            repetition_ids=None if self.repetition_ids is None else [self.repetition_ids[index] for index in positions],
             partitions=self.partitions[positions],
             name=self.name,
         )
@@ -721,6 +769,8 @@ class MultimodalDataset:
             "task_type": self.task_type,
             "groups": None if self.groups is None else _array_to_dict(self.groups),
             "partitions": _array_to_dict(self.partitions),
+            **({"independent_unit_ids": list(self.independent_unit_ids)} if self.independent_unit_ids is not None else {}),
+            **({"repetition_ids": list(self.repetition_ids)} if self.repetition_ids is not None else {}),
         }
 
     @classmethod
@@ -743,7 +793,7 @@ class MultimodalDataset:
         """
         record = _closed_fields(
             payload, {"schema", "schema_version", "name", "sample_ids", "sources", "y", "groups", "partitions"},
-            "multimodal dataset", optional=frozenset({"target_names", "target_mask", "task_type", "source_alignment"}),
+            "multimodal dataset", optional=frozenset({"target_names", "target_mask", "task_type", "source_alignment", "independent_unit_ids", "repetition_ids"}),
         )
         if record["schema"] != _JSON_SCHEMA or type(record["schema_version"]) is not int or record["schema_version"] != _JSON_SCHEMA_VERSION:
             raise ValueError("Unsupported multimodal dataset schema or schema_version; expected nirs4all.multimodal-dataset version 1")
@@ -784,6 +834,7 @@ class MultimodalDataset:
             task_type=record.get("task_type"),
             source_alignment=record.get("source_alignment", "strict"),
             groups=None if record["groups"] is None else _array_from_dict(record["groups"], "groups"),
+            independent_unit_ids=record.get("independent_unit_ids"), repetition_ids=record.get("repetition_ids"),
             partitions=_array_from_dict(record["partitions"], "partitions"),
         )
 
@@ -810,11 +861,13 @@ def _restore_dataset(
     sources: Mapping[str, TensorSource | RaggedSeriesSource], sample_ids: Sequence[str], y: Any, groups: Any, partitions: np.ndarray, name: str,
     target_names: Sequence[str], target_mask: np.ndarray | None, task_type: Literal["regression", "classification"] | None, target_dtype: str | None,
     source_alignment: Literal["strict", "left"],
+    independent_unit_ids: Sequence[str] | None = None, repetition_ids: Sequence[str] | None = None,
 ) -> MultimodalDataset:
     return MultimodalDataset(
         sources, sample_ids=sample_ids, y=None if y is None else np.asarray(y, dtype=target_dtype), groups=groups, partitions=partitions, name=name,
         target_names=target_names, target_mask=target_mask, task_type=task_type,
         source_alignment=source_alignment,
+        independent_unit_ids=independent_unit_ids, repetition_ids=repetition_ids,
     )
 
 
