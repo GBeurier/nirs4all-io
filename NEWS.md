@@ -1,4 +1,8 @@
-# nirs4all-io 0.2.3
+# nirs4all-io 0.2.4
+
+Supersedes the unpublished 0.2.3 tag. The strict WASM license closure is refreshed
+for the paired native provider versions, and immutable-identity tests retain
+their checks under Python static analysis.
 
 - Preserve typed multimodal experimental-unit contracts in both public Python
   layouts, including complete source identities and strict typed-label validation.
