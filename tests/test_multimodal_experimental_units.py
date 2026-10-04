@@ -28,11 +28,11 @@ def test_explicit_units_repetitions_are_copied_and_read_only() -> None:
     assert cohort.independent_unit_ids == ("plant_a", "plant_a", "plant_b", "plant_b")
     assert cohort.repetition_ids == ("scan_0", "scan_1", "scan_0", "scan_1")
     assert cohort.sample_ids == ("row_a", "row_b", "row_c", "row_d")
+    assert cohort.groups is not None
     assert cohort.groups.tolist() == ["batch_a"] * 4
-    with pytest.raises(AttributeError):
-        cohort.independent_unit_ids = ("changed",) * 4
-    with pytest.raises(AttributeError):
-        cohort.repetition_ids = ("changed",) * 4
+    for attribute in ("independent_unit_ids", "repetition_ids"):
+        with pytest.raises(AttributeError):
+            setattr(cohort, attribute, ("changed",) * 4)
 
 
 def test_declared_units_survive_selection_json_pickle_and_python_mirror() -> None:
@@ -41,7 +41,9 @@ def test_declared_units_survive_selection_json_pickle_and_python_mirror() -> Non
     for restored in (selected, MultimodalDataset.from_dict(json.loads(json.dumps(selected.to_dict()))), pickle.loads(pickle.dumps(selected))):
         assert restored.independent_unit_ids == ("b", "a") and restored.repetition_ids == ("1", "0")
         assert restored.sample_ids == ("row_d", "row_a")
-        assert not restored.sources["nir"].values.flags.writeable
+        values = restored.sources["nir"].values
+        assert isinstance(values, np.ndarray)
+        assert not values.flags.writeable
     root = Path(__file__).resolve().parents[1]
     assert (root / "src/nirs4all_io/multimodal.py").read_bytes() == (root / "bindings/python/python/nirs4all_io/multimodal.py").read_bytes()
 
