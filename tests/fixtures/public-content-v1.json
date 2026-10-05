@@ -1,0 +1,25 @@
+{
+  "input": {
+    "z": [
+      null,
+      true,
+      false,
+      -0.0,
+      0,
+      1,
+      1.0,
+      1e-300,
+      1e+20,
+      1.2345678901234567
+    ],
+    "𐀀": "astral",
+    "": "bmp",
+    "strings": [
+      "é",
+      "猫",
+      "\n\t\\\""
+    ]
+  },
+  "canonical_content_utf8": "[\"object\",[[\"strings\",[\"array\",[[\"string\",\"é\"],[\"string\",\"猫\"],[\"string\",\"\\n\\t\\\\\\\"\"]]]],[\"z\",[\"array\",[[\"null\"],[\"bool\",true],[\"bool\",false],[\"number\",\"0000000000000000\"],[\"number\",\"0000000000000000\"],[\"number\",\"3ff0000000000000\"],[\"number\",\"3ff0000000000000\"],[\"number\",\"01a56e1fc2f8f359\"],[\"number\",\"4415af1d78b58c40\"],[\"number\",\"3ff3c0ca428c59fb\"]]]],[\"\",[\"string\",\"bmp\"]],[\"𐀀\",[\"string\",\"astral\"]]]]",
+  "sha256": "72ad1099228c14bc3d814829e876c95f107b0e907331bf701b64c3c6517c536c"
+}

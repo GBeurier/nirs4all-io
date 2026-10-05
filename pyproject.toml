@@ -34,13 +34,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dagml = ["dag-ml-data>=0.2.13"]
 parquet = ["pyarrow>=14.0.0"]
 excel = ["openpyxl>=3.1.0"]
 matlab = ["scipy>=1.10.0", "h5py>=3.8.0"]
 # Vendor spectroscopy files (OPUS/JCAMP/ASD/...) are read through the
 # separately published reader library.
 formats = ["nirs4all-formats==0.2.9"]
-all = ["nirs4all-io-oracle[parquet,excel,matlab,formats]"]
+all = ["nirs4all-io-oracle[parquet,excel,matlab,formats,dagml]"]
 dev = [
     "pytest>=7.4",
     "ruff>=0.6",

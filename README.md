@@ -49,6 +49,27 @@ feature projection. There is intentionally no Python
 and [`docs/development.md`](docs/development.md) for contributor references and
 the private development archive policy.
 
+## Public dataset transport (0.2.5)
+
+`nirs4all_io.public_dataset.dataset` accepts named host arrays or a versioned
+`nirs4all.dataset.v1` record, preserving sample IDs, observation origins,
+partitions and fixed folds. JSON/YAML input and portable numeric storage use the
+same validation and content-byte contract as Rust and JavaScript.
+
+```python
+from nirs4all_io.public_dataset import dataset
+
+cohort = dataset({"spectra": [[1.0, 2.0], [3.0, 4.0]]}, y=[5.0, 6.0],
+                 sample_ids=["a", "b"], origin_ids=["plant-a", "plant-b"],
+                 fold_ids=["fold-0", "fold-1"])
+record = cohort.to_dict()
+```
+
+For target-free multimodal replay through
+`nirs4all_io.multimodal_runtime.multimodal_runtime_input`, install the optional
+Data binding with `pip install "nirs4all-io[dagml]"`. The published JavaScript
+package exposes the equivalent transport through `@nirs4all/io-wasm/public-dataset`.
+
 ## Quick start (target API)
 
 ```python

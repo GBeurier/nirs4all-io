@@ -21,7 +21,7 @@ const legalMirrors = [
   "crates/nirs4all-io-capi",
   "crates/nirs4all-io-cli",
 ];
-const wasmLicenseClosureChecksum = "4699909f18c9a19dfb621e7c8ddc8dfea1ff8a4423e229824f5997a20c4ac109";
+const wasmLicenseClosureChecksum = "3a38975282eaab156dfafa0c2f90f3c5c180b0525a6132c104201d2cbcfa5d09";
 const lockedLicenseSources = [
   {
     packageName: "ryu",
@@ -346,6 +346,8 @@ manifest.files = [...new Set([
   ...(manifest.files ?? []),
   "idiomatic.mjs",
   "idiomatic.d.ts",
+  "public-dataset.mjs",
+  "public-dataset.d.ts",
   "types/nirs4all-io.d.ts",
   "LICENSE",
   "LICENSES",
@@ -366,12 +368,19 @@ manifest.exports = {
     default: "./idiomatic.mjs",
   },
   "./types": { types: "./types/nirs4all-io.d.ts" },
+  "./public-dataset": {
+    types: "./public-dataset.d.ts",
+    import: "./public-dataset.mjs",
+    default: "./public-dataset.mjs",
+  },
 };
 
 fs.mkdirSync(path.join(pkgDir, "types"), { recursive: true });
 fs.rmSync(path.join(pkgDir, "LICENSES"), { recursive: true, force: true });
 fs.mkdirSync(path.join(pkgDir, "LICENSES"), { recursive: true });
 fs.copyFileSync(path.join(wasm, "idiomatic.d.ts"), path.join(pkgDir, "idiomatic.d.ts"));
+fs.copyFileSync(path.join(wasm, "public-dataset.mjs"), path.join(pkgDir, "public-dataset.mjs"));
+fs.copyFileSync(path.join(wasm, "public-dataset.d.ts"), path.join(pkgDir, "public-dataset.d.ts"));
 fs.copyFileSync(
   path.join(wasm, "types/nirs4all-io.d.ts"),
   path.join(pkgDir, "types/nirs4all-io.d.ts"),
