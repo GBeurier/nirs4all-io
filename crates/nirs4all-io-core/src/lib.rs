@@ -13,6 +13,7 @@ pub mod canonical_json;
 pub mod conventions;
 pub mod infer;
 pub mod materialize;
+pub mod public_dataset;
 pub mod pyfmt;
 pub mod spec;
 pub mod versions;

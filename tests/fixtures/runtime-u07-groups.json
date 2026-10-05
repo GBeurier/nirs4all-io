@@ -1,0 +1,245 @@
+{
+  "schema": "nirs4all.dataset.v1",
+  "schema_version": 1,
+  "dataset": {
+    "schema": "nirs4all.multimodal-dataset",
+    "schema_version": 1,
+    "name": "multimodal",
+    "sample_ids": [
+      "p0",
+      "p1"
+    ],
+    "source_alignment": "strict",
+    "sources": [
+      {
+        "name": "nir",
+        "sample_ids": [
+          "p0",
+          "p1"
+        ],
+        "representation_id": "signal_1d",
+        "axes": [
+          "sample",
+          "wavelength"
+        ],
+        "feature_names": null,
+        "axis_units": {},
+        "axis_coordinates": {},
+        "array": {
+          "dtype": "float64",
+          "shape": [
+            2,
+            3
+          ],
+          "values": [
+            [
+              1.0,
+              2.0,
+              3.0
+            ],
+            [
+              4.0,
+              5.0,
+              6.0
+            ]
+          ]
+        },
+        "presence_mask": {
+          "dtype": "bool",
+          "shape": [
+            2
+          ],
+          "values": [
+            true,
+            true
+          ]
+        }
+      },
+      {
+        "name": "image",
+        "sample_ids": [
+          "p0",
+          "p1"
+        ],
+        "representation_id": "rgb_image",
+        "axes": [
+          "sample",
+          "height",
+          "width",
+          "channel"
+        ],
+        "feature_names": null,
+        "axis_units": {},
+        "axis_coordinates": {},
+        "array": {
+          "dtype": "float64",
+          "shape": [
+            2,
+            1,
+            1,
+            3
+          ],
+          "values": [
+            [
+              [
+                [
+                  0.0,
+                  1.0,
+                  2.0
+                ]
+              ]
+            ],
+            [
+              [
+                [
+                  3.0,
+                  4.0,
+                  5.0
+                ]
+              ]
+            ]
+          ]
+        },
+        "presence_mask": {
+          "dtype": "bool",
+          "shape": [
+            2
+          ],
+          "values": [
+            true,
+            true
+          ]
+        }
+      },
+      {
+        "name": "series",
+        "sample_ids": [
+          "p0",
+          "p1"
+        ],
+        "representation_id": "series_mv",
+        "axes": [
+          "sample",
+          "time",
+          "variable"
+        ],
+        "feature_names": null,
+        "axis_units": {},
+        "axis_coordinates": {},
+        "array": {
+          "dtype": "float64",
+          "shape": [
+            2,
+            2,
+            1
+          ],
+          "values": [
+            [
+              [
+                1.0
+              ],
+              [
+                2.0
+              ]
+            ],
+            [
+              [
+                3.0
+              ],
+              [
+                4.0
+              ]
+            ]
+          ]
+        },
+        "presence_mask": {
+          "dtype": "bool",
+          "shape": [
+            2
+          ],
+          "values": [
+            true,
+            true
+          ]
+        }
+      },
+      {
+        "name": "metadata",
+        "sample_ids": [
+          "p0",
+          "p1"
+        ],
+        "representation_id": "tabular_mixed",
+        "axes": [
+          "sample",
+          "column"
+        ],
+        "feature_names": [
+          "temperature",
+          "cultivar"
+        ],
+        "axis_units": {},
+        "axis_coordinates": {},
+        "array": {
+          "dtype": "object",
+          "shape": [
+            2,
+            2
+          ],
+          "values": [
+            [
+              20.5,
+              "A"
+            ],
+            [
+              21.5,
+              "B"
+            ]
+          ]
+        },
+        "presence_mask": {
+          "dtype": "bool",
+          "shape": [
+            2
+          ],
+          "values": [
+            true,
+            true
+          ]
+        }
+      }
+    ],
+    "y": null,
+    "target_names": [],
+    "target_mask": null,
+    "task_type": null,
+    "groups": {
+      "dtype": "<U3",
+      "shape": [
+        2
+      ],
+      "values": [
+        "1.0",
+        "1"
+      ]
+    },
+    "partitions": {
+      "dtype": "<U7",
+      "shape": [
+        2
+      ],
+      "values": [
+        "predict",
+        "predict"
+      ]
+    }
+  },
+  "origin_ids": [
+    "p0",
+    "p1"
+  ],
+  "fold_ids": [
+    null,
+    null
+  ]
+}

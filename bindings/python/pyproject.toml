@@ -16,6 +16,9 @@ dynamic = ["version"]
 # lazy, call-time import inside the adapter only.
 dependencies = ["numpy>=1.23", "pandas>=1.5", "PyYAML>=6.0"]
 
+[project.optional-dependencies]
+dagml = ["dag-ml-data>=0.2.13"]
+
 [tool.maturin]
 # Mixed layout: the Rust extension is `nirs4all_io._native`; the Python package
 # under `python/nirs4all_io` wraps it and adds the lazy SpectroDataset adapter.
