@@ -12,7 +12,7 @@ import nirs4all_io as nio
 
 def test_array_tuple_preserves_values_partition_order_and_package():
     x = np.arange(18, dtype=np.float32).reshape(6, 3) / 7
-    y = np.arange(6, dtype=np.float32) * .7
+    y = np.arange(6, dtype=np.float32) * 0.7
     split = np.array(["test", "train", "predict", "train", "test", "train"])
     package = nio.load((x, y, split), target="dataset_package")
     blocks = package.to_assembled().blocks
@@ -30,12 +30,15 @@ def test_arrays_with_metadata_and_x_only_prediction_have_no_synthetic_targets():
     assert block.metadata["subject"].tolist() == ["b", "a", "b", "c"]
 
 
-@pytest.mark.parametrize("inp,limits", [
-    ((np.ones((4, 3)), np.ones(3)), None),
-    ((np.ones((4, 3)), np.ones(4), np.array(["train", "typo", "test", "test"])), None),
-    (np.ones((4, 3)), {"max_cells": 2}),
-    (np.ones((4, 3)), {"max_decoded_total_bytes": 16}),
-])
+@pytest.mark.parametrize(
+    "inp,limits",
+    [
+        ((np.ones((4, 3)), np.ones(3)), None),
+        ((np.ones((4, 3)), np.ones(4), np.array(["train", "typo", "test", "test"])), None),
+        (np.ones((4, 3)), {"max_cells": 2}),
+        (np.ones((4, 3)), {"max_decoded_total_bytes": 16}),
+    ],
+)
 def test_array_admission_rejects_misalignment_and_small_budgets(inp, limits):
     with pytest.raises(ValueError):
         nio.load(inp, limits=limits)
@@ -43,6 +46,7 @@ def test_array_admission_rejects_misalignment_and_small_budgets(inp, limits):
 
 def test_native_frames_direct_entry_enforces_budget_before_copy():
     from nirs4all_io._native import assemble_frames
+
     spec = {"sources": [{"id": "x", "role": "features", "input": "x"}]}
     frames = [{"name": "x", "columns": ["a"], "rows": [["longer"]]}]
     with pytest.raises(ValueError, match="field.*limit"):
@@ -58,7 +62,7 @@ def test_missing_array_values_are_preserved_without_dropping_rows_or_features():
 @pytest.mark.parametrize("value", [float("inf"), -float("inf")])
 def test_infinite_array_values_are_not_silently_replaced_by_missing_values(value):
     with pytest.raises(ValueError, match="infinite"):
-        nio.load(np.array([[1., value]]), target="package")
+        nio.load(np.array([[1.0, value]]), target="package")
 
 
 def test_yaml_relative_refs_false_header_and_aggregate_budget(tmp_path):
@@ -117,8 +121,41 @@ def test_array_categorical_targets_keep_labels_across_partitions():
     np.testing.assert_array_equal(ds.y({"partition": "test"}).ravel(), [0, 1, 0])
 
 
-@pytest.mark.parametrize("code", [-1, .5, 2, float("nan")])
+@pytest.mark.parametrize("code", [-1, 0.5, 2, float("nan")])
 def test_categorical_codebook_refuses_invalid_codes(code):
     from nirs4all_io._adapter import _decode_targets
+
     with pytest.raises(ValueError, match="codebook"):
         _decode_targets(np.array([[code]]), ["label"], {"label": {"categories": ["a", "b"]}})
+
+
+def test_public_v2_ragged_masked_transport_and_matrix_projection():
+    import json
+    from pathlib import Path
+
+    from nirs4all_io.public_dataset import Dataset
+
+    fixture = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
+    value = json.loads((fixture / "public-dataset-v2.json").read_text())
+    expected = json.loads((fixture / "public-dataset-v2-normalized.json").read_text())
+    cohort = Dataset.from_dict(value)
+    assert cohort.to_dict() == expected
+    assert cohort.take(["c", "a"]).to_dict()["dataset"]["sources"][1]["offsets"]["values"] == [0, 2, 3]
+    with pytest.raises(ValueError, match="observed"):
+        cohort.to_matrix_regression("matrix")
+    projected = cohort.to_masked_matrix_regression("matrix")
+    assert projected["y"] == [[1.0, 0.0], [2.0, 4.0], [3.0, 6.0], [0.0, 8.0]]
+    assert projected["target_mask"] == expected["dataset"]["target_mask"]["values"]
+    for kind in ("offsets", "times", "target", "v1"):
+        wrong = json.loads(json.dumps(value))
+        if kind == "offsets":
+            wrong["dataset"]["sources"][1]["offsets"]["values"][2] = 4
+        elif kind == "times":
+            wrong["dataset"]["sources"][1]["time_coordinates"]["values"][1] = 0
+        elif kind == "target":
+            wrong["dataset"]["target_mask"]["values"][0][1] = True
+        else:
+            wrong["schema"] = "nirs4all.dataset.v1"
+            wrong["schema_version"] = 1
+        with pytest.raises(ValueError):
+            Dataset.from_dict(wrong)

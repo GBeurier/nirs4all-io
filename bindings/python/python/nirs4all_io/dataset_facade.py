@@ -81,7 +81,7 @@ def to_dense_regression(
         raise ValueError(f"Source {source_id!r} has missing rows; dense workflows require complete input")
     if not np.isfinite(source.values).all():
         raise ValueError(f"Source {source_id!r} contains non-finite values")
-    if cohort.y is None or cohort.y.ndim != 1 or cohort.y.dtype.kind not in "biuf":
+    if cohort.task_type == "classification" or cohort.y is None or cohort.y.ndim != 1 or cohort.y.dtype.kind not in "biuf":
         raise ValueError("Dense regression requires one numeric target vector")
     if cohort.target_mask is not None and not np.all(cohort.target_mask):
         raise ValueError("Dense regression requires all selected targets observed")
@@ -89,6 +89,52 @@ def to_dense_regression(
         raise ValueError("Dense regression target contains non-finite values")
     return {"X": source.values.astype(float).tolist(), "y": cohort.y.astype(float).tolist(), "sample_ids": list(cohort.sample_ids),
             "partitions": cohort.partitions.tolist(), "target_names": list(cohort.target_names),
+            "groups": None if cohort.groups is None else cohort.groups.tolist(),
+            "independent_unit_ids": None if cohort.independent_unit_ids is None else list(cohort.independent_unit_ids),
+            "repetition_ids": None if cohort.repetition_ids is None else list(cohort.repetition_ids)}
+
+
+def to_matrix_regression(definition: Mapping[str, Any] | str | Path | MultimodalDataset, *, source_id: str) -> dict[str, Any]:
+    """Project complete numeric targets without silently discarding masks."""
+    return _matrix_projection(definition, source_id=source_id, masked=False)
+
+
+def to_masked_matrix_regression(definition: Mapping[str, Any] | str | Path | MultimodalDataset, *, source_id: str) -> dict[str, Any]:
+    """Project explicit observed masks; false target storage is normalized to zero."""
+    return _matrix_projection(definition, source_id=source_id, masked=True)
+
+
+def _matrix_projection(definition: Mapping[str, Any] | str | Path | MultimodalDataset, *, source_id: str, masked: bool) -> dict[str, Any]:
+    """Project a complete numeric source with ordered numeric target columns.
+
+    Classification remains explicit: one int64 target, preserved as integer
+    values alongside ``task_type``. There is no implicit label recoding.
+    Prediction records retain target-free input rather than inventing truth.
+    """
+    cohort = load_multimodal_definition(definition)
+    if source_id not in cohort.sources:
+        raise ValueError(f"Unknown source {source_id!r}")
+    source = cohort.sources[source_id]
+    if not isinstance(source, TensorSource) or source.values.ndim != 2 or source.values.dtype.kind not in "biuf":
+        raise ValueError("Matrix projection requires a numeric rank-2 source")
+    if source.presence_mask is None or not np.all(source.presence_mask) or not np.isfinite(source.values).all():
+        raise ValueError("Matrix projection requires a complete finite source")
+    y = None if cohort.y is None else np.array(cohort.y, copy=True)
+    if y is not None:
+        if masked and cohort.target_mask is not None:
+            y[~cohort.target_mask] = 0
+        if y.ndim not in (1, 2) or y.dtype.kind not in "biuf" or not np.isfinite(y).all():
+            raise ValueError("Matrix projection requires finite numeric targets")
+        if not masked and cohort.target_mask is not None and not np.all(cohort.target_mask):
+            raise ValueError("Matrix projection requires observed targets")
+        if cohort.task_type == "classification" and (y.ndim != 1 or y.dtype != np.dtype("int64")):
+            raise ValueError("Matrix classification requires one int64 target vector")
+        if cohort.task_type == "classification" and np.any(y.astype(np.float32).astype(np.int64) != y):
+            raise ValueError("Classification labels must be exactly representable in float32")
+    return {"X": source.values.astype(float).tolist(), "y": None if y is None else y.reshape(len(cohort.sample_ids), -1).tolist(),
+            "sample_ids": list(cohort.sample_ids), "partitions": cohort.partitions.tolist(),
+            **({"target_mask": None if cohort.target_mask is None else cohort.target_mask.tolist()} if masked else {}),
+            "target_names": list(cohort.target_names), "task_type": cohort.task_type or "regression",
             "groups": None if cohort.groups is None else cohort.groups.tolist(),
             "independent_unit_ids": None if cohort.independent_unit_ids is None else list(cohort.independent_unit_ids),
             "repetition_ids": None if cohort.repetition_ids is None else list(cohort.repetition_ids)}

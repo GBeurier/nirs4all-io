@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 import numpy as np
 
-from .dataset_facade import load_dataset_document, load_multimodal_definition, to_dense_regression
+from .dataset_facade import load_dataset_document, load_multimodal_definition, to_dense_regression, to_masked_matrix_regression, to_matrix_regression
 from .multimodal import MultimodalDataset, TensorSource
+from .ragged import RaggedSeriesSource
 
 
 def _portable_storage(values: np.ndarray, label: str) -> None:
@@ -40,24 +42,29 @@ class Dataset:
     def __init__(self, definition: Any, *, origin_ids: Sequence[str] | None = None,
                  fold_ids: Sequence[str | None] | None = None) -> None:
         definition = load_dataset_document(definition)
-        if isinstance(definition, Mapping) and definition.get("schema") == "nirs4all.dataset.v1":
+        if isinstance(definition, Mapping) and definition.get("schema") in ("nirs4all.dataset.v1", "nirs4all.dataset.v2"):
             if origin_ids is not None or fold_ids is not None:
                 raise ValueError("Dataset options cannot override an envelope")
             parsed = type(self).from_dict(definition)
             self.multimodal, self.origin_ids, self.fold_ids = parsed.multimodal, parsed.origin_ids, parsed.fold_ids
+            self.schema_version = parsed.schema_version
             return
         self.multimodal = load_multimodal_definition(definition)
         for source in self.multimodal.sources.values():
-            if not isinstance(source, TensorSource):
-                raise ValueError("Public cross-language Dataset currently requires fixed-size tensor sources")
+            if isinstance(source, RaggedSeriesSource):
+                _portable_storage(source.values.values, "ragged source")
+                if source.time_coordinates is not None:
+                    _portable_storage(source.time_coordinates, "ragged time coordinates")
+                continue
             _portable_storage(source.values, "source")
             for coordinates in (source.axis_coordinates or {}).values():
                 for coordinate in coordinates:
                     if isinstance(coordinate, (int, float, np.integer, np.floating)) and float(coordinate).is_integer() and abs(float(coordinate)) > 2**53 - 1:
                         raise ValueError("Public axis coordinates must be exactly representable in JavaScript")
+        self.schema_version = 2 if any(isinstance(source, RaggedSeriesSource) for source in self.multimodal.sources.values()) or (self.multimodal.target_mask is not None and not np.all(self.multimodal.target_mask)) else 1
         for label, values in (("target", self.multimodal.y), ("group", self.multimodal.groups)):
             if values is not None:
-                _portable_storage(values, label)
+                _portable_storage(values[self.multimodal.target_mask] if label == "target" and self.multimodal.target_mask is not None else values, label)
         ids = self.multimodal.sample_ids
         self.origin_ids = tuple(ids if origin_ids is None else origin_ids)
         self.fold_ids = tuple([None] * len(ids) if fold_ids is None else fold_ids)
@@ -100,7 +107,7 @@ class Dataset:
                         "series": "series_mv", "metadata": "tabular_mixed"}
         built = {}
         for name, source in sources.items():
-            if isinstance(source, TensorSource):
+            if isinstance(source, (TensorSource, RaggedSeriesSource)):
                 built[name] = source
                 continue
             representation = (representations or {}).get(name, declarations.get(name, "tabular_numeric"))
@@ -121,27 +128,62 @@ class Dataset:
     def from_dict(cls, value: Mapping[str, Any]) -> Dataset:
         if set(value) != {"schema", "schema_version", "dataset", "origin_ids", "fold_ids"}:
             raise ValueError("Dataset envelope has invalid fields")
-        if value["schema"] != "nirs4all.dataset.v1" or type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        if type(value["schema_version"]) is not int or (value["schema"], value["schema_version"]) not in (("nirs4all.dataset.v1", 1), ("nirs4all.dataset.v2", 2)):
             raise ValueError("Unsupported public dataset schema")
         if not isinstance(value["origin_ids"], list) or not isinstance(value["fold_ids"], list):
             raise ValueError("origin_ids and fold_ids must be arrays")
-        return cls(value["dataset"], origin_ids=value["origin_ids"], fold_ids=value["fold_ids"])
+        if value["schema_version"] == 1 and any(source.get("source_kind") == "ragged_series" for source in value["dataset"]["sources"]):
+            raise ValueError("Ragged sources require public dataset v2")
+        raw = deepcopy(value["dataset"])
+        if value["schema_version"] == 2 and raw["y"] is not None and raw.get("target_mask") is not None:
+            def masked(values, masks):
+                if isinstance(masks, list):
+                    if not isinstance(values, list) or len(values) != len(masks):
+                        raise ValueError("Target shape differs from mask")
+                    return [masked(cell, observed) for cell, observed in zip(values, masks, strict=True)]
+                if type(masks) is not bool:
+                    raise ValueError("Boolean target mask required")
+                if not masks:
+                    if values is not None and (type(values) not in (int, float, bool) or not np.isfinite(values)):
+                        raise ValueError("Masked target requires null or finite numeric storage")
+                    return 0
+                return values
+            raw["y"]["values"] = masked(raw["y"]["values"], raw["target_mask"]["values"])
+        result = cls(raw, origin_ids=value["origin_ids"], fold_ids=value["fold_ids"])
+        if value["schema_version"] == 1 and result.multimodal.y is not None:
+            _portable_storage(result.multimodal.y, "target")
+        result.schema_version = value["schema_version"]
+        return result
 
     def to_dict(self) -> dict[str, Any]:
         raw = self.multimodal.to_dict()
         for source in raw["sources"]:
+            if source.get("source_kind") == "ragged_series":
+                continue
             source["axis_units"] = {axis: unit for axis, unit in source["axis_units"].items() if unit is not None}
-        return {"schema": "nirs4all.dataset.v1", "schema_version": 1,
+        if self.schema_version == 2 and self.multimodal.y is not None:
+            target = np.array(self.multimodal.y, copy=True)
+            target[~self.multimodal.target_mask] = 0
+            raw["y"]["values"] = target.tolist()
+        return {"schema": f"nirs4all.dataset.v{self.schema_version}", "schema_version": self.schema_version,
                 "dataset": raw, "origin_ids": list(self.origin_ids), "fold_ids": list(self.fold_ids)}
 
     def take(self, sample_ids: Sequence[str]) -> Dataset:
         positions = {sample: i for i, sample in enumerate(self.sample_ids)}
         selected = self.multimodal.take(sample_ids)
-        return type(self)(selected, origin_ids=[self.origin_ids[positions[s]] for s in sample_ids],
-                          fold_ids=[self.fold_ids[positions[s]] for s in sample_ids])
+        result = type(self)(selected, origin_ids=[self.origin_ids[positions[s]] for s in sample_ids],
+                            fold_ids=[self.fold_ids[positions[s]] for s in sample_ids])
+        result.schema_version = self.schema_version
+        return result
 
     def to_dense_regression(self, source_id: str) -> dict[str, Any]:
         return {**to_dense_regression(self.multimodal, source_id=source_id), "origin_ids": list(self.origin_ids), "fold_ids": list(self.fold_ids)}
+
+    def to_masked_matrix_regression(self, source_id: str) -> dict[str, Any]:
+        return {**to_masked_matrix_regression(self.multimodal, source_id=source_id), "origin_ids": list(self.origin_ids), "fold_ids": list(self.fold_ids)}
+
+    def to_matrix_regression(self, source_id: str) -> dict[str, Any]:
+        return {**to_matrix_regression(self.multimodal, source_id=source_id), "origin_ids": list(self.origin_ids), "fold_ids": list(self.fold_ids)}
 
 
 def dataset(value: Any, **kwargs: Any) -> Dataset:
@@ -151,7 +193,7 @@ def dataset(value: Any, **kwargs: Any) -> Dataset:
             raise ValueError("Dataset options cannot override an existing Dataset")
         return value
     value = load_dataset_document(value)
-    if isinstance(value, Mapping) and value.get("schema") == "nirs4all.dataset.v1":
+    if isinstance(value, Mapping) and value.get("schema") in ("nirs4all.dataset.v1", "nirs4all.dataset.v2"):
         if kwargs:
             raise ValueError("Dataset options cannot override a dataset envelope")
         return Dataset.from_dict(value)
