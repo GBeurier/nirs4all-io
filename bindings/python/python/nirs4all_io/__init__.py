@@ -35,12 +35,18 @@ from ._package import (
     RowPositionFallback,
     repr_ids,
 )
+from .dataset_facade import to_masked_matrix_regression, to_matrix_regression
 from .multimodal import MultimodalDataset, TensorSource
 from .provider import DataProvider, ProviderBatches
+from .public_dataset import Dataset, dataset
 from .ragged import RaggedSeriesBatch, RaggedSeriesSource
 
 __all__ = [
     "infer",
+    "Dataset",
+    "dataset",
+    "to_matrix_regression",
+    "to_masked_matrix_regression",
     "to_spec",
     "validate",
     "load",

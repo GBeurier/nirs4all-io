@@ -199,6 +199,180 @@ fn placeholder(shape: &[usize], dtype: &str) -> Value {
     )
 }
 
+fn normalize_ragged(source: &mut Value, ids: &[String], strict: bool) -> DatasetResult<()> {
+    closed(
+        source,
+        &[
+            "source_kind",
+            "name",
+            "sample_ids",
+            "representation_id",
+            "axes",
+            "array",
+            "offsets",
+            "time_coordinates",
+            "channel_names",
+            "time_unit",
+            "presence_mask",
+        ],
+        &[],
+    )?;
+    if source["representation_id"] != "series_mv"
+        || source["axes"] != json!(["sample", "time", "variable"])
+    {
+        return fail("Invalid ragged representation or axes");
+    }
+    let source_ids = strings(&source["sample_ids"], true)?;
+    if source_ids.iter().any(|id| !ids.contains(id)) || (strict && source_ids.len() != ids.len()) {
+        return fail("Ragged source identity alignment mismatch");
+    }
+    let shape = array(&source["array"])?;
+    if shape.len() != 2
+        || shape[1] == 0
+        || source["array"]["dtype"] == "object"
+        || source["array"]["dtype"].as_str().unwrap().starts_with("<U")
+    {
+        return fail("Ragged packed values require numeric matrix channels");
+    }
+    round_storage(&mut source["array"]);
+    if array(&source["offsets"])? != vec![source_ids.len() + 1]
+        || source["offsets"]["dtype"] != "int64"
+    {
+        return fail("Ragged offsets must be an int64 sample boundary vector");
+    }
+    let offsets: Vec<usize> = source["offsets"]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| "Invalid ragged offset".to_owned())
+        })
+        .collect::<Result<_, _>>()?;
+    if offsets.first() != Some(&0)
+        || offsets.last() != Some(&shape[0])
+        || offsets.windows(2).any(|pair| pair[1] < pair[0])
+    {
+        return fail("Ragged offsets must start at zero, increase and end at packed length");
+    }
+    if array(&source["presence_mask"])? != vec![source_ids.len()]
+        || source["presence_mask"]["dtype"] != "bool"
+    {
+        return fail("Invalid ragged presence mask");
+    }
+    if !source["channel_names"].is_null()
+        && strings(&source["channel_names"], true)?.len() != shape[1]
+    {
+        return fail("Ragged channel names mismatch");
+    }
+    if !source["time_unit"].is_null()
+        && source["time_unit"]
+            .as_str()
+            .is_none_or(|unit| unit.trim().is_empty())
+    {
+        return fail("Invalid ragged time unit");
+    }
+    let times = if source["time_coordinates"].is_null() {
+        None
+    } else {
+        if array(&source["time_coordinates"])? != vec![shape[0]] {
+            return fail("Ragged time coordinates must match packed length");
+        }
+        round_storage(&mut source["time_coordinates"]);
+        let times: Vec<f64> = source["time_coordinates"]["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| {
+                value
+                    .as_f64()
+                    .ok_or_else(|| "Numeric ragged times required".to_owned())
+            })
+            .collect::<Result<_, _>>()?;
+        if offsets.windows(2).any(|pair| {
+            times[pair[0]..pair[1]]
+                .windows(2)
+                .any(|times| times[1] <= times[0])
+        }) {
+            return fail("Ragged times must strictly increase within each sample");
+        }
+        round_storage(&mut source["time_coordinates"]);
+        Some(
+            source["time_coordinates"]["values"]
+                .as_array()
+                .unwrap()
+                .clone(),
+        )
+    };
+    let rows = source["array"]["values"].as_array().unwrap();
+    let mask = source["presence_mask"]["values"].as_array().unwrap();
+    let mut packed = Vec::new();
+    let mut aligned_offsets = vec![0usize];
+    let mut aligned_times = Vec::new();
+    let mut present = Vec::new();
+    for id in ids {
+        if let Some(index) = source_ids.iter().position(|source_id| source_id == id) {
+            packed.extend_from_slice(&rows[offsets[index]..offsets[index + 1]]);
+            if let Some(times) = &times {
+                aligned_times.extend_from_slice(&times[offsets[index]..offsets[index + 1]]);
+            }
+            present.push(mask[index].clone());
+        } else {
+            present.push(json!(false));
+        }
+        aligned_offsets.push(packed.len());
+    }
+    source["array"]["shape"][0] = json!(packed.len());
+    source["array"]["values"] = json!(packed);
+    source["offsets"]["shape"] = json!([ids.len() + 1]);
+    source["offsets"]["values"] = json!(aligned_offsets);
+    if times.is_some() {
+        source["time_coordinates"]["shape"] = json!([aligned_times.len()]);
+        source["time_coordinates"]["values"] = json!(aligned_times);
+    }
+    source["sample_ids"] = json!(ids);
+    source["presence_mask"] = json!({"dtype":"bool", "shape":[ids.len()], "values":present});
+    Ok(())
+}
+
+fn normalize_masked_targets(
+    values: &mut Value,
+    mask: &Value,
+    shape: &[usize],
+    dtype: &str,
+) -> DatasetResult<()> {
+    if shape.is_empty() {
+        if mask == &json!(false) {
+            if !values.is_null() {
+                cell(values, dtype)?;
+            }
+            *values = if dtype == "bool" {
+                json!(false)
+            } else if dtype.starts_with("float") {
+                json!(0.0)
+            } else {
+                json!(0)
+            };
+        } else {
+            cell(values, dtype)?;
+        }
+        return Ok(());
+    }
+    let rows = values
+        .as_array_mut()
+        .ok_or("Rectangular target values required")?;
+    let masks = mask.as_array().ok_or("Rectangular target mask required")?;
+    if rows.len() != shape[0] || masks.len() != shape[0] {
+        return fail("Target shape differs from values/mask");
+    }
+    for (row, observed) in rows.iter_mut().zip(masks) {
+        normalize_masked_targets(row, observed, &shape[1..], dtype)?;
+    }
+    Ok(())
+}
+
 /// Validate and align a common raw dataset. No parsing, splitting or fitting.
 pub fn normalize_dataset(value: &Value) -> DatasetResult<Value> {
     closed(
@@ -212,7 +386,11 @@ pub fn normalize_dataset(value: &Value) -> DatasetResult<Value> {
         ],
         &[],
     )?;
-    if value["schema"] != "nirs4all.dataset.v1" || value["schema_version"].as_u64() != Some(1) {
+    let v2 =
+        value["schema"] == "nirs4all.dataset.v2" && value["schema_version"].as_u64() == Some(2);
+    if !v2
+        && (value["schema"] != "nirs4all.dataset.v1" || value["schema_version"].as_u64() != Some(1))
+    {
         return fail("Unsupported public dataset schema");
     }
     let mut out = value.clone();
@@ -260,6 +438,20 @@ pub fn normalize_dataset(value: &Value) -> DatasetResult<Value> {
     }
     let mut names = BTreeSet::new();
     for source in sources {
+        if source["source_kind"] == "ragged_series" {
+            if !v2 {
+                return fail("Ragged sources require public dataset v2");
+            }
+            let name = source["name"]
+                .as_str()
+                .filter(|name| !name.trim().is_empty())
+                .ok_or("Ragged source name required")?;
+            if !names.insert(name.to_owned()) {
+                return fail("Duplicate source names");
+            }
+            normalize_ragged(source, &ids, strict)?;
+            continue;
+        }
         closed(
             source,
             &[
@@ -422,6 +614,18 @@ pub fn normalize_dataset(value: &Value) -> DatasetResult<Value> {
         round_storage(&mut raw["groups"]);
     }
     if !raw["y"].is_null() {
+        if v2 && raw.get("target_mask").is_some_and(|mask| !mask.is_null()) {
+            let shape = dimensions(&raw["y"]["shape"])?;
+            if array(&raw["target_mask"])? != shape || raw["target_mask"]["dtype"] != "bool" {
+                return fail("Target mask mismatch");
+            }
+            let dtype = raw["y"]["dtype"]
+                .as_str()
+                .ok_or("Target dtype required")?
+                .to_owned();
+            let mask = raw["target_mask"]["values"].clone();
+            normalize_masked_targets(&mut raw["y"]["values"], &mask, &shape, &dtype)?;
+        }
         let shape = array(&raw["y"])?;
         round_storage(&mut raw["y"]);
         if shape[0] != ids.len() || shape.len() > 2 || (shape.len() == 2 && shape[1] == 0) {
@@ -549,7 +753,12 @@ pub fn u07_sources(value: &Value) -> DatasetResult<Value> {
     let sources = raw["sources"].as_array().unwrap();
     let order = ["nir", "image", "series", "metadata"];
     let reprs = ["signal_1d", "rgb_image", "series_mv", "tabular_mixed"];
-    if sources.len() != 4 || raw["source_alignment"] != "strict" {
+    if sources.len() != 4
+        || raw["source_alignment"] != "strict"
+        || sources
+            .iter()
+            .any(|source| source["source_kind"] == "ragged_series")
+    {
         return fail("U07 requires four ordered strictly aligned sources");
     }
     let mut schemas = serde_json::Map::new();
@@ -564,6 +773,9 @@ pub fn u07_sources(value: &Value) -> DatasetResult<Value> {
                 .any(|v| v != true)
         {
             return fail("U07 source name, representation or missing input mismatch");
+        }
+        if source["source_kind"] == "ragged_series" {
+            return fail("Matrix projection requires an explicit Methods ragged encoder");
         }
         let shape = dimensions(&source["array"]["shape"])?;
         let dtype = source["array"]["dtype"].as_str().unwrap();
@@ -833,6 +1045,13 @@ pub fn public_source_schema(value: &Value, source_id: &str) -> DatasetResult<Val
         .iter()
         .find(|s| s["name"] == source_id)
         .ok_or("Unknown selected source")?;
+    if source["source_kind"] == "ragged_series" {
+        return Ok(
+            json!({"name":source_id, "source_kind":"ragged_series", "representation_id":source["representation_id"],
+            "axes":source["axes"], "shape":[null,null,source["array"]["shape"][1]], "dtype":source["array"]["dtype"],
+            "channel_names":source["channel_names"], "time_unit":source["time_unit"], "time_dtype":source["time_coordinates"]["dtype"]}),
+        );
+    }
     let mut shape = source["array"]["shape"].clone();
     shape[0] = Value::Null;
     // An omitted unit and an explicit null both mean unknown. Meaningful units
@@ -850,9 +1069,66 @@ pub fn public_source_schema(value: &Value, source_id: &str) -> DatasetResult<Val
 }
 
 /// Adapt an explicitly selected matrix to IO's existing f32 package IR.
+/// Historical one-target regression projection; wider matrix targets use the
+/// explicit matrix API so an existing caller never silently changes task type.
 pub fn dense_dataset_package(
     value: &Value,
     source_id: &str,
+) -> DatasetResult<crate::materialize::DatasetPackage> {
+    let normalized = normalize_dataset(value)?;
+    let raw = &normalized["dataset"];
+    if raw["task_type"] == "classification"
+        || (!raw["y"].is_null() && dimensions(&raw["y"]["shape"])?.len() != 1)
+    {
+        return fail("Dense regression requires one numeric target");
+    }
+    matrix_dataset_package(value, source_id)
+}
+
+/// Complete matrix-source projection with ordered numeric target columns.
+/// The existing IO matrix storage is float32; class IDs which would change
+/// under that storage are refused before producing a package.
+pub fn matrix_dataset_package(
+    value: &Value,
+    source_id: &str,
+) -> DatasetResult<crate::materialize::DatasetPackage> {
+    matrix_dataset_package_impl(value, source_id, false)
+}
+
+/// Explicit masked projection. Consumers must bind the returned observation
+/// mask to native fit/refit/scoring; zero storage at false cells is not truth.
+pub fn masked_matrix_dataset_package(
+    value: &Value,
+    source_id: &str,
+) -> DatasetResult<(crate::materialize::DatasetPackage, Value)> {
+    let mut normalized = normalize_dataset(value)?;
+    if !normalized["dataset"]["y"].is_null() {
+        let raw = &mut normalized["dataset"];
+        let shape = dimensions(&raw["y"]["shape"])?;
+        let dtype = raw["y"]["dtype"]
+            .as_str()
+            .ok_or("Target dtype required")?
+            .to_owned();
+        let mask = raw["target_mask"]["values"].clone();
+        normalize_masked_targets(&mut raw["y"]["values"], &mask, &shape, &dtype)?;
+    }
+    let mut projection = json!({"sample_ids": normalized["dataset"]["sample_ids"],
+        "target_names":normalized["dataset"]["target_names"], "target_mask":normalized["dataset"]["target_mask"]});
+    use sha2::{Digest, Sha256};
+    projection["mask_content_fingerprint"] = json!(format!(
+        "{:x}",
+        Sha256::digest(canonical_content_bytes(&projection)?)
+    ));
+    Ok((
+        matrix_dataset_package_impl(&normalized, source_id, true)?,
+        projection,
+    ))
+}
+
+fn matrix_dataset_package_impl(
+    value: &Value,
+    source_id: &str,
+    allow_masked: bool,
 ) -> DatasetResult<crate::materialize::DatasetPackage> {
     use crate::materialize::{
         AssembledDataset, Cell, Column, DatasetPackage, FoldProvenance, Frame, IdentityProvenance,
@@ -891,7 +1167,7 @@ pub fn dense_dataset_package(
     };
     let mut assembled = AssembledDataset {
         name: raw["name"].as_str().unwrap().to_owned(),
-        task_type: "regression".to_owned(),
+        task_type: raw["task_type"].as_str().unwrap_or("regression").to_owned(),
         signal_type: "unknown".to_owned(),
         n_sources: 1,
         blocks: IndexMap::new(),
@@ -908,7 +1184,7 @@ pub fn dense_dataset_package(
         aggregate: None,
         warnings: vec![],
         audits: vec![
-            json!({"source":"nirs4all.dataset.v1","selected_source":source_id,"numeric_storage":"float32","input_sample_ids":raw["sample_ids"],"raw_source_schema":public_source_schema(&normalized,source_id)?}),
+            json!({"source":normalized["schema"],"selected_source":source_id,"numeric_storage":"float32","input_sample_ids":raw["sample_ids"],"raw_source_schema":public_source_schema(&normalized,source_id)?,"target_mask":raw["target_mask"],"target_names":raw["target_names"]}),
         ],
     };
     let y_shape = if raw["y"].is_null() {
@@ -916,17 +1192,33 @@ pub fn dense_dataset_package(
     } else {
         Some(dimensions(&raw["y"]["shape"])?)
     };
-    if y_shape.as_ref().is_some_and(|s| s.len() != 1) || raw["task_type"] == "classification" {
-        return fail("Dense regression requires one numeric target");
+    fn complete_mask(value: &Value) -> bool {
+        value.as_bool().unwrap_or_else(|| {
+            value
+                .as_array()
+                .is_some_and(|rows| rows.iter().all(complete_mask))
+        })
     }
-    if !raw["y"].is_null()
-        && raw["target_mask"]["values"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|x| x != true)
-    {
-        return fail("Dense regression requires observed targets");
+    if !allow_masked && !raw["y"].is_null() && !complete_mask(&raw["target_mask"]["values"]) {
+        return fail("Matrix projection requires observed targets");
+    }
+    let target_width = y_shape
+        .as_ref()
+        .map_or(0, |shape| *shape.get(1).unwrap_or(&1));
+    if raw["task_type"] == "classification" {
+        if y_shape.as_ref().is_some_and(|shape| shape.len() != 1)
+            || (!raw["y"].is_null() && raw["y"]["dtype"] != "int64")
+        {
+            return fail("Matrix classification requires one int64 target vector");
+        }
+        if !raw["y"].is_null()
+            && raw["y"]["values"].as_array().unwrap().iter().any(|value| {
+                let label = value.as_i64().unwrap();
+                (label as f32) as i64 != label
+            })
+        {
+            return fail("Classification label exceeds exact float32 IO matrix storage");
+        }
     }
     let f32_value = |v: &Value| -> DatasetResult<f32> {
         let x = v.as_f64().ok_or("Finite numeric value required")?;
@@ -969,10 +1261,17 @@ pub fn dense_dataset_package(
             Some(Matrix {
                 data: positions
                     .iter()
-                    .map(|i| f32_value(&raw["y"]["values"][*i]))
+                    .flat_map(|i| {
+                        if y_shape.as_ref().unwrap().len() == 1 {
+                            vec![&raw["y"]["values"][*i]]
+                        } else {
+                            raw["y"]["values"][*i].as_array().unwrap().iter().collect()
+                        }
+                    })
+                    .map(f32_value)
                     .collect::<Result<_, _>>()?,
                 n_rows: positions.len(),
-                n_cols: 1,
+                n_cols: target_width,
             })
         } else {
             None

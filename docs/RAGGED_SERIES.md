@@ -162,3 +162,37 @@ aligned with its own `sample_id` sequence. Neither adapter provides a
 DataLoader prefetch checkpoint or mid-epoch resume. Importing the adapter
 module or the packed batch type does not import Torch; requesting a Torch
 dataset class or collating samples requires that optional dependency.
+
+The public cross-language envelope `nirs4all.dataset.v2` (schema version 2)
+retains the existing inner `nirs4all.multimodal-dataset` version 1 record. It
+admits packed `source_kind: "ragged_series"` records and explicit target masks.
+Offsets are an int64 vector of length samples + 1, from zero to packed row
+count; coordinates increase strictly within each sample. IO aligns packed
+segments and presence by sample identity, including empty missing segments
+under explicit left alignment. Channel names, time dtype and time units remain
+part of the predictor input contract. IO performs no ragged encoding.
+
+A false target mask admits JSON null or finite numeric storage and normalizes
+its storage to zero; the mask retains the distinction from observed truth.
+True target cells must be finite. Native `normalize_dataset`, Python
+`nirs4all_io.Dataset.from_dict`, and JavaScript `new Dataset(record)` validate
+the same synthetic fixture under `tests/fixtures/public-dataset-v2.json`.
+Version 1 continues to reject ragged public records and nullable targets.
+
+Complete matrix workflows use native `matrix_dataset_package(record, source)`
+or Python `Dataset.to_matrix_regression(source)` / JavaScript
+`Dataset.toMatrixRegression(source)`. They retain numeric multi-target columns,
+target names, task type and sample order. Classification is explicit mono-y
+int64; this first f32 matrix execution profile refuses labels that cannot be
+represented exactly rather than recoding classes. Legacy dense regression
+continues to refuse multi-target and classification input.
+
+Masked consumers must opt into native
+`masked_matrix_dataset_package(record, source)`; it returns the package and a
+validated projection containing sample IDs, target names, the target mask and
+its canonical content fingerprint. They must join the mask by sample IDs and
+bind it to native fit, refit and scoring. Python
+`Dataset.to_masked_matrix_regression(source)` and JavaScript
+`Dataset.toMaskedMatrixRegression(source)` expose the mask explicitly. The
+complete projection refuses incomplete targets so existing consumers cannot
+silently treat placeholder zero as truth.
