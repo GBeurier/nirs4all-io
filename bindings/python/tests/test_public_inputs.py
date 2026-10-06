@@ -159,3 +159,32 @@ def test_public_v2_ragged_masked_transport_and_matrix_projection():
             wrong["schema_version"] = 1
         with pytest.raises(ValueError):
             Dataset.from_dict(wrong)
+
+
+def test_projected_matrix_uses_native_owner_and_preserves_masks():
+    import json
+    from pathlib import Path
+
+    from nirs4all_io import Dataset, projected_matrix_dataset
+
+    value = json.loads((Path(__file__).resolve().parents[3] / "tests/fixtures/public-dataset-v2.json").read_text())
+    projections = [
+        {"source_id": "matrix", "sample_ids": ["d", "c", "b", "a"], "array": {"dtype": "float64", "shape": [4, 1], "values": [[4.0], [3.0], [2.0], [1.0]]}, "feature_names": ["mean"], "presence_encoded": False},
+        {
+            "source_id": "series",
+            "sample_ids": ["a", "b", "c", "d"],
+            "array": {"dtype": "float64", "shape": [4, 2], "values": [[0.0, 0.0], [0.0, 0.0], [4.0, 1.0], [0.0, 0.0]]},
+            "feature_names": ["mean", "present"],
+            "presence_encoded": False,
+        },
+    ]
+    with pytest.raises(ValueError, match="presence"):
+        projected_matrix_dataset(value, projections)
+    projections[1]["presence_encoded"] = True
+    output = projected_matrix_dataset(value, projections)
+    assert output["record"]["dataset"]["sources"][0]["array"]["values"] == [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 4.0, 1.0], [4.0, 0.0, 0.0]]
+    assert output["record"]["dataset"]["target_mask"] == value["dataset"]["target_mask"]
+    assert len(output["provenance"]["source_projections"][1]["projection_content_fingerprint"]) == 64
+    value["dataset"]["y"]["dtype"] = "float32"
+    value["dataset"]["y"]["values"][0][1] = 1e99
+    assert Dataset.from_dict(value).to_masked_matrix_regression("matrix")["y"][0][1] == 0

@@ -20,3 +20,5 @@ export function canonicalContentBytes(value:unknown):Uint8Array;
 export function datasetContentBytes(value:DatasetRecord|Dataset):Uint8Array;
 export function canonicalSourceSchema(value:SourceSchema):SourceSchema;
 export function metadataNumber(value:number|string):number;
+export interface NativeSourceProjection {source_id:string;sample_ids:string[];array:ArrayRecord<number>;feature_names:string[];presence_encoded:boolean;}
+export function projectedMatrixDataset(input:DatasetRecord|Dataset,projections:NativeSourceProjection[],digest:(bytes:Uint8Array)=>string):{record:DatasetRecord;provenance:Record<string,unknown>};

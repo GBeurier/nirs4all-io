@@ -345,8 +345,11 @@ fn normalize_masked_targets(
 ) -> DatasetResult<()> {
     if shape.is_empty() {
         if mask == &json!(false) {
-            if !values.is_null() {
-                cell(values, dtype)?;
+            if !values.is_null()
+                && !values.is_boolean()
+                && !values.as_f64().is_some_and(f64::is_finite)
+            {
+                return fail("Masked target storage requires null or finite numeric values");
             }
             *values = if dtype == "bool" {
                 json!(false)
@@ -1386,4 +1389,114 @@ fn matrix_dataset_package_impl(
         });
     }
     Ok(DatasetPackage::from_assembled(&assembled))
+}
+
+/// Assemble native Methods source projections by identity, never by row order.
+/// `presence_encoded` is an explicit producer declaration: missing source rows
+/// are refused unless the native recipe encoded their presence. IO adds no
+/// values or learned state. The caller must persist and replay this policy.
+pub fn projected_matrix_dataset(
+    value: &Value,
+    projections: &[Value],
+) -> DatasetResult<(Value, Value)> {
+    use sha2::{Digest, Sha256};
+    let mut normalized = normalize_dataset(value)?;
+    let raw = &normalized["dataset"];
+    let ids = strings(&raw["sample_ids"], true)?;
+    let sources = raw["sources"].as_array().unwrap();
+    if sources.len() != projections.len() {
+        return fail("Projection inventory must match the ordered native source inventory");
+    }
+    let mut rows = vec![Vec::<Value>::new(); ids.len()];
+    let mut features = Vec::new();
+    let mut contracts = Vec::new();
+    for (source, projection) in sources.iter().zip(projections) {
+        closed(
+            projection,
+            &[
+                "source_id",
+                "sample_ids",
+                "array",
+                "feature_names",
+                "presence_encoded",
+            ],
+            &[],
+        )?;
+        let name = source["name"].as_str().unwrap();
+        if projection["source_id"] != name {
+            return fail(
+                "Projection source order or identity differs from native source inventory",
+            );
+        }
+        let encoded = projection["presence_encoded"]
+            .as_bool()
+            .ok_or("Projection presence_encoded must be boolean")?;
+        if !encoded
+            && source["presence_mask"]["values"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|present| present != &json!(true))
+        {
+            return fail("Missing source rows require explicit native presence encoding");
+        }
+        let projection_ids = strings(&projection["sample_ids"], true)?;
+        let shape = array(&projection["array"])?;
+        if shape.len() != 2
+            || shape[1] == 0
+            || shape[0] != ids.len()
+            || projection_ids.len() != ids.len()
+            || projection_ids.iter().any(|id| !ids.contains(id))
+            || !["float32", "float64"].contains(&projection["array"]["dtype"].as_str().unwrap())
+        {
+            return fail("Native projection requires a complete finite float matrix with exact sample identities");
+        }
+        let columns = strings(&projection["feature_names"], true)?;
+        if columns.len() != shape[1] {
+            return fail("Projection feature names differ from matrix width");
+        }
+        let width = features
+            .len()
+            .checked_add(columns.len())
+            .ok_or("Projected matrix budget exceeded")?;
+        if width > 16_777_216
+            || ids
+                .len()
+                .checked_mul(width)
+                .is_none_or(|size| size > 16_777_216)
+        {
+            return fail("Projected matrix budget exceeded");
+        }
+        features.extend(columns.iter().map(|column| format!("{name}:{column}")));
+        let mut projected = projection["array"].clone();
+        round_storage(&mut projected);
+        for (position, id) in ids.iter().enumerate() {
+            let index = projection_ids
+                .iter()
+                .position(|candidate| candidate == id)
+                .unwrap();
+            rows[position].extend_from_slice(projected["values"][index].as_array().unwrap());
+        }
+        contracts.push(json!({"source_id": name, "source_schema": public_source_schema(&normalized,name)?,
+            "input_presence_mask": source["presence_mask"], "presence_encoded": encoded,
+            "feature_names": columns, "projection_content_fingerprint":format!("{:x}",Sha256::digest(canonical_content_bytes(projection)?))}));
+    }
+    if features.iter().collect::<BTreeSet<_>>().len() != features.len()
+        || ids
+            .len()
+            .checked_mul(features.len())
+            .is_none_or(|size| size > 16_777_216)
+    {
+        return fail("Projected feature inventory repeats names or exceeds matrix budget");
+    }
+    let provenance = json!({"schema":"nirs4all.native-source-projections.v1", "sample_ids":ids, "source_projections":contracts,
+        "input_content_fingerprint":format!("{:x}",Sha256::digest(dataset_content_bytes(&normalized)?))});
+    normalized["schema"] = json!("nirs4all.dataset.v2");
+    normalized["schema_version"] = json!(2);
+    normalized["dataset"]["source_alignment"] = json!("strict");
+    normalized["dataset"]["sources"] = json!([{"name":"native_features","sample_ids":ids,"representation_id":"tabular_numeric",
+        "axes":["sample","feature"], "feature_names":features, "axis_units":{}, "axis_coordinates":{},
+        "array":{"dtype":"float64","shape":[ids.len(),features.len()],"values":rows},
+        "presence_mask":{"dtype":"bool","shape":[ids.len()],"values":vec![true;ids.len()]}}]);
+    Ok((normalize_dataset(&normalized)?, provenance))
 }

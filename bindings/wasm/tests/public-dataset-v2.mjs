@@ -17,3 +17,13 @@ test('matrix multi-y preserves columns and explicit class labels reject float32 
  value.dataset.y={dtype:'int64',shape:[4],values:[0,1,0,1]};value.dataset.target_mask={dtype:'bool',shape:[4],values:[true,true,true,true]};value.dataset.target_names=['class'];value.dataset.task_type='classification';assert.equal(new Dataset(value).toMatrixRegression('matrix').task_type,'classification');assert.throws(()=>new Dataset(value).toDenseRegression('matrix'));
  value.dataset.y.values[0]=16777217;assert.throws(()=>new Dataset(value).toMatrixRegression('matrix'),/float32/);
 });
+
+test('native projected features preserve ID joins, source provenance and presence policy',async()=>{
+ const {projectedMatrixDataset}=await import('../public-dataset.mjs');const {createHash}=await import('node:crypto');
+ const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
+ const projections=[{source_id:'matrix',sample_ids:['d','c','b','a'],array:{dtype:'float64',shape:[4,1],values:[[4],[3],[2],[1]]},feature_names:['mean'],presence_encoded:false},{source_id:'series',sample_ids:['a','b','c','d'],array:{dtype:'float64',shape:[4,2],values:[[0,0],[0,0],[4,1],[0,0]]},feature_names:['mean','present'],presence_encoded:false}];
+ assert.throws(()=>projectedMatrixDataset(read(),projections,digest),/presence/);projections[1].presence_encoded=true;
+ const output=projectedMatrixDataset(read(),projections,digest);assert.deepEqual(output.record.dataset.sources[0].array.values,[[1,0,0],[2,0,0],[3,4,1],[4,0,0]]);assert.equal(output.provenance.source_projections[1].source_schema.time_unit,'s');
+ if(process.env.NIRS4ALL_IO_PROJECTION_OUTPUT)fs.writeFileSync(process.env.NIRS4ALL_IO_PROJECTION_OUTPUT,JSON.stringify({input:read(),projections,output}));
+ const wrong=read();wrong.dataset.y.dtype='float32';wrong.dataset.y.values[0][1]=1e99;assert.equal(new Dataset(wrong).toMaskedMatrixRegression('matrix').y[0][1],0);wrong.dataset.target_mask.values[0][1]=true;assert.throws(()=>new Dataset(wrong));
+});

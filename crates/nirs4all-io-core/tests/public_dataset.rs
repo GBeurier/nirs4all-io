@@ -271,3 +271,64 @@ fn v2_rejects_corrupt_offsets_times_observed_missing_and_v1_ragged() {
         assert!(normalize_dataset(&wrong).is_err(), "{kind}");
     }
 }
+
+#[test]
+fn projected_native_features_join_by_identity_and_refuse_unencoded_presence() {
+    use nirs4all_io_core::public_dataset::{
+        masked_matrix_dataset_package, projected_matrix_dataset,
+    };
+    let value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    let mut projections = vec![
+        json!({"source_id":"matrix","sample_ids":["d","c","b","a"],"array":{"dtype":"float64","shape":[4,1],"values":[[4.],[3.],[2.],[1.]]},"feature_names":["mean"],"presence_encoded":false}),
+        json!({"source_id":"series","sample_ids":["a","b","c","d"],"array":{"dtype":"float64","shape":[4,2],"values":[[0.,0.],[0.,0.],[4.,1.],[0.,0.]]},"feature_names":["mean","present"],"presence_encoded":false}),
+    ];
+    assert!(projected_matrix_dataset(&value, &projections)
+        .unwrap_err()
+        .contains("presence"));
+    projections[1]["presence_encoded"] = json!(true);
+    let (record, provenance) = projected_matrix_dataset(&value, &projections).unwrap();
+    assert_eq!(
+        record["dataset"]["sources"][0]["array"]["values"],
+        json!([[1., 0., 0.], [2., 0., 0.], [3., 4., 1.], [4., 0., 0.]])
+    );
+    assert_eq!(
+        record["dataset"]["sources"][0]["feature_names"],
+        json!(["matrix:mean", "series:mean", "series:present"])
+    );
+    assert_eq!(
+        record["dataset"]["target_mask"],
+        value["dataset"]["target_mask"]
+    );
+    assert_eq!(
+        provenance["source_projections"][1]["source_schema"]["time_unit"],
+        json!("s")
+    );
+    assert!(masked_matrix_dataset_package(&record, "native_features").is_ok());
+    projections[0]["sample_ids"] = json!(["d", "c", "b", "foreign"]);
+    assert!(projected_matrix_dataset(&value, &projections).is_err());
+}
+
+#[test]
+fn false_target_sentinel_is_normalized_before_float32_conversion() {
+    use nirs4all_io_core::public_dataset::masked_matrix_dataset_package;
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    value["dataset"]["y"]["dtype"] = json!("float32");
+    value["dataset"]["y"]["values"][0][1] = json!(1e99);
+    let (package, _) = masked_matrix_dataset_package(&value, "matrix").unwrap();
+    assert_eq!(
+        package.to_assembled().blocks["train"]
+            .y
+            .as_ref()
+            .unwrap()
+            .data[1],
+        0.
+    );
+    value["dataset"]["target_mask"]["values"][0][1] = json!(true);
+    assert!(masked_matrix_dataset_package(&value, "matrix").is_err());
+}
