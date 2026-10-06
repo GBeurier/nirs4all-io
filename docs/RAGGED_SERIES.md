@@ -211,3 +211,10 @@ JavaScript `projectedMatrixDataset(record, projections, digest)` exposes the
 same assembly and provenance contract, with the caller's native content digest.
 False target sentinels are normalized before dtype/f32 conversion, including
 finite values too large for f32; observed target overflow remains an error.
+
+The opt-in masked matrix projection also preserves rank-2 int64 classification
+targets. Each named column represents an independent classifier target; consumers
+must select its matching observation mask and target index before native fitting
+and scoring. Class IDs retain their integer values and must be exactly
+representable in float32 storage. Unobserved placeholders become zero before this
+check. The complete classification projection still requires one int64 vector.

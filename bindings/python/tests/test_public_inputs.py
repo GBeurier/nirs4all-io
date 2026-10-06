@@ -188,3 +188,40 @@ def test_projected_matrix_uses_native_owner_and_preserves_masks():
     value["dataset"]["y"]["dtype"] = "float32"
     value["dataset"]["y"]["values"][0][1] = 1e99
     assert Dataset.from_dict(value).to_masked_matrix_regression("matrix")["y"][0][1] == 0
+
+
+def test_masked_classifier_columns_keep_labels_names_and_observed_truth():
+    import json
+    from pathlib import Path
+
+    from nirs4all_io.public_dataset import Dataset
+
+    value = json.loads((Path(__file__).resolve().parents[3] / "tests/fixtures/public-dataset-v2.json").read_text())
+    value["dataset"]["task_type"] = "classification"
+    value["dataset"]["target_names"] = ["class_a", "class_b"]
+    value["dataset"]["y"]["dtype"] = "int64"
+    value["dataset"]["y"]["values"] = [[0, None], [1, 3], [0, 7], [1e99, 3]]
+    cohort = Dataset.from_dict(value)
+    projected = cohort.to_masked_matrix_regression("matrix")
+    assert projected["y"] == [[0, 0], [1, 3], [0, 7], [0, 3]]
+    assert projected["target_names"] == ["class_a", "class_b"]
+    assert projected["target_mask"] == value["dataset"]["target_mask"]["values"]
+    with pytest.raises(ValueError):
+        cohort.to_matrix_regression("matrix")
+    value["dataset"]["y"]["values"][1][1] = 16777217
+    with pytest.raises(ValueError, match="float32"):
+        Dataset.from_dict(value).to_masked_matrix_regression("matrix")
+    value["dataset"]["y"]["values"][1][1] = 3
+    value["dataset"]["target_names"] = ["class_a", "class_a"]
+    with pytest.raises(ValueError):
+        Dataset.from_dict(value)
+    value["dataset"]["target_names"] = ["class_a", "class_b"]
+    value["dataset"]["target_mask"]["values"][0][1] = True
+    with pytest.raises(ValueError):
+        Dataset.from_dict(value)
+    value["dataset"]["y"]["values"] = [[0,3],[1,3],[0,7],[1,3]]
+    value["dataset"]["target_mask"]["values"] = [[True,True]] * 4
+    cohort = Dataset.from_dict(value)
+    assert cohort.to_masked_matrix_regression("matrix")["y"] == value["dataset"]["y"]["values"]
+    with pytest.raises(ValueError, match="int64 target vector"):
+        cohort.to_matrix_regression("matrix")

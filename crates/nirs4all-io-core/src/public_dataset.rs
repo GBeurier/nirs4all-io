@@ -1115,6 +1115,8 @@ pub fn matrix_dataset_package(
 
 /// Explicit masked projection. Consumers must bind the returned observation
 /// mask to native fit/refit/scoring; zero storage at false cells is not truth.
+/// Int64 classification matrices retain independent named target columns;
+/// consumers must select the corresponding column and mask for each classifier.
 pub fn masked_matrix_dataset_package(
     value: &Value,
     source_id: &str,
@@ -1225,17 +1227,22 @@ fn matrix_dataset_package_impl(
         .as_ref()
         .map_or(0, |shape| *shape.get(1).unwrap_or(&1));
     if raw["task_type"] == "classification" {
-        if y_shape.as_ref().is_some_and(|shape| shape.len() != 1)
+        if y_shape
+            .as_ref()
+            .is_some_and(|shape| shape.len() != 1 && !allow_masked)
             || (!raw["y"].is_null() && raw["y"]["dtype"] != "int64")
         {
             return fail("Matrix classification requires one int64 target vector");
         }
-        if !raw["y"].is_null()
-            && raw["y"]["values"].as_array().unwrap().iter().any(|value| {
-                let label = value.as_i64().unwrap();
-                (label as f32) as i64 != label
-            })
-        {
+        fn labels_exact(value: &Value) -> bool {
+            match value {
+                Value::Array(values) => values.iter().all(labels_exact),
+                _ => value
+                    .as_i64()
+                    .is_some_and(|label| (label as f32) as f64 == label as f64),
+            }
+        }
+        if !raw["y"].is_null() && !labels_exact(&raw["y"]["values"]) {
             return fail("Classification label exceeds exact float32 IO matrix storage");
         }
     }

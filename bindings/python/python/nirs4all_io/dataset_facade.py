@@ -107,8 +107,9 @@ def to_masked_matrix_regression(definition: Mapping[str, Any] | str | Path | Mul
 def _matrix_projection(definition: Mapping[str, Any] | str | Path | MultimodalDataset, *, source_id: str, masked: bool) -> dict[str, Any]:
     """Project a complete numeric source with ordered numeric target columns.
 
-    Classification remains explicit: one int64 target, preserved as integer
-    values alongside ``task_type``. There is no implicit label recoding.
+    Classification remains explicit: one int64 target for complete projection,
+    or named int64 columns for opt-in masked per-target classifiers. There is
+    no implicit label recoding.
     Prediction records retain target-free input rather than inventing truth.
     """
     cohort = load_multimodal_definition(definition)
@@ -127,7 +128,7 @@ def _matrix_projection(definition: Mapping[str, Any] | str | Path | MultimodalDa
             raise ValueError("Matrix projection requires finite numeric targets")
         if not masked and cohort.target_mask is not None and not np.all(cohort.target_mask):
             raise ValueError("Matrix projection requires observed targets")
-        if cohort.task_type == "classification" and (y.ndim != 1 or y.dtype != np.dtype("int64")):
+        if cohort.task_type == "classification" and ((y.ndim != 1 and not masked) or y.dtype != np.dtype("int64")):
             raise ValueError("Matrix classification requires one int64 target vector")
         if cohort.task_type == "classification" and np.any(y.astype(np.float32).astype(np.int64) != y):
             raise ValueError("Classification labels must be exactly representable in float32")

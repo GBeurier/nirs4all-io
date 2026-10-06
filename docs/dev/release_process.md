@@ -21,7 +21,9 @@ per-surface workflows are `release-crates.yml`, `release-npm.yml`,
 
 Public dataset v2 transports ragged source boundaries, explicit presence and
 partial target observation masks. Complete matrix projections preserve multiple
-target columns and explicitly declared classification labels. Native source
+target columns and explicitly declared classification labels. The opt-in masked
+projection additionally retains independent int64 classifier target columns and
+their observation masks; the complete classification projection stays mono-target. Native source
 projections join by sample identity and retain canonical schema/content
 provenance. IO validates and assembles these projections; numerical feature
 encoding remains upstream. Ragged packed arrays are refused by matrix projection.
