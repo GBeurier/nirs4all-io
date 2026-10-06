@@ -35,12 +35,19 @@ from ._package import (
     RowPositionFallback,
     repr_ids,
 )
+from .dataset_facade import to_masked_matrix_regression, to_matrix_regression
 from .multimodal import MultimodalDataset, TensorSource
 from .provider import DataProvider, ProviderBatches
+from .public_dataset import Dataset, dataset
 from .ragged import RaggedSeriesBatch, RaggedSeriesSource
 
 __all__ = [
     "infer",
+    "Dataset",
+    "dataset",
+    "to_matrix_regression",
+    "projected_matrix_dataset",
+    "to_masked_matrix_regression",
     "to_spec",
     "validate",
     "load",
@@ -395,3 +402,9 @@ def describe_dataset_package(
     """Return a bytes-free package summary for ``input``."""
     package = to_dataset_package(input, conventions=conventions, base_dir=base_dir, name=name, limits=limits)
     return package.to_canonical_summary() if canonical else package.to_summary_dict()
+
+
+def projected_matrix_dataset(record: Any, projections: Any) -> dict[str, Any]:
+    """Assemble native Methods projections by identity through native IO."""
+    from ._native import projected_matrix_dataset as assemble
+    return assemble(record.to_dict() if isinstance(record, Dataset) else record, projections)

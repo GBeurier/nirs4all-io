@@ -35,9 +35,36 @@ function nested(x,shape,dtype) {if(!shape.length){scalar(x,dtype);return;}if(!Ar
 function array(x) {closed(x,['dtype','shape','values']);if(typeof x.dtype!=='string'||!Array.isArray(x.shape)||!x.shape.length||x.shape.length>8||x.shape.some(n=>!Number.isSafeInteger(n)||n<0)||x.shape.reduce((a,b)=>a*b,1)>16777216)error('Invalid dtype/shape');scalar(x.dtype==='object'?null:x.dtype==='bool'?false:x.dtype.startsWith('<U')?'':0,x.dtype);nested(x.values,x.shape,x.dtype);if(x.dtype==='float32'){const round=v=>Array.isArray(v)?v.map(round):Math.fround(v);x.values=round(x.values);}return x.shape;}
 function placeholder(shape,dtype) {return shape.length?Array.from({length:shape[0]},()=>placeholder(shape.slice(1),dtype)):dtype==='object'?null:dtype==='bool'?false:dtype.startsWith('<U')?'':0;}
 const allTrue = shape => shape.length?Array.from({length:shape[0]},()=>allTrue(shape.slice(1))):true;
+function normalizeRagged(source,samples,alignment) {
+  closed(source,['source_kind','name','sample_ids','representation_id','axes','array','offsets','time_coordinates','channel_names','time_unit','presence_mask']);
+  if(source.representation_id!=='series_mv'||!equal(source.axes,['sample','time','variable']))error('Invalid ragged representation or axes');
+  const sourceIds=ids(source.sample_ids),shape=array(source.array);
+  if(shape.length!==2||shape[1]===0||source.array.dtype==='object'||source.array.dtype.startsWith('<U'))error('Ragged packed values require numeric matrix channels');
+  if(sourceIds.some(id=>!samples.includes(id))||(alignment==='strict'&&sourceIds.length!==samples.length))error('Ragged source identity alignment mismatch');
+  if(!equal(array(source.offsets),[sourceIds.length+1])||source.offsets.dtype!=='int64')error('Ragged offsets must be an int64 sample boundary vector');
+  const offsets=source.offsets.values;
+  if(offsets[0]!==0||offsets.at(-1)!==shape[0]||offsets.some((value,index)=>value<0||index>0&&value<offsets[index-1]))error('Invalid ragged offsets');
+  if(!equal(array(source.presence_mask),[sourceIds.length])||source.presence_mask.dtype!=='bool')error('Invalid ragged presence mask');
+  if(source.presence_mask.values.some((present,index)=>present&&offsets[index]===offsets[index+1]))error('Present ragged samples require at least one packed point');
+  if(source.channel_names!==null&&ids(source.channel_names).length!==shape[1])error('Ragged channel names mismatch');
+  if(source.time_unit!==null&&(typeof source.time_unit!=='string'||!source.time_unit.trim()))error('Invalid ragged time unit');
+  const times=source.time_coordinates;
+  if(times!==null){if(!equal(array(times),[shape[0]])||times.dtype==='object'||times.dtype==='bool'||times.dtype.startsWith('<U'))error('Numeric ragged times required');for(let row=0;row<sourceIds.length;row++)for(let index=offsets[row]+1;index<offsets[row+1];index++)if(times.values[index]<=times.values[index-1])error('Ragged times must strictly increase within each sample');}
+  const lookup=new Map(sourceIds.map((id,index)=>[id,index])),packed=[],alignedOffsets=[0],alignedTimes=[],present=[];
+  for(const id of samples){const index=lookup.get(id);if(index!==undefined){for(const point of source.array.values.slice(offsets[index],offsets[index+1]))packed.push(point);if(times)for(const time of times.values.slice(offsets[index],offsets[index+1]))alignedTimes.push(time);present.push(source.presence_mask.values[index]);}else present.push(false);alignedOffsets.push(packed.length);}
+  source.array.values=packed;source.array.shape[0]=packed.length;source.offsets.values=alignedOffsets;source.offsets.shape=[samples.length+1];if(times){times.values=alignedTimes;times.shape=[alignedTimes.length];}
+  source.sample_ids=[...samples];source.presence_mask={dtype:'bool',shape:[samples.length],values:present};
+}
+function normalizeMaskedTargets(values,mask,shape,dtype){
+  if(!shape.length){if(mask===false){if(values!==null&&typeof values!=='boolean'&&!(typeof values==='number'&&Number.isFinite(values)))error('Masked target storage requires null or finite numeric values');return dtype==='bool'?false:0;}scalar(values,dtype);return values;}
+  if(!Array.isArray(values)||values.length!==shape[0]||!Array.isArray(mask)||mask.length!==shape[0])error('Target shape differs from values/mask');
+  return values.map((value,index)=>normalizeMaskedTargets(value,mask[index],shape.slice(1),dtype));
+}
+
 export function normalizeDataset(input) {
   closed(input,['schema','schema_version','dataset','origin_ids','fold_ids']);
-  if(input.schema!=='nirs4all.dataset.v1'||input.schema_version!==1)error('Unsupported public dataset schema');
+  const v2=input.schema==='nirs4all.dataset.v2'&&input.schema_version===2;
+  if(!v2&&(input.schema!=='nirs4all.dataset.v1'||input.schema_version!==1))error('Unsupported public dataset schema');
   // Validate before cloning so structuredClone cannot turn host classes into records.
   const out=structuredClone(input), raw=out.dataset;
   closed(raw,['schema','schema_version','name','sample_ids','sources','y','groups','partitions'],['target_names','target_mask','task_type','source_alignment','independent_unit_ids','repetition_ids']);
@@ -45,6 +72,7 @@ export function normalizeDataset(input) {
   const samples=ids(raw.sample_ids);if(!Object.hasOwn(raw,'source_alignment'))raw.source_alignment='strict';if(!['strict','left'].includes(raw.source_alignment))error('Invalid source alignment');
   if(!Array.isArray(raw.sources)||!raw.sources.length)error('Named sources required');const names=new Set();
   for(const s of raw.sources) {
+    if(s.source_kind==='ragged_series'){if(!v2)error('Ragged sources require public dataset v2');if(typeof s.name!=='string'||!s.name.trim()||names.has(s.name))error('Duplicate or empty source name');names.add(s.name);normalizeRagged(s,samples,raw.source_alignment);continue;}
     closed(s,['name','sample_ids','representation_id','axes','feature_names','axis_units','axis_coordinates','array'],['presence_mask']);
     if(typeof s.name!=='string'||!s.name.trim()||names.has(s.name))error('Duplicate or empty source name');names.add(s.name);
     const axes=AXES[s.representation_id],shape=array(s.array),sourceIds=ids(s.sample_ids);
@@ -69,7 +97,7 @@ export function normalizeDataset(input) {
   }
   if(!equal(array(raw.partitions),[samples.length])||ids(raw.partitions.values,false).some(p=>!['train','test','predict'].includes(p)))error('Invalid partition alignment');
   if(raw.groups!==null&&!equal(array(raw.groups),[samples.length]))error('Invalid group alignment');
-  if(raw.y!==null){const shape=array(raw.y);if(shape[0]!==samples.length||shape.length>2||(shape.length===2&&shape[1]===0))error('Invalid target alignment');raw.target_mask??={dtype:'bool',shape:[...shape],values:allTrue(shape)};if(!equal(array(raw.target_mask),shape)||raw.target_mask.dtype!=='bool')error('Invalid target mask');}
+  if(raw.y!==null){if(v2&&raw.target_mask!==undefined&&raw.target_mask!==null){if(!equal(array(raw.target_mask),raw.y.shape)||raw.target_mask.dtype!=='bool')error('Invalid target mask');raw.y.values=normalizeMaskedTargets(raw.y.values,raw.target_mask.values,raw.y.shape,raw.y.dtype);}const shape=array(raw.y);if(shape[0]!==samples.length||shape.length>2||(shape.length===2&&shape[1]===0))error('Invalid target alignment');raw.target_mask??={dtype:'bool',shape:[...shape],values:allTrue(shape)};if(!equal(array(raw.target_mask),shape)||raw.target_mask.dtype!=='bool')error('Invalid target mask');}
   else if(raw.target_mask!==undefined&&raw.target_mask!==null)error('Absent targets require absent mask');
   const width=raw.y?.shape[1]??1;raw.target_names??=raw.y===null?[]:width===1?['y']:Array.from({length:width},(_,i)=>`y${i}`);if(ids(raw.target_names).length!==width&&raw.y!==null)error('Target names mismatch');
   raw.target_mask??=null;raw.task_type??=null;if(raw.task_type!==null&&!['regression','classification'].includes(raw.task_type))error('Invalid task type');
@@ -91,17 +119,31 @@ export class Dataset {
     const samples=ids(options.sampleIds??options.sample_ids),reprs={spectra:'signal_1d',nir:'signal_1d',image:'rgb_image',series:'series_mv',metadata:'tabular_mixed'};
     function shapeOf(x){if(!Array.isArray(x))return [];const shape=[x.length,...(x.length?shapeOf(x[0]):[])];nested(x,shape,'object');return shape;}
     const recordSources=Object.entries(sources).map(([name,values])=>{
+      if(values?.source_kind==='ragged_series')return {...structuredClone(values),name};
       const representation=options.representations?.[name]??reprs[name]??'tabular_numeric',shape=shapeOf(values),axes=AXES[representation];
       if(!axes)error('Explicit supported representation required');
       return {name,sample_ids:[...samples],representation_id:representation,axes,feature_names:options.featureNames?.[name]??null,axis_units:options.axisUnits?.[name]??{},axis_coordinates:options.axisCoordinates?.[name]??{},array:{dtype:representation==='tabular_mixed'||representation==='sample_metadata'?'object':'float64',shape,values}};
     });
-    const y=options.y??null,target=y===null?null:{dtype:'float64',shape:shapeOf(y),values:y};
+    const y=options.y??null,target=y===null?null:{dtype:options.taskType==='classification'?'int64':'float64',shape:shapeOf(y),values:y};
     const partitions=options.partitions??samples.map(()=>y===null?'predict':'train'),groups=options.groups??null;
-    return new Dataset({schema:'nirs4all.dataset.v1',schema_version:1,dataset:{schema:'nirs4all.multimodal-dataset',schema_version:1,name:options.name??'multimodal',sample_ids:samples,source_alignment:options.sourceAlignment===undefined?'strict':options.sourceAlignment,sources:recordSources,y:target,target_names:options.targetNames??(y===null?[]:['y']),target_mask:null,task_type:options.taskType??null,groups:groups===null?null:{dtype:'object',shape:[samples.length],values:groups},partitions:{dtype:`<U${Math.max(1,...partitions.map(x=>x.length))}`,shape:[samples.length],values:partitions},...(options.independentUnitIds?{independent_unit_ids:options.independentUnitIds}:{}),...(options.repetitionIds?{repetition_ids:options.repetitionIds}:{})},origin_ids:options.originIds??[...samples],fold_ids:options.foldIds??samples.map(()=>null)});
+    const v2=recordSources.some(source=>source.source_kind==='ragged_series')||options.targetMask!==undefined;
+    return new Dataset({schema:v2?'nirs4all.dataset.v2':'nirs4all.dataset.v1',schema_version:v2?2:1,dataset:{schema:'nirs4all.multimodal-dataset',schema_version:1,name:options.name??'multimodal',sample_ids:samples,source_alignment:options.sourceAlignment===undefined?'strict':options.sourceAlignment,sources:recordSources,y:target,target_names:options.targetNames??(y===null?[]:target.shape.length===2&&target.shape[1]>1?Array.from({length:target.shape[1]},(_,index)=>`y${index}`):['y']),target_mask:options.targetMask===undefined?null:{dtype:'bool',shape:target?.shape??[],values:options.targetMask},task_type:options.taskType??null,groups:groups===null?null:{dtype:'object',shape:[samples.length],values:groups},partitions:{dtype:`<U${Math.max(1,...partitions.map(x=>x.length))}`,shape:[samples.length],values:partitions},...(options.independentUnitIds?{independent_unit_ids:options.independentUnitIds}:{}),...(options.repetitionIds?{repetition_ids:options.repetitionIds}:{})},origin_ids:options.originIds??[...samples],fold_ids:options.foldIds??samples.map(()=>null)});
   }
   get sampleIds(){return [...this.record.dataset.sample_ids];}
   toJSON(){return structuredClone(this.record);}
-  toDenseRegression(sourceId){const record=this.record,raw=record.dataset,s=raw.sources.find(s=>s.name===sourceId);if(!s||s.array.shape.length!==2||s.array.dtype==='object'||s.array.dtype.startsWith('<U')||s.presence_mask.values.some(p=>!p)||raw.y===null||raw.y.shape.length!==1||raw.target_mask.values.some(p=>!p))error('Dense regression requires a complete numeric matrix and target');return {X:s.array.values,y:raw.y.values,sample_ids:raw.sample_ids,partitions:raw.partitions.values,target_names:raw.target_names,groups:raw.groups?.values??null,origin_ids:record.origin_ids,fold_ids:record.fold_ids,independent_unit_ids:raw.independent_unit_ids??null,repetition_ids:raw.repetition_ids??null};}
+  toMatrixRegression(sourceId){return this.#matrixProjection(sourceId,false);}
+  toMaskedMatrixRegression(sourceId){return this.#matrixProjection(sourceId,true);}
+  #matrixProjection(sourceId,masked){
+    const record=this.record,raw=record.dataset,s=raw.sources.find(source=>source.name===sourceId);
+    if(!s||s.source_kind==='ragged_series'||s.array.shape.length!==2||s.array.dtype==='object'||s.array.dtype.startsWith('<U')||s.presence_mask.values.some(p=>!p))error('Matrix projection requires a complete numeric source');
+    const observed=value=>Array.isArray(value)?value.every(observed):value===true;
+    const yValues=raw.y===null?null:masked?normalizeMaskedTargets(raw.y.values,raw.target_mask.values,raw.y.shape,raw.y.dtype):raw.y.values;
+    if(raw.y!==null && ((!masked&&!observed(raw.target_mask.values))||!['float32','float64','int8','int16','int32','int64','uint8','uint16','uint32','uint64','bool'].includes(raw.y.dtype)))error('Matrix projection requires observed numeric targets');
+    if(raw.task_type==='classification'&&raw.y!==null&&(raw.y.shape.length!==1||raw.y.dtype!=='int64'))error('Matrix classification requires one int64 target vector');
+    if(raw.task_type==='classification'&&raw.y!==null&&yValues.some(value=>Math.fround(value)!==value))error('Classification labels must be exactly representable in float32');
+    return {X:s.array.values,y:raw.y===null?null:raw.y.shape.length===1?yValues.map(value=>[value]):yValues,...(masked?{target_mask:raw.target_mask?.values??null}:{}),sample_ids:raw.sample_ids,partitions:raw.partitions.values,target_names:raw.target_names,task_type:raw.task_type??'regression',groups:raw.groups?.values??null,origin_ids:record.origin_ids,fold_ids:record.fold_ids,independent_unit_ids:raw.independent_unit_ids??null,repetition_ids:raw.repetition_ids??null};
+  }
+  toDenseRegression(sourceId){const record=this.record,raw=record.dataset,s=raw.sources.find(s=>s.name===sourceId);if(!s||s.source_kind==='ragged_series'||s.array.shape.length!==2||s.array.dtype==='object'||s.array.dtype.startsWith('<U')||s.presence_mask.values.some(p=>!p)||raw.y===null||raw.y.shape.length!==1||raw.task_type==='classification'||raw.target_mask.values.some(p=>!p))error('Dense regression requires a complete numeric matrix and target');return {X:s.array.values,y:raw.y.values,sample_ids:raw.sample_ids,partitions:raw.partitions.values,target_names:raw.target_names,groups:raw.groups?.values??null,origin_ids:record.origin_ids,fold_ids:record.fold_ids,independent_unit_ids:raw.independent_unit_ids??null,repetition_ids:raw.repetition_ids??null};}
 }
 export const dataset=(value,options={})=>value instanceof Dataset?value:(options.sampleIds||options.sample_ids)?Dataset.fromSources(value,options):new Dataset(value);
 export function u07Sources(input) {
@@ -109,7 +151,7 @@ export function u07Sources(input) {
   if(raw.source_alignment!=='strict'||!equal(raw.sources.map(s=>s.name),order))error('U07 requires four ordered strictly aligned sources');
   const schemas={},sources={};raw.sources.forEach((s,i)=>{
     const dtype=s.array.dtype,shape=s.array.shape,axes=s.axes,[typeId,modality]=TYPES[s.representation_id];
-    if(s.representation_id!==representations[i]||s.presence_mask.values.some(x=>!x)||(i<3&&!['float32','float64'].includes(dtype)))error('Invalid or missing U07 raw source');
+    if(s.source_kind==='ragged_series'||s.representation_id!==representations[i]||s.presence_mask.values.some(x=>!x)||(i<3&&!['float32','float64'].includes(dtype)))error('Invalid or missing U07 raw source');
     if(i===3){if(shape.length!==2||shape[1]!==2||!s.feature_names||s.feature_names.length!==2||s.array.values.some(row=>typeof row[1]!=='string'))error('U07 metadata needs named finite numeric and categorical columns');for(const row of s.array.values)metadataNumber(row[0]);}
     const descriptor={source_id:s.name,representation_id:s.representation_id,type_id:typeId,modality,axes,shape:[null,...shape.slice(1)],dtype,feature_names:s.feature_names,axis_units:s.axis_units,axis_coordinates:s.axis_coordinates,native_representation:{id:s.representation_id,type_id:typeId,rank:axes.length,axes:axes.map((a,j)=>({name:a,kind:({column:'feature',field:'feature',variable:'feature',band:'channel'})[a]??a,unit:s.axis_units[a]??null,size:j?shape[j]:null,variable:false})),container:'ndarray',dtype:dtype==='object'||dtype.startsWith('<U')?null:dtype,sparse:false,ragged:false}};
     schemas[s.name]=canonicalSourceSchema({representation_id:s.representation_id,input_shape:shape.slice(1),dtype,identity:JSON.stringify(stable(descriptor))});
@@ -149,6 +191,32 @@ export function multimodalRuntimeInput(input,digest) {
 export function publicSourceSchema(value,sourceId) {
   const source=dataset(value).record.dataset.sources.find(s=>s.name===sourceId);
   if(!source)error('Unknown selected source');
+  if(source.source_kind==='ragged_series')return {name:sourceId,source_kind:'ragged_series',representation_id:source.representation_id,axes:source.axes,shape:[null,null,source.array.shape[1]],dtype:source.array.dtype,channel_names:source.channel_names,time_unit:source.time_unit,time_dtype:source.time_coordinates?.dtype??null};
   return {name:sourceId,representation_id:source.representation_id,axes:source.axes,shape:[null,...source.array.shape.slice(1)],
     dtype:source.array.dtype,feature_names:source.feature_names,axis_units:Object.fromEntries(Object.entries(source.axis_units).filter(([,unit])=>unit!==null)),axis_coordinates:source.axis_coordinates};
+}
+
+/** Assemble native Methods projections by sample identity; IO never encodes. */
+export function projectedMatrixDataset(input,projections,digest) {
+  const record=dataset(input).record,raw=record.dataset,samples=raw.sample_ids;
+  if(typeof digest!=='function')error('Native projection assembly requires a content digest');
+  if(!Array.isArray(projections)||projections.length!==raw.sources.length)error('Projection inventory must match the ordered native source inventory');
+  const rows=samples.map(()=>[]),features=[],contracts=[];
+  raw.sources.forEach((source,index)=>{
+    const projection=projections[index];closed(projection,['source_id','sample_ids','array','feature_names','presence_encoded']);
+    if(projection.source_id!==source.name)error('Projection source order or identity differs from native source inventory');
+    if(typeof projection.presence_encoded!=='boolean')error('Projection presence_encoded must be boolean');
+    if(!projection.presence_encoded&&source.presence_mask.values.some(present=>!present))error('Missing source rows require explicit native presence encoding');
+    const sampleIds=ids(projection.sample_ids),arrayRecord=structuredClone(projection.array),shape=array(arrayRecord);
+    if(shape.length!==2||!shape[1]||shape[0]!==samples.length||sampleIds.length!==samples.length||sampleIds.some(id=>!samples.includes(id))||!['float32','float64'].includes(arrayRecord.dtype))error('Native projection requires a complete finite float matrix with exact sample identities');
+    const columns=ids(projection.feature_names);if(columns.length!==shape[1])error('Projection feature names differ from matrix width');
+    if(features.length+columns.length>16777216||samples.length*(features.length+columns.length)>16777216)error('Projected matrix budget exceeded');
+    for(const column of columns)features.push(`${source.name}:${column}`);
+    const lookup=new Map(sampleIds.map((id,position)=>[id,position]));samples.forEach((id,position)=>{for(const value of arrayRecord.values[lookup.get(id)])rows[position].push(value);});
+    contracts.push({source_id:source.name,source_schema:publicSourceSchema(record,source.name),input_presence_mask:source.presence_mask,presence_encoded:projection.presence_encoded,feature_names:columns,projection_content_fingerprint:digest(canonicalContentBytes(projection))});
+  });
+  if(new Set(features).size!==features.length||samples.length*features.length>16777216)error('Projected feature inventory repeats names or exceeds matrix budget');
+  const provenance={schema:'nirs4all.native-source-projections.v1',sample_ids:samples,source_projections:contracts,input_content_fingerprint:digest(datasetContentBytes(record))};
+  record.schema='nirs4all.dataset.v2';record.schema_version=2;raw.source_alignment='strict';raw.sources=[{name:'native_features',sample_ids:samples,representation_id:'tabular_numeric',axes:['sample','feature'],feature_names:features,axis_units:{},axis_coordinates:{},array:{dtype:'float64',shape:[samples.length,features.length],values:rows},presence_mask:{dtype:'bool',shape:[samples.length],values:samples.map(()=>true)}}];
+  return {record:normalizeDataset(record),provenance};
 }

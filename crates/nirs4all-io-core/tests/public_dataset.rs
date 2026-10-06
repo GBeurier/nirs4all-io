@@ -174,3 +174,189 @@ fn runtime_groups_preserve_string_ids_and_refuse_numeric_labels() {
             .contains("group IDs must be nonempty strings"));
     }
 }
+
+#[test]
+fn matrix_targets_preserve_width_and_classification_is_explicit() {
+    use nirs4all_io_core::public_dataset::matrix_dataset_package;
+    let mut value = input();
+    value["dataset"]["y"] =
+        json!({"dtype":"float64","shape":[4,2],"values":[[1.,10.],[2.,20.],[3.,30.],[4.,40.]]});
+    value["dataset"]["target_names"] = json!(["first", "second"]);
+    let package = matrix_dataset_package(&value, "spectra")
+        .unwrap()
+        .to_assembled();
+    assert_eq!(package.blocks["train"].y.as_ref().unwrap().n_cols, 2);
+    assert_eq!(
+        package.blocks["train"].y.as_ref().unwrap().data,
+        vec![1., 10., 2., 20., 3., 30., 4., 40.]
+    );
+    assert!(dense_dataset_package(&value, "spectra").is_err());
+    value["dataset"]["y"] = json!({"dtype":"int64","shape":[4],"values":[0,1,0,1]});
+    value["dataset"]["target_names"] = json!(["class"]);
+    value["dataset"]["task_type"] = json!("classification");
+    assert_eq!(
+        matrix_dataset_package(&value, "spectra")
+            .unwrap()
+            .to_assembled()
+            .task_type,
+        "classification"
+    );
+    assert!(dense_dataset_package(&value, "spectra").is_err());
+    value["dataset"]["y"]["values"][0] = json!(16_777_217);
+    assert!(matrix_dataset_package(&value, "spectra")
+        .unwrap_err()
+        .contains("float32"));
+}
+
+#[test]
+fn v2_ragged_and_masked_targets_match_python_js_golden() {
+    use nirs4all_io_core::public_dataset::{masked_matrix_dataset_package, matrix_dataset_package};
+    let value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2-normalized.json"
+    ))
+    .unwrap();
+    assert_eq!(normalize_dataset(&value).unwrap(), expected);
+    assert_eq!(normalize_dataset(&expected).unwrap(), expected);
+    assert!(matrix_dataset_package(&value, "matrix")
+        .unwrap_err()
+        .contains("observed"));
+    let (package, projection) = masked_matrix_dataset_package(&value, "matrix").unwrap();
+    assert_eq!(projection["sample_ids"], expected["dataset"]["sample_ids"]);
+    assert_eq!(
+        projection["target_mask"],
+        expected["dataset"]["target_mask"]
+    );
+    assert_eq!(
+        projection["mask_content_fingerprint"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(
+        package.to_assembled().blocks["train"]
+            .y
+            .as_ref()
+            .unwrap()
+            .data,
+        vec![1., 0., 2., 4., 3., 6., 0., 8.]
+    );
+    let schema = public_source_schema(&value, "series").unwrap();
+    assert_eq!(schema["shape"], json!([null, null, 2]));
+    assert_eq!(schema["time_unit"], json!("s"));
+    assert!(masked_matrix_dataset_package(&value, "series").is_err());
+}
+
+#[test]
+fn v2_rejects_corrupt_offsets_times_observed_missing_and_v1_ragged() {
+    let value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    for kind in ["offsets", "times", "target", "v1"] {
+        let mut wrong = value.clone();
+        match kind {
+            "offsets" => wrong["dataset"]["sources"][1]["offsets"]["values"][2] = json!(4),
+            "times" => wrong["dataset"]["sources"][1]["time_coordinates"]["values"][1] = json!(0),
+            "target" => wrong["dataset"]["target_mask"]["values"][0][1] = json!(true),
+            _ => {
+                wrong["schema"] = json!("nirs4all.dataset.v1");
+                wrong["schema_version"] = json!(1);
+            }
+        }
+        assert!(normalize_dataset(&wrong).is_err(), "{kind}");
+    }
+}
+
+#[test]
+fn projected_native_features_join_by_identity_and_refuse_unencoded_presence() {
+    use nirs4all_io_core::public_dataset::{
+        masked_matrix_dataset_package, projected_matrix_dataset,
+    };
+    let value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    let mut projections = vec![
+        json!({"source_id":"matrix","sample_ids":["d","c","b","a"],"array":{"dtype":"float64","shape":[4,1],"values":[[4.],[3.],[2.],[1.]]},"feature_names":["mean"],"presence_encoded":false}),
+        json!({"source_id":"series","sample_ids":["a","b","c","d"],"array":{"dtype":"float64","shape":[4,2],"values":[[0.,0.],[0.,0.],[4.,1.],[0.,0.]]},"feature_names":["mean","present"],"presence_encoded":false}),
+    ];
+    assert!(projected_matrix_dataset(&value, &projections)
+        .unwrap_err()
+        .contains("presence"));
+    projections[1]["presence_encoded"] = json!(true);
+    let (record, provenance) = projected_matrix_dataset(&value, &projections).unwrap();
+    assert_eq!(
+        record["dataset"]["sources"][0]["array"]["values"],
+        json!([[1., 0., 0.], [2., 0., 0.], [3., 4., 1.], [4., 0., 0.]])
+    );
+    assert_eq!(
+        record["dataset"]["sources"][0]["feature_names"],
+        json!(["matrix:mean", "series:mean", "series:present"])
+    );
+    assert_eq!(
+        record["dataset"]["target_mask"],
+        value["dataset"]["target_mask"]
+    );
+    assert_eq!(
+        provenance["source_projections"][1]["source_schema"]["time_unit"],
+        json!("s")
+    );
+    assert!(masked_matrix_dataset_package(&record, "native_features").is_ok());
+    projections[0]["sample_ids"] = json!(["d", "c", "b", "foreign"]);
+    assert!(projected_matrix_dataset(&value, &projections).is_err());
+}
+
+#[test]
+fn false_target_sentinel_is_normalized_before_float32_conversion() {
+    use nirs4all_io_core::public_dataset::masked_matrix_dataset_package;
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    value["dataset"]["y"]["dtype"] = json!("float32");
+    value["dataset"]["y"]["values"][0][1] = json!(1e99);
+    let (package, _) = masked_matrix_dataset_package(&value, "matrix").unwrap();
+    assert_eq!(
+        package.to_assembled().blocks["train"]
+            .y
+            .as_ref()
+            .unwrap()
+            .data[1],
+        0.
+    );
+    value["dataset"]["target_mask"]["values"][0][1] = json!(true);
+    assert!(masked_matrix_dataset_package(&value, "matrix").is_err());
+}
+
+#[test]
+fn ragged_matrix_projection_is_refused_even_when_fully_present() {
+    use nirs4all_io_core::public_dataset::{masked_matrix_dataset_package, matrix_dataset_package};
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    value["dataset"]["sources"][1]["sample_ids"] = json!(["a", "b", "c", "d"]);
+    value["dataset"]["sources"][1]["offsets"] =
+        json!({"dtype":"int64","shape":[5],"values":[0,2,3,4,5]});
+    value["dataset"]["sources"][1]["array"] =
+        json!({"dtype":"float64","shape":[5,2],"values":[[1.,2.],[2.,3.],[3.,4.],[4.,5.],[5.,6.]]});
+    value["dataset"]["sources"][1]["time_coordinates"] =
+        json!({"dtype":"float64","shape":[5],"values":[0.,1.,0.,0.,0.]});
+    value["dataset"]["sources"][1]["presence_mask"] =
+        json!({"dtype":"bool","shape":[4],"values":[true,true,true,true]});
+    assert!(normalize_dataset(&value).is_ok());
+    assert!(matrix_dataset_package(&value, "series").is_err());
+    assert!(masked_matrix_dataset_package(&value, "series").is_err());
+    value["dataset"]["sources"][1]["offsets"]["values"] = json!([0, 0, 3, 4, 5]);
+    assert!(normalize_dataset(&value)
+        .unwrap_err()
+        .contains("packed point"));
+    value["dataset"]["sources"][1]["offsets"]["values"] = json!([0, 2, 3, 4, 5]);
+    value["dataset"]["sources"][1]["time_coordinates"]["dtype"] = json!("object");
+    assert!(normalize_dataset(&value).is_err());
+}

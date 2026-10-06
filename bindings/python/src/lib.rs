@@ -150,10 +150,31 @@ fn parse_load_limits(limits: Option<&Bound<'_, PyAny>>) -> PyResult<LoadLimits> 
         .unwrap_or_else(|| Ok(LoadLimits::default()))
 }
 
+/// Assemble Methods-produced feature projections through native IO contracts.
+#[pyfunction]
+fn projected_matrix_dataset(
+    py: Python<'_>,
+    record: &Bound<'_, PyAny>,
+    projections: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let record: Value =
+        depythonize(record).map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let projections: Vec<Value> =
+        depythonize(projections).map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let (record, provenance) =
+        nirs4all_io_facade::core::public_dataset::projected_matrix_dataset(&record, &projections)
+            .map_err(PyValueError::new_err)?;
+    to_py(
+        py,
+        &serde_json::json!({"record":record,"provenance":provenance}),
+    )
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(infer, m)?)?;
+    m.add_function(wrap_pyfunction!(projected_matrix_dataset, m)?)?;
     m.add_function(wrap_pyfunction!(to_spec, m)?)?;
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(load_summary, m)?)?;
