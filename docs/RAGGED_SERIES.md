@@ -196,3 +196,18 @@ bind it to native fit, refit and scoring. Python
 `Dataset.toMaskedMatrixRegression(source)` expose the mask explicitly. The
 complete projection refuses incomplete targets so existing consumers cannot
 silently treat placeholder zero as truth.
+
+Native `projected_matrix_dataset(record, projections)` returns a dense
+`native_features` record and source provenance after Methods has produced each
+projection. Projection records declare `source_id`, `sample_ids`, a finite
+float matrix, unique `feature_names`, and boolean `presence_encoded`; their
+inventory follows IO source order. IO joins projected rows by identity and
+concatenates columns with source-qualified names. Missing input presence is
+refused unless the native recipe explicitly declares its encoding. Source
+schemas, input presence, projection content fingerprints and input content
+fingerprints are retained for Core/DAG to bind to the persisted recipe.
+Python `nirs4all_io.projected_matrix_dataset` delegates to this native owner.
+JavaScript `projectedMatrixDataset(record, projections, digest)` exposes the
+same assembly and provenance contract, with the caller's native content digest.
+False target sentinels are normalized before dtype/f32 conversion, including
+finite values too large for f32; observed target overflow remains an error.

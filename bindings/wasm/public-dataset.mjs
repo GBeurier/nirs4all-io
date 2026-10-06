@@ -55,7 +55,7 @@ function normalizeRagged(source,samples,alignment) {
   source.sample_ids=[...samples];source.presence_mask={dtype:'bool',shape:[samples.length],values:present};
 }
 function normalizeMaskedTargets(values,mask,shape,dtype){
-  if(!shape.length){if(mask===false){if(values!==null)scalar(values,dtype);return dtype==='bool'?false:0;}scalar(values,dtype);return values;}
+  if(!shape.length){if(mask===false){if(values!==null&&typeof values!=='boolean'&&!(typeof values==='number'&&Number.isFinite(values)))error('Masked target storage requires null or finite numeric values');return dtype==='bool'?false:0;}scalar(values,dtype);return values;}
   if(!Array.isArray(values)||values.length!==shape[0]||!Array.isArray(mask)||mask.length!==shape[0])error('Target shape differs from values/mask');
   return values.map((value,index)=>normalizeMaskedTargets(value,mask[index],shape.slice(1),dtype));
 }
@@ -193,4 +193,29 @@ export function publicSourceSchema(value,sourceId) {
   if(source.source_kind==='ragged_series')return {name:sourceId,source_kind:'ragged_series',representation_id:source.representation_id,axes:source.axes,shape:[null,null,source.array.shape[1]],dtype:source.array.dtype,channel_names:source.channel_names,time_unit:source.time_unit,time_dtype:source.time_coordinates?.dtype??null};
   return {name:sourceId,representation_id:source.representation_id,axes:source.axes,shape:[null,...source.array.shape.slice(1)],
     dtype:source.array.dtype,feature_names:source.feature_names,axis_units:Object.fromEntries(Object.entries(source.axis_units).filter(([,unit])=>unit!==null)),axis_coordinates:source.axis_coordinates};
+}
+
+/** Assemble native Methods projections by sample identity; IO never encodes. */
+export function projectedMatrixDataset(input,projections,digest) {
+  const record=dataset(input).record,raw=record.dataset,samples=raw.sample_ids;
+  if(typeof digest!=='function')error('Native projection assembly requires a content digest');
+  if(!Array.isArray(projections)||projections.length!==raw.sources.length)error('Projection inventory must match the ordered native source inventory');
+  const rows=samples.map(()=>[]),features=[],contracts=[];
+  raw.sources.forEach((source,index)=>{
+    const projection=projections[index];closed(projection,['source_id','sample_ids','array','feature_names','presence_encoded']);
+    if(projection.source_id!==source.name)error('Projection source order or identity differs from native source inventory');
+    if(typeof projection.presence_encoded!=='boolean')error('Projection presence_encoded must be boolean');
+    if(!projection.presence_encoded&&source.presence_mask.values.some(present=>!present))error('Missing source rows require explicit native presence encoding');
+    const sampleIds=ids(projection.sample_ids),arrayRecord=structuredClone(projection.array),shape=array(arrayRecord);
+    if(shape.length!==2||!shape[1]||shape[0]!==samples.length||sampleIds.length!==samples.length||sampleIds.some(id=>!samples.includes(id))||!['float32','float64'].includes(arrayRecord.dtype))error('Native projection requires a complete finite float matrix with exact sample identities');
+    const columns=ids(projection.feature_names);if(columns.length!==shape[1])error('Projection feature names differ from matrix width');
+    if(features.length+columns.length>16777216||samples.length*(features.length+columns.length)>16777216)error('Projected matrix budget exceeded');
+    for(const column of columns)features.push(`${source.name}:${column}`);
+    const lookup=new Map(sampleIds.map((id,position)=>[id,position]));samples.forEach((id,position)=>{for(const value of arrayRecord.values[lookup.get(id)])rows[position].push(value);});
+    contracts.push({source_id:source.name,source_schema:publicSourceSchema(record,source.name),input_presence_mask:source.presence_mask,presence_encoded:projection.presence_encoded,feature_names:columns,projection_content_fingerprint:digest(canonicalContentBytes(projection))});
+  });
+  if(new Set(features).size!==features.length||samples.length*features.length>16777216)error('Projected feature inventory repeats names or exceeds matrix budget');
+  const provenance={schema:'nirs4all.native-source-projections.v1',sample_ids:samples,source_projections:contracts,input_content_fingerprint:digest(datasetContentBytes(record))};
+  record.schema='nirs4all.dataset.v2';record.schema_version=2;raw.source_alignment='strict';raw.sources=[{name:'native_features',sample_ids:samples,representation_id:'tabular_numeric',axes:['sample','feature'],feature_names:features,axis_units:{},axis_coordinates:{},array:{dtype:'float64',shape:[samples.length,features.length],values:rows},presence_mask:{dtype:'bool',shape:[samples.length],values:samples.map(()=>true)}}];
+  return {record:normalizeDataset(record),provenance};
 }
