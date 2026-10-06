@@ -17,6 +17,20 @@ per-surface workflows are `release-crates.yml`, `release-npm.yml`,
 > `serde`/`sha2`, no C system library). So io ships **macOS binary wheels** and
 > macOS C-ABI archives alongside Linux + Windows with no special handling.
 
+## 0.2.6 — 2026-10-06
+
+Public dataset v2 transports ragged source boundaries, explicit presence and
+partial target observation masks. Complete matrix projections preserve multiple
+target columns and explicitly declared classification labels. Native source
+projections join by sample identity and retain canonical schema/content
+provenance. IO validates and assembles these projections; numerical feature
+encoding remains upstream. Ragged packed arrays are refused by matrix projection.
+
+The legacy complete single-target projection retains its guard. Masked projections
+require consumers to bind masks to native fit, refit and scoring. Unobserved
+cells use zero storage without becoming observed truth. This release changes no
+C ABI symbol or ABI version.
+
 ## 0.2.2 — 2026-09-30
 
 The Python provider supports bounded on-demand identity views with an immutable
@@ -28,7 +42,7 @@ transport in every non-Python host remain separate work.
 ## Single source of truth
 
 The canonical version is the **`[workspace.package] version` in the root
-`Cargo.toml`** (Cargo SemVer, currently `0.2.2`).
+`Cargo.toml`** (Cargo SemVer, currently `0.2.6`).
 `scripts/bump_version.sh` propagates it to every binding manifest, translating
 the spelling each ecosystem requires:
 
@@ -66,7 +80,7 @@ the `n4io_` exported-symbol surface is diffed by `.github/workflows/abi-check.ym
 | R | `nirs4allio` | **R-universe / GitHub Release** (CRAN deferred) | **Build CI-automated** — `release-r.yml` installs + smokes across the matrix, then builds a self-contained vendored source tarball. **R-universe is a one-time registry entry; CRAN is a deferred manual web-form step** (see *R → CRAN*). | tag push attaches the tarball |
 | JS / WASM | `@nirs4all/io-wasm` | npm | **Automated** — `release-npm.yml` (wasm-pack nodejs build, raw + idiomatic smokes, authored types, licenses, scoped name + provenance) publishes via `npm publish` and retains the exact `.tgz` | push tag `v*` (non-pre-release) + `NPM_TOKEN` |
 | MATLAB / Octave | `nirs4all-io-matlab-octave-<version>.zip` | GitHub Release | **Automated** — `release-matlab.yml` (`scripts/build_matlab_archive.sh`, commit-timestamped and byte-reproducible in a pinned tool environment) | push tag `v*` (non-pre-release) |
-| Rust crates | `nirs4all-io-core`, `nirs4all-io`, `nirs4all-io-capi`, `nirs4all-io-cli` | crates.io | **Automated** — `release-crates.yml` publishes leaf-first | push tag `v*` (non-pre-release) + `CARGO_REGISTRY_TOKEN` |
+| Rust crates | `nirs4all-io-core`, `nirs4all-io`, `nirs4all-io-dagml`, `nirs4all-io-capi`, `nirs4all-io-cli` | crates.io | **Automated** — `release-crates.yml` publishes leaf-first | push tag `v*` (non-pre-release) + `CARGO_REGISTRY_TOKEN` |
 | Source + provenance | — | GitHub Release | **Automated** — `release-source.yml` (reproducible git-archive tar.gz + zip, pinned Syft action, canonical CycloneDX SBOM, `SHA256SUMS`, keyless Sigstore provenance) | push tag `v*` (non-pre-release) |
 
 ## Exact release artifacts — what each binding ships, and where to upload it
@@ -77,7 +91,7 @@ they are downloadable from one place.
 | Binding | Registry | Exact file(s) | Upload |
 |---|---|---|---|
 | Python `nirs4all-io` | PyPI | `nirs4all_io-<version>-*.whl` (maturin abi3 wheels: Linux + macOS + Windows) + `nirs4all_io-<version>.tar.gz` (maturin sdist) | **Automated** — Trusted Publishing, *no manual upload* |
-| Rust crates | crates.io | the 4 workspace crates (`nirs4all-io-core` / `nirs4all-io` / `nirs4all-io-capi` / `nirs4all-io-cli`) | **Automated** — `cargo publish`, leaf-first |
+| Rust crates | crates.io | the 5 workspace crates (`nirs4all-io-core` / `nirs4all-io` / `nirs4all-io-dagml` / `nirs4all-io-capi` / `nirs4all-io-cli`) | **Automated** — `cargo publish`, leaf-first |
 | R `nirs4allio` | R-universe / Release | **`nirs4allio_<version>.tar.gz`** (source tarball) | **Automated to the Release** (R-universe builds from Git). The release tarball is self-contained for CRAN; submission remains manual — see *R → CRAN*. |
 | JS / WASM `@nirs4all/io-wasm` | npm | `nirs4all-io-wasm-<version>.tgz` containing raw WASM/JS, the idiomatic ESM wrapper, detailed types, and the license inventory | **Automated** — `release-npm.yml` (needs `NPM_TOKEN` + the `@nirs4all` scope) |
 | MATLAB / Octave | GitHub Release | `nirs4all-io-matlab-octave-<version>.zip` (binding sources plus project license/notice inventory) | **Automated** — `release-matlab.yml` |
