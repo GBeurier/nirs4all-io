@@ -262,6 +262,14 @@ fn normalize_ragged(source: &mut Value, ids: &[String], strict: bool) -> Dataset
     {
         return fail("Invalid ragged presence mask");
     }
+    let presence = source["presence_mask"]["values"].as_array().unwrap();
+    if presence
+        .iter()
+        .enumerate()
+        .any(|(index, present)| present == true && offsets[index] == offsets[index + 1])
+    {
+        return fail("Present ragged samples require at least one packed point");
+    }
     if !source["channel_names"].is_null()
         && strings(&source["channel_names"], true)?.len() != shape[1]
     {
@@ -277,7 +285,14 @@ fn normalize_ragged(source: &mut Value, ids: &[String], strict: bool) -> Dataset
     let times = if source["time_coordinates"].is_null() {
         None
     } else {
-        if array(&source["time_coordinates"])? != vec![shape[0]] {
+        if array(&source["time_coordinates"])? != vec![shape[0]]
+            || source["time_coordinates"]["dtype"] == "object"
+            || source["time_coordinates"]["dtype"] == "bool"
+            || source["time_coordinates"]["dtype"]
+                .as_str()
+                .unwrap()
+                .starts_with("<U")
+        {
             return fail("Ragged time coordinates must match packed length");
         }
         round_storage(&mut source["time_coordinates"]);
@@ -1147,7 +1162,8 @@ fn matrix_dataset_package_impl(
         .find(|s| s["name"] == source_id)
         .ok_or("Unknown selected source")?;
     let shape = dimensions(&source["array"]["shape"])?;
-    if shape.len() != 2
+    if source["source_kind"] == "ragged_series"
+        || shape.len() != 2
         || source["array"]["dtype"] == "object"
         || source["array"]["dtype"].as_str().unwrap().starts_with("<U")
         || source["presence_mask"]["values"]

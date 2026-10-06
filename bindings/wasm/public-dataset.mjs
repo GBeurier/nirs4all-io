@@ -45,6 +45,7 @@ function normalizeRagged(source,samples,alignment) {
   const offsets=source.offsets.values;
   if(offsets[0]!==0||offsets.at(-1)!==shape[0]||offsets.some((value,index)=>value<0||index>0&&value<offsets[index-1]))error('Invalid ragged offsets');
   if(!equal(array(source.presence_mask),[sourceIds.length])||source.presence_mask.dtype!=='bool')error('Invalid ragged presence mask');
+  if(source.presence_mask.values.some((present,index)=>present&&offsets[index]===offsets[index+1]))error('Present ragged samples require at least one packed point');
   if(source.channel_names!==null&&ids(source.channel_names).length!==shape[1])error('Ragged channel names mismatch');
   if(source.time_unit!==null&&(typeof source.time_unit!=='string'||!source.time_unit.trim()))error('Invalid ragged time unit');
   const times=source.time_coordinates;

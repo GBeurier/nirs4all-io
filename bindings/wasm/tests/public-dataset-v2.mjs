@@ -27,3 +27,10 @@ test('native projected features preserve ID joins, source provenance and presenc
  if(process.env.NIRS4ALL_IO_PROJECTION_OUTPUT)fs.writeFileSync(process.env.NIRS4ALL_IO_PROJECTION_OUTPUT,JSON.stringify({input:read(),projections,output}));
  const wrong=read();wrong.dataset.y.dtype='float32';wrong.dataset.y.values[0][1]=1e99;assert.equal(new Dataset(wrong).toMaskedMatrixRegression('matrix').y[0][1],0);wrong.dataset.target_mask.values[0][1]=true;assert.throws(()=>new Dataset(wrong));
 });
+
+test('present ragged samples require a point and numeric time storage',()=>{
+ const wrong=read();wrong.dataset.sources[1].offsets.values=[0,0,3];
+ assert.throws(()=>normalizeDataset(wrong),/packed point/);
+ const times=read();times.dataset.sources[1].time_coordinates.dtype='object';
+ assert.throws(()=>normalizeDataset(times),/Numeric/);
+});

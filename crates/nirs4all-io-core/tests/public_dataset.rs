@@ -332,3 +332,31 @@ fn false_target_sentinel_is_normalized_before_float32_conversion() {
     value["dataset"]["target_mask"]["values"][0][1] = json!(true);
     assert!(masked_matrix_dataset_package(&value, "matrix").is_err());
 }
+
+#[test]
+fn ragged_matrix_projection_is_refused_even_when_fully_present() {
+    use nirs4all_io_core::public_dataset::{masked_matrix_dataset_package, matrix_dataset_package};
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    value["dataset"]["sources"][1]["sample_ids"] = json!(["a", "b", "c", "d"]);
+    value["dataset"]["sources"][1]["offsets"] =
+        json!({"dtype":"int64","shape":[5],"values":[0,2,3,4,5]});
+    value["dataset"]["sources"][1]["array"] =
+        json!({"dtype":"float64","shape":[5,2],"values":[[1.,2.],[2.,3.],[3.,4.],[4.,5.],[5.,6.]]});
+    value["dataset"]["sources"][1]["time_coordinates"] =
+        json!({"dtype":"float64","shape":[5],"values":[0.,1.,0.,0.,0.]});
+    value["dataset"]["sources"][1]["presence_mask"] =
+        json!({"dtype":"bool","shape":[4],"values":[true,true,true,true]});
+    assert!(normalize_dataset(&value).is_ok());
+    assert!(matrix_dataset_package(&value, "series").is_err());
+    assert!(masked_matrix_dataset_package(&value, "series").is_err());
+    value["dataset"]["sources"][1]["offsets"]["values"] = json!([0, 0, 3, 4, 5]);
+    assert!(normalize_dataset(&value)
+        .unwrap_err()
+        .contains("packed point"));
+    value["dataset"]["sources"][1]["offsets"]["values"] = json!([0, 2, 3, 4, 5]);
+    value["dataset"]["sources"][1]["time_coordinates"]["dtype"] = json!("object");
+    assert!(normalize_dataset(&value).is_err());
+}
