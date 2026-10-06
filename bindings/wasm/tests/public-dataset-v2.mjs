@@ -34,3 +34,14 @@ test('present ragged samples require a point and numeric time storage',()=>{
  const times=read();times.dataset.sources[1].time_coordinates.dtype='object';
  assert.throws(()=>normalizeDataset(times),/Numeric/);
 });
+
+test('masked independent classifier columns preserve labels and refuse changed observed cells',()=>{
+ const value=read();value.dataset.task_type='classification';value.dataset.target_names=['class_a','class_b'];value.dataset.y.dtype='int64';value.dataset.y.values=[[0,null],[1,3],[0,7],[1e99,3]];
+ const cohort=new Dataset(value),projected=cohort.toMaskedMatrixRegression('matrix');
+ assert.deepEqual(projected.y,[[0,0],[1,3],[0,7],[0,3]]);assert.deepEqual(projected.target_names,['class_a','class_b']);assert.deepEqual(projected.target_mask,value.dataset.target_mask.values);assert.throws(()=>cohort.toMatrixRegression('matrix'));
+ value.dataset.y.values[1][1]=16777217;assert.throws(()=>new Dataset(value).toMaskedMatrixRegression('matrix'),/float32/);value.dataset.y.values[1][1]=3;
+ value.dataset.target_names=['class_a','class_a'];assert.throws(()=>new Dataset(value));value.dataset.target_names=['class_a','class_b'];
+ value.dataset.target_mask.values[0][1]=true;assert.throws(()=>new Dataset(value));
+ value.dataset.y.values=[[0,3],[1,3],[0,7],[1,3]];value.dataset.target_mask.values=value.dataset.y.values.map(()=>[true,true]);
+ assert.deepEqual(new Dataset(value).toMaskedMatrixRegression('matrix').y,value.dataset.y.values);assert.throws(()=>new Dataset(value).toMatrixRegression('matrix'),/int64 target vector/);
+});

@@ -360,3 +360,49 @@ fn ragged_matrix_projection_is_refused_even_when_fully_present() {
     value["dataset"]["sources"][1]["time_coordinates"]["dtype"] = json!("object");
     assert!(normalize_dataset(&value).is_err());
 }
+
+#[test]
+fn masked_classifier_columns_preserve_independent_labels_and_observation_masks() {
+    use nirs4all_io_core::public_dataset::{masked_matrix_dataset_package, matrix_dataset_package};
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-dataset-v2.json"
+    ))
+    .unwrap();
+    value["dataset"]["task_type"] = json!("classification");
+    value["dataset"]["y"]["dtype"] = json!("int64");
+    value["dataset"]["y"]["values"] = json!([[0, null], [1, 3], [0, 7], [1e99, 3]]);
+    value["dataset"]["target_names"] = json!(["class_a", "class_b"]);
+    let (package, mask) = masked_matrix_dataset_package(&value, "matrix").unwrap();
+    assert_eq!(package.to_assembled().task_type, "classification");
+    let assembled = package.to_assembled();
+    assert_eq!(
+        assembled.blocks["train"].y_headers,
+        vec!["class_a", "class_b"]
+    );
+    assert_eq!(
+        assembled.blocks["train"].y.as_ref().unwrap().data,
+        vec![0., 0., 1., 3., 0., 7., 0., 3.]
+    );
+    assert_eq!(mask["target_names"], json!(["class_a", "class_b"]));
+    assert_eq!(mask["target_mask"], value["dataset"]["target_mask"]);
+    assert!(matrix_dataset_package(&value, "matrix").is_err());
+    value["dataset"]["y"]["values"][1][1] = json!(16777217);
+    assert!(masked_matrix_dataset_package(&value, "matrix")
+        .unwrap_err()
+        .to_string()
+        .contains("float32"));
+    value["dataset"]["y"]["values"][1][1] = json!(3);
+    value["dataset"]["target_names"] = json!(["class_a", "class_a"]);
+    assert!(masked_matrix_dataset_package(&value, "matrix").is_err());
+    value["dataset"]["target_names"] = json!(["class_a", "class_b"]);
+    value["dataset"]["target_mask"]["values"][0][1] = json!(true);
+    assert!(masked_matrix_dataset_package(&value, "matrix").is_err());
+    value["dataset"]["target_mask"]["values"][0][1] = json!(false);
+    value["dataset"]["y"]["values"] = json!([[0, 3], [1, 3], [0, 7], [1, 3]]);
+    value["dataset"]["target_mask"]["values"] =
+        json!([[true, true], [true, true], [true, true], [true, true]]);
+    assert!(masked_matrix_dataset_package(&value, "matrix").is_ok());
+    assert!(matrix_dataset_package(&value, "matrix").is_err());
+    value["dataset"]["y"]["dtype"] = json!("float64");
+    assert!(masked_matrix_dataset_package(&value, "matrix").is_err());
+}
