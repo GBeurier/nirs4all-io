@@ -40,7 +40,7 @@ excel = ["openpyxl>=3.1.0"]
 matlab = ["scipy>=1.10.0", "h5py>=3.8.0"]
 # Vendor spectroscopy files (OPUS/JCAMP/ASD/...) are read through the
 # separately published reader library.
-formats = ["nirs4all-formats==0.2.9"]
+formats = ["nirs4all-formats==0.2.11"]
 all = ["nirs4all-io-oracle[parquet,excel,matlab,formats,dagml]"]
 dev = [
     "pytest>=7.4",
@@ -51,7 +51,7 @@ dev = [
     "scipy>=1.10.0",
     # Dev/test-only parity oracle (read-only); MUST NOT be a runtime dependency.
     "nirs4all",
-    "nirs4all-formats==0.2.9",
+    "nirs4all-formats==0.2.11",
 ]
 
 [project.urls]
