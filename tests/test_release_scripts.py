@@ -155,14 +155,19 @@ node() {
     assert (result.returncode == 0) is accepted, result.stdout + result.stderr
 
 
-def test_formats_security_repin_is_exact_across_python_and_web() -> None:
-    expected = "0.2.9"
+def test_formats_python_oracle_uses_current_exact_pin() -> None:
+    expected = "0.2.11"
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     assert project["optional-dependencies"]["formats"] == [f"nirs4all-formats=={expected}"]
     assert f"nirs4all-formats=={expected}" in project["optional-dependencies"]["dev"]
+
+
+def test_formats_vendored_web_snapshot_retains_its_exact_version() -> None:
+    # The committed Web reader is an independently qualified older snapshot;
+    # updating the current Python oracle must not relabel its retained bytes.
     web_package = json.loads((ROOT / "web/pkg/formats/package.json").read_text(encoding="utf-8"))
     assert web_package["name"] == "nirs4all-formats-wasm"
-    assert web_package["version"] == expected
+    assert web_package["version"] == "0.2.9"
 
 
 def test_json_path_normalization_handles_escaped_windows_form() -> None:
