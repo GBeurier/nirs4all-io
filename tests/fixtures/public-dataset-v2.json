@@ -1,0 +1,215 @@
+{
+  "schema": "nirs4all.dataset.v2",
+  "schema_version": 2,
+  "origin_ids": [
+    "a",
+    "b",
+    "c",
+    "d"
+  ],
+  "fold_ids": [
+    "f0",
+    "f0",
+    "f1",
+    "f1"
+  ],
+  "dataset": {
+    "schema": "nirs4all.multimodal-dataset",
+    "schema_version": 1,
+    "name": "v2-qualification",
+    "sample_ids": [
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "source_alignment": "left",
+    "sources": [
+      {
+        "name": "matrix",
+        "sample_ids": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "representation_id": "tabular_numeric",
+        "axes": [
+          "sample",
+          "feature"
+        ],
+        "feature_names": [
+          "f0",
+          "f1"
+        ],
+        "axis_units": {},
+        "axis_coordinates": {},
+        "array": {
+          "dtype": "float64",
+          "shape": [
+            4,
+            2
+          ],
+          "values": [
+            [
+              1.0,
+              2.0
+            ],
+            [
+              2.0,
+              3.0
+            ],
+            [
+              3.0,
+              4.0
+            ],
+            [
+              4.0,
+              5.0
+            ]
+          ]
+        }
+      },
+      {
+        "name": "series",
+        "source_kind": "ragged_series",
+        "sample_ids": [
+          "c",
+          "a"
+        ],
+        "representation_id": "series_mv",
+        "axes": [
+          "sample",
+          "time",
+          "variable"
+        ],
+        "array": {
+          "dtype": "float64",
+          "shape": [
+            3,
+            2
+          ],
+          "values": [
+            [
+              3.0,
+              4.0
+            ],
+            [
+              5.0,
+              6.0
+            ],
+            [
+              1.0,
+              2.0
+            ]
+          ]
+        },
+        "offsets": {
+          "dtype": "int64",
+          "shape": [
+            3
+          ],
+          "values": [
+            0,
+            2,
+            3
+          ]
+        },
+        "time_coordinates": {
+          "dtype": "float64",
+          "shape": [
+            3
+          ],
+          "values": [
+            0.0,
+            1.0,
+            10.0
+          ]
+        },
+        "channel_names": [
+          "left",
+          "right"
+        ],
+        "time_unit": "s",
+        "presence_mask": {
+          "dtype": "bool",
+          "shape": [
+            2
+          ],
+          "values": [
+            true,
+            false
+          ]
+        }
+      }
+    ],
+    "y": {
+      "dtype": "float64",
+      "shape": [
+        4,
+        2
+      ],
+      "values": [
+        [
+          1.0,
+          null
+        ],
+        [
+          2.0,
+          4.0
+        ],
+        [
+          3.0,
+          6.0
+        ],
+        [
+          null,
+          8.0
+        ]
+      ]
+    },
+    "target_mask": {
+      "dtype": "bool",
+      "shape": [
+        4,
+        2
+      ],
+      "values": [
+        [
+          true,
+          false
+        ],
+        [
+          true,
+          true
+        ],
+        [
+          true,
+          true
+        ],
+        [
+          false,
+          true
+        ]
+      ]
+    },
+    "target_names": [
+      "first",
+      "second"
+    ],
+    "task_type": "regression",
+    "groups": null,
+    "partitions": {
+      "dtype": "<U5",
+      "shape": [
+        4
+      ],
+      "values": [
+        "train",
+        "train",
+        "train",
+        "train"
+      ]
+    }
+  }
+}
