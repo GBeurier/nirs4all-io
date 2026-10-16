@@ -121,12 +121,19 @@ def test_array_categorical_targets_keep_labels_across_partitions():
     np.testing.assert_array_equal(ds.y({"partition": "test"}).ravel(), [0, 1, 0])
 
 
-@pytest.mark.parametrize("code", [-1, 0.5, 2, float("nan")])
+@pytest.mark.parametrize("code", [-1, 0.5, 2, float("inf")])
 def test_categorical_codebook_refuses_invalid_codes(code):
     from nirs4all_io._adapter import _decode_targets
 
     with pytest.raises(ValueError, match="codebook"):
         _decode_targets(np.array([[code]]), ["label"], {"label": {"categories": ["a", "b"]}})
+
+
+def test_categorical_codebook_preserves_missing_targets():
+    from nirs4all_io._adapter import _decode_targets
+    restored = _decode_targets(np.array([[0.0], [np.nan], [1.0]]), ["label"], {"label": {"categories": ["a", "b"]}})
+    assert restored[0, 0] == "a" and restored[2, 0] == "b"
+    assert np.isnan(restored[1, 0])
 
 
 def test_public_v2_ragged_masked_transport_and_matrix_projection():
