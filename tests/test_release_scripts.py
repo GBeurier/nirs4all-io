@@ -229,7 +229,10 @@ def test_rust_security_gate_audits_every_lockfile() -> None:
 def test_python_candidate_version_is_development_only(tmp_path: Path) -> None:
     files = (
         "Cargo.toml",
+        "Cargo.lock",
         "scripts/bump_version.sh",
+        "bindings/python/Cargo.lock",
+        "bindings/wasm/Cargo.lock",
         "bindings/python/Cargo.toml",
         "bindings/wasm/Cargo.toml",
         "bindings/r/configure",
@@ -256,7 +259,10 @@ def test_python_candidate_version_is_development_only(tmp_path: Path) -> None:
         f'version = "{current_binding}"', f'version = "{candidate}"', 1,
     ), encoding="utf-8")
     lock = tmp_path / "bindings/python/Cargo.lock"
-    lock.write_text(f'[[package]]\nname = "nirs4all-io-py"\nversion = "{candidate}"\n', encoding="utf-8")
+    lock.write_text(lock.read_text(encoding="utf-8").replace(
+        f'name = "nirs4all-io-py"\nversion = "{current_binding}"',
+        f'name = "nirs4all-io-py"\nversion = "{candidate}"', 1,
+    ), encoding="utf-8")
 
     command = [str(tmp_path / "scripts/bump_version.sh")]
     accepted = subprocess.run([*command, "--check-candidate"], capture_output=True, text=True)
