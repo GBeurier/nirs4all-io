@@ -22,9 +22,14 @@ fn contract_dir() -> PathBuf {
 fn normalize_paths(value: &Value, base_abs: &str) -> Value {
     match value {
         Value::String(s) => {
+            let ordinary_base = base_abs.strip_prefix(r"\\?\").unwrap_or(base_abs);
             let replaced = s
-                .replace(&format!("{base_abs}/"), "<CORPUS>/")
-                .replace(base_abs, "<CORPUS>");
+                .strip_prefix(base_abs)
+                .or_else(|| s.strip_prefix(ordinary_base))
+                .map_or_else(
+                    || s.clone(),
+                    |suffix| format!("<CORPUS>{}", suffix.replace('\\', "/")),
+                );
             Value::String(replaced)
         }
         Value::Array(a) => Value::Array(a.iter().map(|v| normalize_paths(v, base_abs)).collect()),

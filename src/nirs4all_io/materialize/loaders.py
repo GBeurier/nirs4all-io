@@ -181,7 +181,7 @@ def _read_csv(path: Path, params: LoadingParams) -> tuple[pd.DataFrame, str]:
         "header": 0 if has_header else None,
         "na_values": _NA_VALUES,
         "keep_default_na": True,
-        "skip_blank_lines": True,
+        "skip_blank_lines": params.na.policy not in ("ignore", "replace"),
         "engine": "python",
     }
     if fmt.get("usecols") is not None:
@@ -318,6 +318,7 @@ def encode_categorical(series: pd.Series, mode: str) -> tuple[pd.Series, dict | 
     is_objectish = not pd.api.types.is_numeric_dtype(series.dtype)
     treat_categorical = mode == "auto" and is_objectish and numeric.isna().sum() > series.isna().sum()
     if treat_categorical:
-        codes, categories = pd.factorize(series.astype(str))
-        return pd.Series(codes, index=series.index), {"categories": list(categories)}
+        codes, categories = pd.factorize(series.astype(str).where(series.notna()))
+        encoded = pd.Series(codes, index=series.index, dtype=float).mask(codes < 0)
+        return encoded, {"categories": list(categories)}
     return numeric, None

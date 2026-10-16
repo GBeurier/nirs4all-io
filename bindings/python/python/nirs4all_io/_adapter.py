@@ -40,16 +40,19 @@ def _decode_targets(y: np.ndarray, headers: list[str], categorical: dict) -> np.
             continue
         categories = categorical[header].get("categories")
         codes = y[:, index]
+        observed = ~np.isnan(codes)
+        present_codes = codes[observed]
         if (
             not isinstance(categories, list)
             or not all(isinstance(label, str) for label in categories)
-            or not np.all(np.isfinite(codes))
-            or not np.all(codes == np.floor(codes))
-            or np.any(codes < 0)
-            or np.any(codes >= len(categories))
+            or not np.all(np.isfinite(present_codes))
+            or not np.all(present_codes == np.floor(present_codes))
+            or np.any(present_codes < 0)
+            or np.any(present_codes >= len(categories))
         ):
             raise ValueError(f"Invalid categorical target codebook for {header!r}")
-        restored[:, index] = np.asarray(categories, dtype=object)[codes.astype(np.intp)]
+        restored[:, index] = np.nan
+        restored[observed, index] = np.asarray(categories, dtype=object)[present_codes.astype(np.intp)]
     return restored
 
 

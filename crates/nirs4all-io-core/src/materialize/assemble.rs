@@ -1668,6 +1668,10 @@ fn encode_categorical(col: &Column, mode: &str) -> (Vec<f64>, Option<Value>) {
         let mut categories: Vec<String> = Vec::new();
         let mut codes = Vec::with_capacity(col.values.len());
         for v in &col.values {
+            if matches!(v, Cell::Na) || matches!(v, Cell::Float(f) if f.is_nan()) {
+                codes.push(f64::NAN);
+                continue;
+            }
             let s = v.to_str_scalar();
             let code = match categories.iter().position(|c| c == &s) {
                 Some(i) => i,
@@ -2066,6 +2070,19 @@ mod tests {
         );
         let (codes, mapping) = encode_categorical(&col, "auto");
         assert_eq!(codes, vec![0.0, 1.0, 0.0]);
+        assert_eq!(mapping, Some(json!({"categories": ["a", "b"]})));
+    }
+
+    #[test]
+    fn categorical_mapping_preserves_missing_observations() {
+        let col = Column::from_cells(
+            "class",
+            vec![Cell::Str("a".into()), Cell::Na, Cell::Str("b".into())],
+        );
+        let (codes, mapping) = encode_categorical(&col, "auto");
+        assert_eq!(codes[0], 0.0);
+        assert!(codes[1].is_nan());
+        assert_eq!(codes[2], 1.0);
         assert_eq!(mapping, Some(json!({"categories": ["a", "b"]})));
     }
 

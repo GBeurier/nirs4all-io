@@ -566,6 +566,18 @@ fn read_table_bytes_impl(
         }
     };
 
+    // csv's reader unconditionally skips physically empty lines. Under an
+    // explicit keep/fill policy these are missing observations, including in
+    // single-column target files. Quote empty physical records before parsing;
+    // quoted multiline fields and CRLF bytes retain their original meaning.
+    let preserve_empty = matches!(params.na.policy, NaPolicy::Ignore | NaPolicy::Replace);
+    let preserved;
+    let text = if preserve_empty {
+        preserved = preserve_empty_csv_records(text, delimiter as u8, has_header);
+        preserved.as_slice()
+    } else {
+        text
+    };
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -579,7 +591,7 @@ fn read_table_bytes_impl(
         .read_byte_record(&mut record)
         .map_err(|e| SpecError::new(format!("csv parse error: {e}")))?
     {
-        if record.iter().all(|field| field.is_empty()) {
+        if !preserve_empty && record.iter().all(|field| field.is_empty()) {
             continue; // skip_blank_lines
         }
         if let Some(limits) = limits {
@@ -683,9 +695,92 @@ fn read_table_bytes_impl(
     )
 }
 
+fn preserve_empty_csv_records(input: &[u8], delimiter: u8, has_header: bool) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len());
+    let mut quoted = false;
+    let mut field_start = true;
+    let mut line_start = true;
+    let mut seen_content = !has_header;
+    let mut index = 0;
+    while index < input.len() {
+        let byte = input[index];
+        if quoted && byte == b'"' && input.get(index + 1) == Some(&b'"') {
+            output.extend_from_slice(b"\"\"");
+            index += 2;
+            continue;
+        }
+        if byte == b'"' && (quoted || field_start) {
+            quoted = !quoted;
+        }
+        if !quoted && matches!(byte, b'\r' | b'\n') {
+            // CRLF is one terminator; do not manufacture a second record.
+            let crlf_tail = byte == b'\n' && index > 0 && input[index - 1] == b'\r';
+            if line_start && !crlf_tail && seen_content {
+                output.extend_from_slice(b"\"\"");
+            }
+            line_start = true;
+            field_start = true;
+        } else {
+            line_start = false;
+            seen_content = true;
+            field_start = !quoted && byte == delimiter;
+        }
+        output.push(byte);
+        index += 1;
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ignore_keeps_empty_target_records_with_lf_crlf_and_quoted_cells() {
+        for newline in ["\n", "\r\n", "\r"] {
+            let text = ["class", "pass", "", "fail", "\"\"", ""].join(newline) + newline;
+            let result =
+                read_table_bytes(text.as_bytes(), &params_with_na(na(NaPolicy::Ignore))).unwrap();
+            assert_eq!(result.n_rows, 5);
+            assert!(matches!(result.columns[0].values[1], Cell::Na));
+            assert!(matches!(result.columns[0].values[3], Cell::Na));
+            assert!(matches!(result.columns[0].values[4], Cell::Na));
+        }
+    }
+
+    #[test]
+    fn empty_record_preservation_respects_csv_quoting_and_headerless_rows() {
+        let input = b"name;value\n\"a\n\nb\";1\n\"a\"\"b\";2\n;\n";
+        let result = read_table_bytes(input, &params_with_na(na(NaPolicy::Ignore))).unwrap();
+        assert_eq!(result.n_rows, 3);
+        assert_eq!(result.columns[0].values[0].to_str_scalar(), "a\n\nb");
+        assert_eq!(result.columns[0].values[1].to_str_scalar(), "a\"b");
+        assert!(matches!(result.columns[0].values[2], Cell::Na));
+        let mut params = params_with_na(na(NaPolicy::Ignore));
+        params.has_header = Some(false);
+        let result = read_table_bytes(b"\n1\n\n", &params).unwrap();
+        assert_eq!(result.n_rows, 3);
+        assert!(result.numeric_column_f64("0")[0].is_nan());
+    }
+
+    #[test]
+    fn empty_observations_count_towards_row_budgets() {
+        let params = params_with_na(na(NaPolicy::Ignore));
+        assert!(read_table_bytes_with_limits(
+            b"target\n1\n\n3\n",
+            &params,
+            TabularReadLimits::new(64, 64, 2, 1, 3)
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("row budget"));
+        assert_eq!(
+            read_table_bytes(b"\n\ntarget\n1\n", &params)
+                .unwrap()
+                .n_rows,
+            1
+        );
+    }
 
     fn read(text: &str, params: &LoadingParams) -> Frame {
         read_table_bytes(text.as_bytes(), params).unwrap()
