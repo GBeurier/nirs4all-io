@@ -181,7 +181,7 @@ def _read_csv(path: Path, params: LoadingParams) -> tuple[pd.DataFrame, str]:
         "header": 0 if has_header else None,
         "na_values": _NA_VALUES,
         "keep_default_na": True,
-        "skip_blank_lines": params.na.policy not in ("ignore", "replace"),
+        "skip_blank_lines": False,
         "engine": "python",
     }
     if fmt.get("usecols") is not None:

@@ -21,7 +21,7 @@ use crate::spec::dataset_spec::{
     AggregateSpec, DatasetSpec, JoinSpec, LoadingParams, SourceSpec, VariationSpec,
 };
 use crate::spec::enums::{
-    Cardinality, Coverage, MergeMode, PartitionBy, Role, SourceKind, UnknownPolicy,
+    Cardinality, Coverage, MergeMode, NaPolicy, PartitionBy, Role, SourceKind, UnknownPolicy,
 };
 use crate::spec::selectors::Selector;
 use crate::spec::SpecError;
@@ -310,6 +310,25 @@ struct SourceTable {
     signal_type: Option<String>,
     header_unit: String,
     variations: Vec<(String, Matrix)>,
+    /// Original source positions to remove, applied only after all sources align.
+    remove_rows: Option<Vec<bool>>,
+}
+
+fn missing_rows(frame: &Frame) -> Vec<bool> {
+    (0..frame.n_rows)
+        .map(|row| {
+            frame.columns.iter().any(|col| {
+                matches!(&col.values[row], Cell::Na)
+                    || matches!(&col.values[row], Cell::Float(v) if v.is_nan())
+            })
+        })
+        .collect()
+}
+
+fn defer_sample_removal(params: &mut LoadingParams) {
+    if params.na.policy == NaPolicy::RemoveSample {
+        params.na.policy = NaPolicy::Ignore;
+    }
 }
 
 fn key_list(v: &Value) -> Option<Vec<String>> {
@@ -569,7 +588,10 @@ fn load_source_frame_mem(
     audits: &mut Vec<Value>,
     tabular_limits: Option<TabularReadLimits>,
 ) -> Result<LoadedSource, SpecError> {
-    let params = effective_params(&spec.params, &source.params);
+    let mut params = effective_params(&spec.params, &source.params);
+    // Removing rows independently loses positional correspondence between X,
+    // targets, metadata and variations. Keep original rows until joining.
+    defer_sample_removal(&mut params);
     let matched = resolve_inputs_mem(&source.input, sources)?;
     if matched.is_empty() {
         return Err(SpecError::new(format!(
@@ -1044,6 +1066,16 @@ fn build_source_table(
 ) -> Result<SourceTable, SpecError> {
     let (mut df, header_unit, signal, origins) =
         load_source_frame_mem(source, spec, sources, audits, tabular_limits)?;
+    let mut remove_rows = (effective_params(&spec.params, &source.params).na.policy
+        == NaPolicy::RemoveSample)
+        .then(|| missing_rows(&df));
+    if let Some(column) = df
+        .columns
+        .iter()
+        .find(|col| col.name.starts_with("__src_row_idx__"))
+    {
+        return Err(SpecError::new(format!("source '{}': reserved column name '{}' collides with a user-supplied column; rename it", source.id, column.name)));
+    }
 
     if let Some(origins) = &origins {
         if !df.has_column("filename_stem") {
@@ -1099,7 +1131,15 @@ fn build_source_table(
     df.add_int_column(&row_idx_name, (0..df.n_rows as i64).collect());
 
     let key = key_list(&source.key);
-    let variations = load_variations(source, spec, sources, &df, &roles, tabular_limits)?;
+    let variations = load_variations(
+        source,
+        spec,
+        sources,
+        &df,
+        &roles,
+        tabular_limits,
+        &mut remove_rows,
+    )?;
     let spec_signal = if spec.signal_type.value() != "auto" {
         Some(spec.signal_type.value().to_string())
     } else {
@@ -1116,6 +1156,7 @@ fn build_source_table(
         signal_type: signal.or(spec_signal),
         header_unit,
         variations,
+        remove_rows,
     })
 }
 
@@ -1130,6 +1171,7 @@ fn read_variation_frame_mem(
     if !variation.params.is_empty_value() {
         params = effective_params(&params, &variation.params);
     }
+    defer_sample_removal(&mut params);
     let matched = resolve_inputs_mem(&variation.input, sources)?;
     if matched.is_empty() {
         return Err(SpecError::new(format!(
@@ -1156,6 +1198,7 @@ fn load_variations(
     parent_df: &Frame,
     roles: &[(String, String)],
     tabular_limits: Option<TabularReadLimits>,
+    remove_rows: &mut Option<Vec<bool>>,
 ) -> Result<Vec<(String, Matrix)>, SpecError> {
     if source.variations.is_empty() {
         return Ok(vec![]);
@@ -1193,6 +1236,16 @@ fn load_variations(
                 "source '{}': variation '{}' has {} rows, expected {parent_n} (must row-align with the parent source)",
                 source.id, variation.name, vdf.n_rows
             )));
+        }
+        let params = effective_params(
+            &effective_params(&spec.params, &source.params),
+            &variation.params,
+        );
+        if params.na.policy == NaPolicy::RemoveSample {
+            let rows = remove_rows.get_or_insert_with(|| vec![false; parent_n]);
+            for (remove, missing) in rows.iter_mut().zip(missing_rows(&vdf)) {
+                *remove |= missing;
+            }
         }
         let named = feature_cols.iter().filter(|c| vdf.has_column(c)).count();
         let arr = if named == feature_cols.len() {
@@ -1501,6 +1554,28 @@ fn assemble_block(
             continue;
         }
         combined = join_onto(&combined, primary, t, audits, warnings, limits)?;
+    }
+
+    let mut keep = vec![true; combined.n_rows];
+    for table in tables.values() {
+        if let Some(remove) = &table.remove_rows {
+            let positions = combined.numeric_column_f64(&row_idx_col(&table.source_id));
+            if positions.len() != combined.n_rows {
+                return Err(SpecError::new(format!("source '{}': row-index column lost during assembly; NA samples cannot be aligned", table.source_id)));
+            }
+            for (keep_row, original_row) in keep.iter_mut().zip(positions) {
+                *keep_row &= original_row.is_finite()
+                    && original_row >= 0.0
+                    && remove
+                        .get(original_row as usize)
+                        .is_some_and(|remove| !remove);
+            }
+        }
+    }
+    if keep.iter().any(|keep_row| !keep_row) {
+        let removed = keep.iter().filter(|keep_row| !**keep_row).count();
+        combined = combined.mask_rows(&keep);
+        audits.push(serde_json::json!({"operation": "remove_na_samples", "removed": removed}));
     }
 
     let role_cols = collect_roles(&combined, tables);
@@ -2056,6 +2131,71 @@ mod tests {
     use super::*;
     use crate::materialize::frame::{Cell, Column};
     use serde_json::json;
+
+    #[test]
+    fn sample_removal_aligns_all_sources_and_variations() {
+        let spec = DatasetSpec::from_value(&json!({
+            "params": {"na": {"policy": "remove_sample"}},
+            "sources": [
+                {"id": "x", "role": "features", "input": "x.csv", "variations": [{"name": "processed", "input": "v.csv"}]},
+                {"id": "x2", "role": "features", "input": "x2.csv"},
+                {"id": "y", "role": "targets", "input": "y.csv"},
+                {"id": "m", "role": "metadata", "input": "m.csv"},
+                {"id": "weights", "role": "weights", "input": "weights.csv"}
+            ]
+        })).unwrap();
+        let sources: Vec<_> = [
+            ("x", "w\n1\nNA\n3\n4\n5\n6\n"),
+            ("x2", "z\n10\n20\n30\n40\n50\n60\n"),
+            ("v", "w\n100\n200\nNA\n400\n500\n600\n"),
+            ("y", "y\n1\n2\n3\n\n5\n6\n"),
+            ("m", "label\na\nb\nc\nd\nNA\nf\n"),
+            ("weights", "weight\n1\n2\n3\n4\n5\n6\n"),
+        ]
+        .into_iter()
+        .map(|(name, text)| InMemorySource {
+            name: format!("{name}.csv"),
+            payload: SourcePayload::Bytes(text.as_bytes().to_vec()),
+        })
+        .collect();
+        let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap();
+        let block = &assembled.blocks["train"];
+        assert_eq!(block.n_samples, 2);
+        assert_eq!(block.x[0].data, vec![1.0, 6.0]);
+        assert_eq!(block.x[1].data, vec![10.0, 60.0]);
+        assert_eq!(block.y.as_ref().unwrap().data, vec![1.0, 6.0]);
+        assert_eq!(block.processings[0][0].1.data, vec![100.0, 600.0]);
+        assert_eq!(block.weights.as_ref().unwrap(), &vec![1.0, 6.0]);
+        assert_eq!(
+            block.metadata.as_ref().unwrap().str_column("label"),
+            vec!["a", "f"]
+        );
+    }
+
+    #[test]
+    fn sample_removal_applies_after_key_alignment() {
+        for target in ["id;y\nc;30\na;10\nb;NA\n", "id;y\nc;b\na;a\nb;NA\n"] {
+            let spec = DatasetSpec::from_value(&json!({"sources": [
+                {"id": "x", "role": "features", "key": "id", "input": "x.csv"},
+                {"id": "y", "role": "targets", "key": "id", "input": "y.csv", "params": {"na": {"policy": "remove_sample"}}}
+            ]})).unwrap();
+            let sources = vec![
+                InMemorySource {
+                    name: "x.csv".into(),
+                    payload: SourcePayload::Bytes(b"id;w\na;1\nb;2\nc;3\n".to_vec()),
+                },
+                InMemorySource {
+                    name: "y.csv".into(),
+                    payload: SourcePayload::Bytes(target.as_bytes().to_vec()),
+                },
+            ];
+            let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap();
+            let block = &assembled.blocks["train"];
+            assert_eq!(block.x[0].data, vec![1.0, 3.0]);
+            assert_eq!(block.y.as_ref().unwrap().n_rows, 2);
+            assert!(block.y.as_ref().unwrap().data.iter().all(|v| v.is_finite()));
+        }
+    }
 
     #[test]
     fn categorical_mapping_is_categories_dict() {
