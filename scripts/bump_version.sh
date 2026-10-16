@@ -302,6 +302,12 @@ update_with_sed \
     "^version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
     "s/^(version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${PYTHON_BINDING_VERSION}\2/"
 update_cargo_lock_package "bindings/python/Cargo.lock" "nirs4all-io-py" "${PYTHON_BINDING_VERSION}"
+for package in nirs4all-io-core nirs4all-io; do
+    update_cargo_lock_package "bindings/python/Cargo.lock" "${package}" "${CARGO_VERSION}"
+done
+for package in nirs4all-io-core nirs4all-io nirs4all-io-capi nirs4all-io-cli nirs4all-io-dagml; do
+    update_cargo_lock_package "Cargo.lock" "${package}" "${CARGO_VERSION}"
+done
 
 # WASM crate (bindings/wasm/Cargo.toml)
 update_with_sed \
@@ -309,6 +315,11 @@ update_with_sed \
     "${CARGO_VERSION}" \
     "^version[[:space:]]*=[[:space:]]*\"([0-9A-Za-z.-]+)\"" \
     "s/^(version[[:space:]]*=[[:space:]]*\")[0-9A-Za-z.-]+(\")/\1${CARGO_VERSION}\2/"
+
+# R source packages generate a self-contained vendored Rust workspace at
+for package in nirs4all-io-wasm nirs4all-io-core; do
+    update_cargo_lock_package "bindings/wasm/Cargo.lock" "${package}" "${CARGO_VERSION}"
+done
 
 # R source packages generate a self-contained vendored Rust workspace at
 # configure time. Its three literal versions are executable release metadata,
