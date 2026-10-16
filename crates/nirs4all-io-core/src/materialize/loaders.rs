@@ -566,18 +566,12 @@ fn read_table_bytes_impl(
         }
     };
 
-    // csv's reader unconditionally skips physically empty lines. Under an
-    // explicit keep/fill policy these are missing observations, including in
+    // csv's reader unconditionally skips physically empty lines. These are
+    // missing observations under every NA policy, including in
     // single-column target files. Quote empty physical records before parsing;
     // quoted multiline fields and CRLF bytes retain their original meaning.
-    let preserve_empty = matches!(params.na.policy, NaPolicy::Ignore | NaPolicy::Replace);
-    let preserved;
-    let text = if preserve_empty {
-        preserved = preserve_empty_csv_records(text, delimiter as u8, has_header);
-        preserved.as_slice()
-    } else {
-        text
-    };
+    let preserved = preserve_empty_csv_records(text, delimiter as u8, has_header);
+    let text = preserved.as_slice();
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -591,9 +585,6 @@ fn read_table_bytes_impl(
         .read_byte_record(&mut record)
         .map_err(|e| SpecError::new(format!("csv parse error: {e}")))?
     {
-        if !preserve_empty && record.iter().all(|field| field.is_empty()) {
-            continue; // skip_blank_lines
-        }
         if let Some(limits) = limits {
             let record_bytes = record.iter().fold(0_u64, |total, field| {
                 total.saturating_add(field.len() as u64)

@@ -13,7 +13,7 @@ target-agnostic lets the assembly logic be tested without nirs4all.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,7 @@ import pandas as pd
 
 from ..conventions.engine import get_stem
 from ..spec.dataset_spec import AggregateSpec, ColumnRole, DatasetSpec, SourceSpec, VariationSpec
-from ..spec.enums import Cardinality, Coverage, MergeMode, PartitionBy, Role, SourceKind, SpecError
+from ..spec.enums import Cardinality, Coverage, MergeMode, NaPolicy, PartitionBy, Role, SourceKind, SpecError
 from ..spec.selectors import AutoSelector, RestSelector
 from .join import concat_features, concat_samples, join_tables, merge_by_key
 from .loaders import coerce_numeric, effective_params, encode_categorical, read_table
@@ -60,6 +60,7 @@ class SourceTable:
     # df's original row order; columns are already aligned to the feature
     # columns (either by name or positionally).
     variations: list[tuple[str, np.ndarray]] = field(default_factory=list)
+    remove_rows: np.ndarray | None = None
 
 
 @dataclass
@@ -120,6 +121,8 @@ def _resolve_inputs(source: SourceSpec, base_dir: Path) -> list[Path]:
 
 def _load_source_frame(source: SourceSpec, spec: DatasetSpec, base_dir: Path, audits: list[dict]) -> tuple[pd.DataFrame, str, str | None, list[str] | None]:
     params = effective_params(spec.params, source.params)
+    if params.na.policy is NaPolicy.REMOVE_SAMPLE:
+        params.na = replace(params.na, policy=NaPolicy.IGNORE)
     paths = _resolve_inputs(source, base_dir)
     if not paths:
         raise SpecError(f"source '{source.id}': no input files resolved from {source.input!r}")
@@ -254,6 +257,10 @@ def _resolve_auto_selector(
 
 def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, audits: list[dict]) -> SourceTable:
     df, header_unit, signal, origins = _load_source_frame(source, spec, base_dir, audits)
+    remove_rows = df.isna().any(axis=1).to_numpy() if effective_params(spec.params, source.params).na.policy is NaPolicy.REMOVE_SAMPLE else None
+    for column in df.columns:
+        if column.startswith(_ROW_IDX_PREFIX):
+            raise SpecError(f"source '{source.id}': reserved column name '{column}' collides with a user-supplied column; rename it")
     from .loaders import infer_dtypes
 
     # materialize the `filename_stem` virtual key from concat_samples origins so a
@@ -286,7 +293,7 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
     df[row_idx_name] = np.arange(len(df), dtype=np.int64)
     key = source.key if isinstance(source.key, list) else [source.key] if source.key else None
     partition = source.partition.value if source.partition else None
-    variations = _load_variations(source, spec, base_dir, df, roles)
+    variations, remove_rows = _load_variations(source, spec, base_dir, df, roles, remove_rows)
     return SourceTable(
         source_id=source.id,
         df=df,
@@ -300,6 +307,7 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
         header_unit=header_unit,
         origins=origins,
         variations=variations,
+        remove_rows=remove_rows,
     )
 
 
@@ -329,6 +337,8 @@ def _read_variation_frame(variation: VariationSpec, spec: DatasetSpec, source: S
     params = effective_params(spec.params, source.params)
     if variation.params.to_dict():
         params = effective_params(params, variation.params)
+    if params.na.policy is NaPolicy.REMOVE_SAMPLE:
+        params.na = replace(params.na, policy=NaPolicy.IGNORE)
     paths = _resolve_variation_inputs(variation.input, base_dir)
     if not paths:
         raise SpecError(f"source '{source.id}': variation '{variation.name}': no input files resolved from {variation.input!r}")
@@ -336,7 +346,7 @@ def _read_variation_frame(variation: VariationSpec, spec: DatasetSpec, source: S
     return pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
 
 
-def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, parent_df: pd.DataFrame, roles: dict[str, str]) -> list[tuple[str, np.ndarray]]:
+def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, parent_df: pd.DataFrame, roles: dict[str, str], remove_rows: np.ndarray | None) -> tuple[list[tuple[str, np.ndarray]], np.ndarray | None]:
     """Materialize a feature source's named preprocessing variants into arrays.
 
     Each variation must row-align with the parent source (post-merge) and provide
@@ -352,7 +362,7 @@ def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, pare
     so joins/partitions on the parent propagate automatically to the variations.
     """
     if not source.variations:
-        return []
+        return [], remove_rows
     if source.role is not Role.FEATURES and not any(r == "features" for r in roles.values()):
         raise SpecError(f"source '{source.id}': variations are only meaningful on a feature source (role/columns must declare 'features')")
     feature_cols = [c for c, r in roles.items() if r == "features"]
@@ -368,6 +378,10 @@ def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, pare
         vdf = _read_variation_frame(variation, spec, source, base_dir)
         if len(vdf) != parent_n:
             raise SpecError(f"source '{source.id}': variation '{variation.name}' has {len(vdf)} rows, expected {parent_n} (must row-align with the parent source)")
+        params = effective_params(effective_params(spec.params, source.params), variation.params)
+        if params.na.policy is NaPolicy.REMOVE_SAMPLE:
+            missing = vdf.isna().any(axis=1).to_numpy()
+            remove_rows = missing if remove_rows is None else remove_rows | missing
         named = sum(1 for c in feature_cols if c in vdf.columns)
         if named == len(feature_cols):
             arr = coerce_numeric(vdf[feature_cols])
@@ -381,7 +395,7 @@ def _load_variations(source: SourceSpec, spec: DatasetSpec, base_dir: Path, pare
                 f"parent feature headers or supply exactly {len(feature_cols)} unnamed (positional) columns."
             )
         out.append((variation.name, arr))
-    return out
+    return out, remove_rows
 
 
 # --------------------------------------------------------------------------- #
@@ -545,6 +559,18 @@ def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: l
         if t.source_id == primary.source_id:
             continue
         combined = _join_onto(combined, primary, t, audits, warnings)
+
+    keep = np.ones(len(combined), dtype=bool)
+    for table in tables.values():
+        if table.remove_rows is not None:
+            positions = combined[_row_idx_col(table.source_id)]
+            present = positions.notna().to_numpy()
+            source_keep = np.zeros(len(combined), dtype=bool)
+            source_keep[present] = ~table.remove_rows[positions[present].to_numpy(dtype=np.int64)]
+            keep &= source_keep
+    if not keep.all():
+        audits.append({"operation": "remove_na_samples", "removed": int((~keep).sum())})
+        combined = combined.loc[keep].reset_index(drop=True)
 
     # role -> columns across all joined sources
     role_cols = _collect_roles(combined, tables)
