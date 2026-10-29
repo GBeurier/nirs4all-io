@@ -14,7 +14,13 @@
 # paths below it. On CRAN's Windows builders that can exceed MAX_PATH before the
 # Rust staticlib is archived. Relocate cargo scratch to the short Rtools /tmp mount
 # exactly like the other Rust-backed R packages.
-TARGET ?= $(subst 64,x86_64,$(subst 32,i686,$(WIN)))-pc-windows-gnu
+# R-universe supplies the actual Rust triple on ARM64 (WIN is empty there).
+# Keep the Rtools x64/i686 fallback for ordinary Windows source installs.
+TARGET ?= $(if $(strip $(CARGO_BUILD_TARGET)),$(strip $(CARGO_BUILD_TARGET)),$(subst 64,x86_64,$(subst 32,i686,$(WIN)))-pc-windows-gnu)
+# The service Cargo shim copies from ./target after compilation and does not
+# honor CARGO_TARGET_DIR for that copy. Call its declared native Cargo directly
+# so compilation and the R link both use our private, short target directory.
+N4IO_CARGO = $(if $(strip $(HOST_CARGO)),$(HOST_CARGO),cargo)
 # Atomically reserve one short, private scratch root per make invocation. A
 # fixed /tmp/n4io directory lets concurrent R CMD check/install processes erase
 # or reuse each other's target and registry state. `mktemp -d` is supplied by
@@ -67,7 +73,7 @@ $(STATLIB):
 		echo "Unable to reserve a private Rust build directory with mktemp." >&2; \
 		exit 1; \
 	fi
-	@if ! command -v cargo >/dev/null; then \
+	@if ! command -v "$(N4IO_CARGO)" >/dev/null; then \
 		echo "Cargo is required to build nirs4allio. Install Rust from https://rustup.rs."; \
 		exit 1; \
 	fi
@@ -83,7 +89,7 @@ $(STATLIB):
 	# the R CMD check --as-cran "Rust compilation" check finds a `rustc <ver>` line
 	# (otherwise it WARNs "No rustc version reported prior to compilation").
 	@rustc --version >&2 || true
-	@cargo --version >&2 || true
+	@"$(N4IO_CARGO)" --version >&2 || true
 	# Self-contained vendored OFFLINE build of the staticlib for the gnu target.
 	# Source replacement passed INLINE via --config (no hidden .cargo/ dir).
 	# Rtools provides tar/xz. CARGO_HOME=$(CARGOTMP) keeps cargo off
@@ -97,16 +103,16 @@ $(STATLIB):
 	export CARGO_HOME="$(CARGOTMP)" && \
 	export CARGO_TARGET_DIR="$(TARGET_DIR)" && \
 	export N4IO_REMAP_CONFIG="build.rustflags=['--remap-path-prefix=$(N4IO_BUILD_DIR)=/n4io-build','--remap-path-prefix=$(CARGOTMP)=/cargo-home','--remap-path-prefix=$(CURDIR)=/nirs4allio-src']" && \
-	$(if $(strip $(CARGO_LINKER)),export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="$(CARGO_LINKER)" && )\
+	$(if $(and $(filter x86_64-pc-windows-gnu,$(TARGET)),$(strip $(CARGO_LINKER))),export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="$(CARGO_LINKER)" && )\
 	export LIBRARY_PATH="$${LIBRARY_PATH};$(TARGET_DIR)/libgcc_mock" && \
 	if [ -f rust/vendor.tar.xz ]; then \
 		[ -d rust/vendor ] || ( echo "extracting rust/vendor.tar.xz"; cd rust && tar xJf vendor.tar.xz ); \
-		cd rust && cargo build -p nirs4all-io-capi --locked --release -j 2 --target $(TARGET) --offline \
+		cd rust && "$(N4IO_CARGO)" build -p nirs4all-io-capi --locked --release -j 2 --target $(TARGET) --offline \
 			--config "$${N4IO_REMAP_CONFIG}" \
 			--config 'source.crates-io.replace-with="vendored-sources"' \
 			--config 'source.vendored-sources.directory="vendor"'; \
 	else \
-		cd rust && cargo build -p nirs4all-io-capi --locked --release -j 2 --target $(TARGET) \
+		cd rust && "$(N4IO_CARGO)" build -p nirs4all-io-capi --locked --release -j 2 --target $(TARGET) \
 			--config "$${N4IO_REMAP_CONFIG}"; \
 	fi
 
