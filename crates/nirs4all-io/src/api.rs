@@ -271,6 +271,33 @@ fn reject_compressed(path: &str, field: &str) -> Result<(), SpecError> {
     Ok(())
 }
 
+// canonicalize() adds Windows verbatim prefixes. Normalize only that spelling
+// for lexical containment; the capability-rooted open below still resolves and
+// confines the relative path, including symlinks and concurrent replacements.
+#[cfg(windows)]
+fn non_verbatim_root(root: &Path) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::path::{Component, Prefix};
+
+    let mut parts = root.components();
+    let Component::Prefix(prefix) = parts.next()? else {
+        return None;
+    };
+    let mut normal = match prefix.kind() {
+        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut prefix = OsString::from(r"\\");
+            prefix.push(server);
+            prefix.push(r"\");
+            prefix.push(share);
+            PathBuf::from(prefix)
+        }
+        _ => return None,
+    };
+    normal.extend(parts.map(|part| part.as_os_str()));
+    Some(normal)
+}
+
 /// Capability-rooted reader. `cap_std::fs::Dir` resolves every relative open
 /// beneath an already-open directory handle, including under concurrent
 /// symlink replacement. Bytes are then read from that same file handle; the
@@ -304,8 +331,15 @@ impl ConfinedReader {
     fn relative_path(&self, raw: &str, field: &str) -> Result<PathBuf, SpecError> {
         let path = Path::new(raw);
         let relative = if path.is_absolute() {
-            path.strip_prefix(&self.root_path)
-                .map_err(|_| role_err(format!("{field}: absolute path is outside dataset_root")))?
+            let relative = path.strip_prefix(&self.root_path).ok();
+            #[cfg(windows)]
+            let relative = relative.or_else(|| {
+                let root = non_verbatim_root(&self.root_path)?;
+                path.strip_prefix(root).ok()
+            });
+            relative.ok_or_else(|| {
+                role_err(format!("{field}: absolute path is outside dataset_root"))
+            })?
         } else {
             path
         };
@@ -671,5 +705,25 @@ mod role_tagged_secure_open_tests {
 
         assert_eq!(bytes, b"original");
         assert_eq!(fs::read(&input).unwrap(), b"attacker");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_root_tests {
+    use super::non_verbatim_root;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn normalizes_only_verbatim_disk_and_unc_prefixes() {
+        assert_eq!(
+            non_verbatim_root(Path::new(r"\\?\C:\data\spectra")),
+            Some(PathBuf::from(r"C:\data\spectra"))
+        );
+        assert_eq!(
+            non_verbatim_root(Path::new(r"\\?\UNC\server\share\spectra")),
+            Some(PathBuf::from(r"\\server\share\spectra"))
+        );
+        assert_eq!(non_verbatim_root(Path::new(r"C:\data")), None);
+        assert_eq!(non_verbatim_root(Path::new(r"\\.\device")), None);
     }
 }
