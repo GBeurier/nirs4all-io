@@ -329,3 +329,15 @@ corrected tag.
   native-static-libs` set; `-lgcc` carries EH/unwind/`__chkstk`).
 - **npm**: same Automation-token + `@nirs4all` org-write requirement as the other
   repos; the `release-npm` dispatch `publish` input defaults to a dry run.
+
+For 0.2.11, the WASM legal-closure checksum was reviewed against 0.2.10: all 55
+license expressions are unchanged. Only the two owner packages change identity
+from 0.2.10 to 0.2.11. Third-party pinned license-file checks remain enforced.
+
+Windows CLI executables reserve an 8 MiB main stack (committed on demand),
+matching the usual Linux main-stack limit. The Windows 1 MiB executable default
+was insufficient for the bounded inference call stack in debug builds; the
+existing CLI conformance tests exercise this. Library consumers and reader
+byte/shape budgets are unchanged. Absolute role-tagged paths use Windows native
+canonicalization to compare long, DOS 8.3 and verbatim spellings consistently;
+all byte reads remain capability-rooted and confined to the dataset directory.

@@ -71,6 +71,16 @@ fn absolute_paths_inside_the_root_are_accepted() {
     )
     .unwrap();
     assert_eq!(assembled.blocks["train"].n_samples, 1);
+    // The host may supply a canonical root while a file picker uses Windows
+    // DOS 8.3 or ordinary path spelling for the same existing file.
+    let canonical_root = fs::canonicalize(root.path()).unwrap();
+    let mixed_spelling = load_role_tagged_assembled(
+        &config(x.to_str().unwrap(), y.to_str().unwrap()),
+        &canonical_root,
+        None,
+    )
+    .unwrap();
+    assert_eq!(mixed_spelling.blocks["train"].n_samples, 1);
 }
 
 #[test]
