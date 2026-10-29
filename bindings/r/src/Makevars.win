@@ -50,12 +50,14 @@ PKG_CPPFLAGS = -I$(CURDIR)
 # does NOT auto-append the Rust-std native system libs. Add the exact
 # `rustc --print native-static-libs` set for x86_64-pc-windows-gnu
 # (kernel32 ntdll userenv ws2_32 dbghelp) plus -lgcc for the panic_unwind
-# EH/personality + __chkstk refs. Rtools45's mingw ships NO separate libgcc_eh.a
+# EH/personality + __chkstk refs on the GNU target. LLVM-based gnullvm targets
+# use the Rtools Clang driver's compiler runtime plus libunwind, and have no libgcc.
+# Rtools45's mingw ships NO separate libgcc_eh.a
 # — the unwinder (_Unwind_*), __gcc_personality_seh0, and __chkstk are all merged
 # into libgcc.a, so -lgcc (not -lgcc_eh) resolves them. System libs MUST come
 # AFTER the archive (mingw ld is order-sensitive).
 PKG_LIBS = $(STATLIB) \
-  -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lgcc
+  -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp $(if $(filter %-gnullvm,$(TARGET)),-lunwind,-lgcc)
 
 # Build-local cargo registry/cache (CRAN Policy: no writes to %USERPROFILE%\.cargo
 # at install time). On Windows cargo also defaults CARGO_HOME to
