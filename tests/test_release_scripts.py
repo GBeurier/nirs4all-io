@@ -217,7 +217,7 @@ def test_rust_security_gate_audits_every_lockfile() -> None:
         "bindings/r/Cargo.lock.rust",
     ):
         assert f'"{lock_file}"' in source
-    assert 'cargo audit --file "${repo_root}/${lock_file}"' in source
+    assert 'cargo audit --deny warnings --file "${repo_root}/${lock_file}"' in source
 
     for workflow in ("ci.yml", "release.yml"):
         workflow_source = (ROOT / ".github" / "workflows" / workflow).read_text(

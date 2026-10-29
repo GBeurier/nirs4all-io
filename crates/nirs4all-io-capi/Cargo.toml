@@ -4,6 +4,8 @@ name = "nirs4all-io-capi"
 description = "Stable C ABI (n4io_ prefix) over the nirs4all-io facade: infer / to_spec / validate JSON surface, status/error model, opaque handles."
 version.workspace = true
 edition.workspace = true
+# Parquet60 keeps the supported ZSTD codec on its patched dependency graph.
+rust-version = "1.88"
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

@@ -4,6 +4,8 @@ name = "nirs4all-io-dagml"
 description = "Bridge from a nirs4all-io AssembledDataset to a dag-ml-data CoordinatorDataPlanEnvelope."
 version.workspace = true
 edition.workspace = true
+# Parquet60 keeps the supported ZSTD codec on its patched dependency graph.
+rust-version = "1.88"
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
