@@ -376,8 +376,8 @@ fn as_list(value: &Value) -> Vec<Value> {
 
 fn merge_params(blocks: &[Option<&Value>]) -> Map<String, Value> {
     let mut merged = Map::new();
-    for block in blocks {
-        if let Some(Value::Object(m)) = block {
+    for block in blocks.iter().flatten() {
+        if let Value::Object(m) = block {
             for (k, v) in m {
                 merged.insert(k.clone(), v.clone());
             }
