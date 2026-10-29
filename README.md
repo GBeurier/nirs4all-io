@@ -129,3 +129,10 @@ contract). See [`COMPAT.md`](COMPAT.md) for the full operation matrix.
 with an optional **commercial license** for closed-source / SaaS use. For any commercial use, contact
 <nirs4all-admin@cirad.fr>. See [`LICENSING.md`](LICENSING.md), the texts under [`LICENSES/`](LICENSES/),
 and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+### Rust compiler support
+
+The file-loading facade, C ABI, CLI, DAG-ML bridge and native Python binding
+require Rust 1.88. Their private Parquet/Arrow 60 reader retains ZSTD support
+through the patched codec graph. The public dataset/frame DTOs do not expose
+Arrow `RecordBatch` types; the fs-free core and WASM source stay separate.

@@ -303,6 +303,20 @@ impl ConfinedReader {
 
     fn relative_path(&self, raw: &str, field: &str) -> Result<PathBuf, SpecError> {
         let path = Path::new(raw);
+        // Windows canonicalization expands DOS 8.3 aliases and verbatim prefixes.
+        // Resolve both operands the same way before checking containment. Only
+        // the capability-rooted relative open below reads bytes, so a symlink
+        // replacement cannot make this preliminary path check escape the root.
+        #[cfg(windows)]
+        let canonical_path;
+        #[cfg(windows)]
+        let path = if path.is_absolute() {
+            canonical_path = std::fs::canonicalize(path)
+                .map_err(|error| role_err(format!("cannot resolve {field}: {error}")))?;
+            canonical_path.as_path()
+        } else {
+            path
+        };
         let relative = if path.is_absolute() {
             path.strip_prefix(&self.root_path)
                 .map_err(|_| role_err(format!("{field}: absolute path is outside dataset_root")))?
