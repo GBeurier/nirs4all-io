@@ -66,6 +66,8 @@ jobs:
         run: mypy .
       - name: Pytest (incl. canonical + contract goldens)
         run: pytest -m "not parity"
+      - name: R Windows target and linker recipes
+        run: python -m pytest bindings/r/tests/test_windows_makevars.py -q
 
   provider-framework-adapters:
     name: Provider sklearn and PyTorch adapters

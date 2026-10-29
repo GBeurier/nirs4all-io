@@ -75,6 +75,11 @@ crates.io transitive dep into `src/rust/vendor.tar.xz`; `src/Makevars(.win)` the
 extract that and build the `nirs4all-io-capi` staticlib offline, linking it into
 `nirs4allio.{so,dll}`.
 
+Windows source builds honor the declared Rust target. The GNU Rtools targets
+keep their `libgcc` unwind runtime; LLVM-based `gnullvm` targets use `libunwind`
+and the Clang toolchain, without requesting a nonexistent `libgcc`. This changes
+the R package's platform link recipe, not the Rust core or C ABI.
+
 ```bash
 bash bindings/r/build_and_test.sh    # vendor + offline install + smoke test
 ```

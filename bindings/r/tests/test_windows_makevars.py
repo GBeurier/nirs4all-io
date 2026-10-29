@@ -89,6 +89,33 @@ def prepare(tmp_path: Path, *, service: bool, win: str, target: str, fail: bool 
 
 
 @pytest.mark.parametrize(
+    ("target", "needs_gcc"),
+    [
+        ("x86_64-pc-windows-gnu", True),
+        ("i686-pc-windows-gnu", True),
+        ("aarch64-pc-windows-gnullvm", False),
+        ("x86_64-pc-windows-gnullvm", False),
+    ],
+)
+def test_r_link_uses_the_runtime_for_its_target(tmp_path: Path, target: str, needs_gcc: bool):
+    source, env, _ = prepare(tmp_path, service=True, win="", target=target)
+    makefile = source / "link.mk"
+    makefile.write_text(
+        f'include {MAKEVARS}\n.PHONY: link-witness\nlink-witness:\n\t@printf "%s\\n" "$(PKG_LIBS)"\n'
+    )
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-f", str(makefile), "link-witness"],
+        cwd=source, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    libraries = result.stdout.split()
+    assert ("-lgcc" in libraries) is needs_gcc
+    assert ("-lunwind" in libraries) is not needs_gcc
+    assert all(library in libraries for library in ["-lkernel32", "-lntdll", "-luserenv", "-lws2_32", "-ldbghelp"])
+    assert f"/{target}/release/{LIBRARY}" in result.stdout
+
+
+@pytest.mark.parametrize(
     ("service", "win", "target"),
     [
         (False, "64", "x86_64-pc-windows-gnu"),
