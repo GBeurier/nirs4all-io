@@ -19,6 +19,14 @@ jobs:
       - name: Audit root and binding dependency graphs
         run: bash scripts/audit_rust_locks.sh
 
+  rust-msrv:
+    name: File-loading compiler floor (Rust 1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: cargo check --workspace --all-targets --locked
+
   rust:
     name: Rust green gate
     runs-on: ubuntu-latest

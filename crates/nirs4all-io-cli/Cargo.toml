@@ -4,6 +4,8 @@ name = "nirs4all-io-cli"
 description = "Command-line front end for nirs4all-io: infer / to-spec / validate / load / emit-dag-ml-data."
 version.workspace = true
 edition.workspace = true
+# Parquet60 keeps the supported ZSTD codec on its patched dependency graph.
+rust-version = "1.88"
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

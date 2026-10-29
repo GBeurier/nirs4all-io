@@ -547,6 +547,40 @@ mod tests {
     }
 
     #[test]
+    fn reads_real_zstd_parquet_without_changing_scalar_rows() {
+        use parquet::basic::{Compression, ZstdLevel};
+        use parquet::file::properties::WriterProperties;
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("safe-zstd.parquet");
+        let schema = Arc::new(Schema::new(vec![Field::new("y", DataType::Float64, false)]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Float64Array::from(vec![1.5, 2.5, 3.25])) as ArrayRef],
+        )
+        .unwrap();
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::ZSTD(ZstdLevel::default()))
+            .build();
+        let mut writer = ArrowWriter::try_new(
+            std::fs::File::create(&path).unwrap(),
+            batch.schema(),
+            Some(properties),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let reader = SerializedFileReader::new(std::fs::File::open(&path).unwrap()).unwrap();
+        for group in reader.metadata().row_groups() {
+            for column in group.columns() {
+                assert!(matches!(column.compression(), Compression::ZSTD(_)));
+            }
+        }
+        let frame = read_table(&path, &LoadingParams::default()).unwrap();
+        assert_eq!(frame.numeric_column_f64("y"), vec![1.5, 2.5, 3.25]);
+    }
+
+    #[test]
     fn reads_parquet_projected_columns_in_requested_order() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("data.parquet");

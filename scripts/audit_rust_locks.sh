@@ -20,5 +20,5 @@ for lock_file in "${lock_files[@]}"; do
     exit 1
   fi
   echo ">> cargo audit --file ${lock_file}"
-  cargo audit --file "${repo_root}/${lock_file}"
+  cargo audit --deny warnings --file "${repo_root}/${lock_file}"
 done
