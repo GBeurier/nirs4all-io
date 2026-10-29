@@ -329,3 +329,7 @@ corrected tag.
   native-static-libs` set; `-lgcc` carries EH/unwind/`__chkstk`).
 - **npm**: same Automation-token + `@nirs4all` org-write requirement as the other
   repos; the `release-npm` dispatch `publish` input defaults to a dry run.
+
+For 0.2.11, the WASM legal-closure checksum was reviewed against 0.2.10: all 55
+license expressions are unchanged. Only the two owner packages change identity
+from 0.2.10 to 0.2.11. Third-party pinned license-file checks remain enforced.
