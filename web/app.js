@@ -12,6 +12,7 @@ const state = {
   colorBy: "target",
   sampleLimit: 180,
   validation: null,
+  specEditError: null,
   userVizSelected: false,
   // The one-shot view (mode === "oneshot") is the landing experience, unchanged;
   // the iterative builder (mode === "builder") is the prominent toggle.
@@ -58,7 +59,7 @@ const extOf = (name) => {
   return m ? m[1].toLowerCase() : "";
 };
 
-boot();
+const runtimeReady = boot();
 
 // Shared seam consumed by builder.js (the iterative-builder module). app.js stays
 // the decode/inference/viz/spec-form engine; builder.js drives the propose cycle
@@ -114,10 +115,12 @@ async function boot() {
     $("#runtime").title = runtimeTitle(formats, io);
     $("#runtime").className = "runtime ok";
     setStatus("WASM ready. Add files to build a dataset.");
+    return true;
   } catch (err) {
     $("#runtime").textContent = "wasm bundle missing";
     $("#runtime").className = "runtime err";
     setStatus(`WASM could not be loaded: ${err.message || err}. Run ./build-wasm.sh in web/.`);
+    return false;
   }
 }
 
@@ -185,6 +188,7 @@ function wireUi() {
   $("#resetSpec").addEventListener("click", resetSpecToInferred);
   $("#copySpec").addEventListener("click", copySpecJson);
   $("#downloadSpec").addEventListener("click", downloadSpecJson);
+  $("#specForm").addEventListener("submit", (event) => event.preventDefault());
   $("#datasetAlerts").addEventListener("click", (event) => {
     if (event.target.closest("[data-add-sidecars]")) $("#fileInput").click();
   });
@@ -285,19 +289,27 @@ function listFrom(value) {
 
 async function addFiles(files) {
   if (!files.length) return;
+  if (!await runtimeReady) return;
   setStatus(`Reading ${files.length} file${files.length > 1 ? "s" : ""}...`);
-  const loaded = await Promise.all(files.map(async (file) => ({
-    name: browserFileName(file),
-    size: file.size,
-    lastModified: file.lastModified,
-    bytes: new Uint8Array(await file.arrayBuffer()),
-  })));
-  for (const file of loaded) {
-    const idx = state.files.findIndex((f) => f.name === file.name);
-    if (idx >= 0) state.files[idx] = file;
-    else state.files.push(file);
+  try {
+    const loaded = await Promise.all(files.map(async (file) => ({
+      name: browserFileName(file),
+      size: file.size,
+      lastModified: file.lastModified,
+      bytes: new Uint8Array(await file.arrayBuffer()),
+    })));
+    for (const file of loaded) {
+      const idx = state.files.findIndex((f) => f.name === file.name);
+      if (idx >= 0) state.files[idx] = file;
+      else state.files.push(file);
+    }
+    await recompute();
+  } catch (err) {
+    state.validation = { ok: false, message: err.message || String(err) };
+    renderValidationBadge();
+    renderSpecActions();
+    setStatus(`Files could not be loaded: ${err.message || err}`);
   }
-  await recompute();
 }
 
 function browserFileName(file) {
@@ -358,6 +370,7 @@ function withRelativePath(file, relativePath) {
 }
 
 async function loadSampleDataset() {
+  if (!await runtimeReady) return;
   try {
     const files = await loadSampleFiles();
     for (const file of files) {
@@ -388,6 +401,7 @@ async function loadSampleFiles() {
 }
 
 async function recompute() {
+  state.specEditError = null;
   annotateProbes();
   annotateSidecars();
   await decodeFiles();
@@ -396,7 +410,7 @@ async function recompute() {
     return;
   }
   await inferDataset();
-  state.spec = state.plan?.blocked ? null : state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : defaultSpec();
+  state.spec = state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : null;
   chooseDefaultSignal();
   chooseDefaultTarget();
   const view = datasetView();
@@ -494,7 +508,7 @@ async function inferDataset() {
       ];
     }
   } catch (err) {
-    state.plan = { warnings: [`io inference failed: ${err.message || err}`], resolved_spec: defaultSpec() };
+    state.plan = { blocked: true, warnings: [`IO inference failed: ${err.message || err}`], resolved_spec: null };
   }
 }
 
@@ -526,6 +540,7 @@ function reset() {
   state.activeViz = "spectra";
   state.userVizSelected = false;
   state.validation = null;
+  state.specEditError = null;
   state.confirmed = [];
   state.proposals = [];
   state.confirmedEchoes = [];
@@ -838,6 +853,11 @@ function fileFormatMeta(file, decoded, probe) {
     const count = Array.isArray(decoded.records) ? decoded.records.length : 0;
     return `<span class="probe-format">${esc(format)}</span><span>${fmtInt(count)} record${count === 1 ? "" : "s"}</span>`;
   }
+  const source = sourceForFile(file.name);
+  if (source && ["targets", "metadata", "weights"].includes(source.role)
+      && ["csv", "tsv", "txt"].includes(extOf(file.name)) && !isInferenceExcluded(file)) {
+    return `<span class="probe-format">tabular input</span><span>${esc(source.role)} table</span>`;
+  }
   if (decoded?.error) {
     return `<span class="probe-error">${esc(shortError(decoded.error))}</span>`;
   }
@@ -1004,15 +1024,15 @@ function compactObject(value) {
 }
 
 function renderSpecActions() {
-  const disabled = !state.spec;
   for (const id of ["resetSpec", "copySpec", "downloadSpec"]) {
     const btn = $(`#${id}`);
-    if (btn) btn.disabled = disabled;
+    if (btn) btn.disabled = !state.spec || (id !== "resetSpec" && !state.validation?.ok);
   }
 }
 
 function resetSpecToInferred() {
   if (!state.files.length) return;
+  state.specEditError = null;
   state.spec = state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : defaultSpec();
   chooseDefaultTarget();
   validateSpec();
@@ -1021,8 +1041,8 @@ function resetSpecToInferred() {
 }
 
 async function copySpecJson() {
-  if (!state.spec) return;
-  const text = JSON.stringify(state.spec, null, 2);
+  if (!state.spec || !state.validation?.ok) return;
+  const text = canonicalSpecJson(state.spec);
   try {
     if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
     await navigator.clipboard.writeText(text);
@@ -1036,8 +1056,8 @@ async function copySpecJson() {
 }
 
 function downloadSpecJson() {
-  if (!state.spec) return;
-  const text = JSON.stringify(state.spec, null, 2);
+  if (!state.spec || !state.validation?.ok) return;
+  const text = canonicalSpecJson(state.spec);
   const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
   const a = Object.assign(document.createElement("a"), {
     href: url,
@@ -1048,6 +1068,27 @@ function downloadSpecJson() {
   a.remove();
   URL.revokeObjectURL(url);
   setStatus("Canonical dataset JSON downloaded.");
+}
+
+function canonicalSpecJson(spec) {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+    throw new Error("DatasetSpec must be a JSON object");
+  }
+  if (!Array.isArray(spec.sources)) throw new Error("DatasetSpec.sources must be an array");
+  if (!io) throw new Error("Wait for the IO runtime to finish loading");
+  const raw = JSON.stringify(spec);
+  io.validate(raw);
+  const canonical = io.to_spec(raw);
+  io.validate(canonical);
+  return canonical;
+}
+
+function specEditorJson(spec) {
+  try {
+    return canonicalSpecJson(spec);
+  } catch (_) {
+    return JSON.stringify(spec, null, 2);
+  }
 }
 
 function decisionLabel(value) {
@@ -1204,7 +1245,7 @@ function renderSpecForm() {
 
     <div class="field">
       <label>Canonical JSON</label>
-      <textarea class="json-editor" name="json" spellcheck="false">${esc(JSON.stringify(spec, null, 2))}</textarea>
+      <textarea class="json-editor" name="json" spellcheck="false">${esc(specEditorJson(spec))}</textarea>
     </div>`;
   host.oninput = handleSpecInput;
   host.onchange = handleSpecInput;
@@ -1448,15 +1489,22 @@ function nextSourceId(spec) {
 function handleSpecInput(event) {
   if (event.target.name === "json") {
     try {
-      state.spec = JSON.parse(event.target.value);
-      chooseDefaultSignal();
-      chooseDefaultTarget();
-      validateSpec();
-      renderAll();
+      const spec = JSON.parse(canonicalSpecJson(JSON.parse(event.target.value)));
+      state.specEditError = null;
+      state.validation = { ok: true, message: "valid" };
+      // Keep the editor and caret alive while typing; commit on blur.
+      if (event.type === "change") {
+        state.spec = spec;
+        chooseDefaultSignal();
+        chooseDefaultTarget();
+        renderAll();
+      }
     } catch (err) {
+      state.specEditError = err.message || String(err);
       state.validation = { ok: false, message: err.message };
-      renderValidationBadge();
     }
+    renderValidationBadge();
+    renderSpecActions();
     return;
   }
   if (event.type === "input" && event.target.tagName === "TEXTAREA") return;
@@ -1464,14 +1512,17 @@ function handleSpecInput(event) {
   try {
     const spec = specFromForm(form);
     state.spec = spec;
+    state.specEditError = null;
     chooseDefaultSignal();
     chooseDefaultTarget();
     validateSpec();
-    form.elements.json.value = JSON.stringify(spec, null, 2);
+    form.elements.json.value = specEditorJson(spec);
     refreshSpecDrivenViews();
   } catch (err) {
+    state.specEditError = err.message || String(err);
     state.validation = { ok: false, message: err.message || String(err) };
     renderValidationBadge();
+    renderSpecActions();
   }
 }
 
@@ -1482,6 +1533,7 @@ function handleSpecClick(event) {
     const spec = structuredClone(state.spec || defaultSpec());
     spec.sources = [...(spec.sources || []), { id: nextSourceId(spec), role: "metadata", input: "" }];
     state.spec = spec;
+    state.specEditError = null;
     validateSpec();
     renderAll();
     return;
@@ -1493,6 +1545,7 @@ function handleSpecClick(event) {
     const spec = structuredClone(state.spec || defaultSpec());
     spec.sources = (spec.sources || []).filter((_, i) => i !== index);
     state.spec = spec;
+    state.specEditError = null;
     chooseDefaultTarget();
     validateSpec();
     renderAll();
@@ -1630,57 +1683,56 @@ function applyGlobalSpecFieldsFromForm(spec, form) {
 
 function sourceFromRow(row, index) {
   const get = (name) => row.querySelector(`[name="${name}"]`)?.value || "";
-  const src = {
-    id: get("source_id") || `source_${index + 1}`,
-    role: get("source_role") || "features",
-  };
+  const src = structuredClone(state.spec?.sources?.[index] || {});
+  src.id = get("source_id") || `source_${index + 1}`;
+  src.role = get("source_role") || "features";
   const kind = get("source_kind") || "table";
-  if (kind !== "table") src.kind = kind;
+  if (kind !== "table") src.kind = kind; else delete src.kind;
   setString(src, "modality", get("source_modality"));
   const input = parseInputList(get("source_input"));
-  if (input) src.input = input;
+  if (input) src.input = input; else delete src.input;
   const merge = get("source_merge");
-  if (merge) src.merge = merge;
+  if (merge) src.merge = merge; else delete src.merge;
   setString(src, "partition", get("source_partition"));
   const key = get("source_key").trim();
-  if (key) src.key = parseLooseValue(key);
-  if (get("source_strict_columns") === "false") src.strict_columns = false;
+  if (key) src.key = parseLooseValue(key); else delete src.key;
+  if (get("source_strict_columns") === "false") src.strict_columns = false; else delete src.strict_columns;
 
-  const params = sourceParamsFromRow(row);
-  if (Object.keys(params).length) src.params = params;
+  const params = sourceParamsFromRow(row, src.params);
+  if (Object.keys(params).length) src.params = params; else delete src.params;
 
   const columns = parseOptionalJson(get("source_columns"), `source '${src.id}' columns`);
-  if (columns != null) src.columns = columns;
+  if (columns != null) src.columns = columns; else delete src.columns;
 
   const join = sourceJoinFromRow(row, src.id);
-  if (join) src.join = join;
+  if (join) src.join = join; else delete src.join;
 
   const variations = parseOptionalJson(get("source_variations"), `source '${src.id}' variations`);
   if (variations != null) {
     if (!Array.isArray(variations)) throw new Error(`source '${src.id}' variations must be a JSON array`);
     src.variations = variations;
-  }
+  } else delete src.variations;
   return src;
 }
 
-function sourceParamsFromRow(row) {
+function sourceParamsFromRow(row, previous = {}) {
   const get = (name) => row.querySelector(`[name="${name}"]`)?.value || "";
-  const params = {};
+  const params = structuredClone(previous);
   setString(params, "delimiter", get("source_delimiter"));
   setString(params, "decimal_separator", get("source_decimal"));
   const header = get("source_header");
-  if (header) params.has_header = header === "true";
+  if (header) params.has_header = header === "true"; else delete params.has_header;
   setString(params, "header_unit", get("source_header_unit"));
   setString(params, "signal_type", get("source_signal_type"));
   setString(params, "encoding", get("source_encoding"));
   const naPolicy = get("source_na_policy");
-  if (naPolicy && naPolicy !== "auto") params.na = { policy: naPolicy };
+  if (naPolicy) params.na = { ...params.na, policy: naPolicy }; else delete params.na;
   setString(params, "categorical", get("source_categorical"));
   const format = parseOptionalJson(get("source_format_json"), "params.format");
   if (format != null) {
     if (!format || Array.isArray(format) || typeof format !== "object") throw new Error("params.format must be a JSON object");
     params.format = format;
-  }
+  } else delete params.format;
   return params;
 }
 
@@ -1703,6 +1755,7 @@ function sourceJoinFromRow(row, sourceId) {
 }
 
 function refreshSpecDrivenViews() {
+  renderSpecActions();
   renderKpis();
   renderDatasetMap();
   renderDatasetAlerts();
@@ -1724,12 +1777,16 @@ function parseInputList(text) {
 }
 
 function validateSpec() {
+  if (state.specEditError) {
+    state.validation = { ok: false, message: state.specEditError };
+    return;
+  }
   if (!io?.validate || !state.spec) {
-    state.validation = state.spec ? { ok: true, message: "local edit" } : null;
+    state.validation = state.spec ? { ok: false, message: "IO runtime unavailable" } : null;
     return;
   }
   try {
-    io.validate(JSON.stringify(state.spec));
+    canonicalSpecJson(state.spec);
     state.validation = { ok: true, message: "valid" };
   } catch (err) {
     state.validation = { ok: false, message: err.message || String(err) };
@@ -1738,6 +1795,7 @@ function validateSpec() {
 
 function renderValidationBadge() {
   const badge = $("#validationBadge");
+  badge.title = state.validation?.message || "";
   if (!state.validation) {
     badge.textContent = "not validated";
     badge.className = "pill";
@@ -2408,6 +2466,7 @@ function datasetStatus() {
     const more = missing.length > 3 ? `, +${missing.length - 3} more` : "";
     return `${missing.length} required companion file${missing.length > 1 ? "s" : ""} missing: ${names}${more}.`;
   }
+  if (state.plan?.blocked) return state.plan.warnings?.[0] || "Dataset inference failed. Review the inference warnings.";
   const structure = decisionLabel(state.plan?.structure?.value || "unknown");
   const score = state.plan?.overall_score == null ? "" : `, io score ${fmtNum(state.plan.overall_score, 3)}`;
   const excluded = exclusions.length

@@ -1,12 +1,13 @@
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, "..");
 const workspace = path.resolve(root, "..", "..");
 const formatsRoot = process.env.N4IO_FORMATS_ROOT || path.join(workspace, "nirs4all-formats");
 const formatsSamples = path.join(formatsRoot, "samples");
-const standalone = pathToFileURL(path.join(root, "dist", "nirs4all-io-standalone.html")).href;
+const standalone = process.env.N4IO_PAGE_URL || pathToFileURL(path.join(root, "dist", "nirs4all-io-standalone.html")).href;
 const chromeExecutable = process.env.CHROME_BIN || "/usr/bin/google-chrome";
 
 async function loadPlaywright() {
@@ -48,6 +49,9 @@ function assert(condition, message) {
 
 try {
   await sampleDatasetFlow();
+  await canonicalEditingFlow();
+  await unreadableFileFlow();
+  if (process.env.N4IO_PAGE_URL) await startupFlow();
   await dragAndDropFlow();
   await mixedRepeatedTableFlow();
   await zstdParquetFlow();
@@ -59,7 +63,7 @@ try {
   if (errors.length) {
     throw new Error(`browser errors:\n${errors.join("\n")}`);
   }
-  console.log("OK: standalone file:// smoke passed");
+  console.log(`OK: IO page smoke passed (${process.env.N4IO_PAGE_URL || "standalone file://"})`);
 } finally {
   await browser.close();
 }
@@ -85,6 +89,7 @@ async function sampleDatasetFlow() {
       validation: document.querySelector("#validationBadge")?.textContent,
       readers: document.querySelectorAll(".reader-tags span").length,
       sourceRows: document.querySelectorAll(".source-row").length,
+      fileErrors: document.querySelectorAll("#fileList .probe-error").length,
       target: document.querySelector("#targetSelect")?.value,
       activeTab: document.querySelector(".tab.active")?.textContent,
       legend: document.querySelector("#legend")?.textContent,
@@ -95,11 +100,111 @@ async function sampleDatasetFlow() {
   assert(result.validation === "valid", "sample DatasetSpec is not valid");
   assert(result.readers >= 40, "reader coverage is not visible");
   assert(result.sourceRows >= 6, "sample sources not rendered");
+  assert(result.fileErrors === 0, "supported target/metadata tables are shown as decode errors");
   assert(result.target === "protein", "sample target not selected");
   assert(result.activeTab === "Y histogram", "Y histogram not active");
   assert(result.legend.includes("protein"), "Y histogram legend missing target");
   assert(result.canvasNonWhite > 1000, "dataviz canvas appears blank");
   await page.close();
+}
+
+async function canonicalEditingFlow() {
+  const page = await newStandalonePage();
+  await page.click("#loadSample");
+  await page.waitForFunction(() => window.NIRS4ALL_APP?.state.spec);
+  const editor = page.locator("textarea[name='json']");
+  const canonical = await page.evaluate(() => {
+    const app = window.NIRS4ALL_APP;
+    return app.getIo().to_spec(JSON.stringify(app.state.spec));
+  });
+  assert(await editor.inputValue() === canonical, "editor does not use IO canonical JSON");
+  await editor.focus();
+  await page.keyboard.press("End");
+  await page.keyboard.type("  ");
+  assert(await editor.evaluate((el) => document.activeElement === el), "JSON typing lost focus");
+
+  for (const invalid of ["{", "null", "[]", '{"sources":{}}', '{"sources":[],"partitions":{"by":"random"}}']) {
+    await editor.fill(invalid);
+    assert(await page.locator("#validationBadge").textContent() === "invalid", "invalid JSON accepted");
+    assert(await page.locator("#downloadSpec").isDisabled(), "invalid JSON can be downloaded");
+    assert(await page.locator("#copySpec").isDisabled(), "invalid JSON can be copied");
+  }
+  await editor.fill(canonical);
+  await page.locator("#status").click();
+
+  // Editing a visible field must retain loading options authored in JSON.
+  const edited = JSON.parse(canonical);
+  edited.name = "Canonical café";
+  edited.sources[0].params.na = { policy: "replace", fill: { method: "value", fill_value: 7 } };
+  await editor.fill(JSON.stringify(edited));
+  await page.locator("#status").click();
+  await page.locator("input[name='name']").fill("Edited café");
+  await page.locator("input[name='name']").press("Tab");
+  const fill = await page.evaluate(() => window.NIRS4ALL_APP.state.spec.sources[0].params.na.fill);
+  assert(fill.method === "value" && fill.fill_value === 7, "form edit discarded NA fill options");
+  assert(await page.locator("#validationBadge").textContent() === "valid", "form edit invalidated spec");
+
+  const expected = await page.evaluate(() => {
+    const app = window.NIRS4ALL_APP;
+    return app.getIo().to_spec(JSON.stringify(app.state.spec));
+  });
+  const downloaded = page.waitForEvent("download");
+  await page.click("#downloadSpec");
+  const download = await downloaded;
+  assert(await readFile(await download.path(), "utf8") === expected, "export differs from canonical IO bytes");
+
+  await page.evaluate(() => {
+    window.__copiedSpec = null;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text) => { window.__copiedSpec = text; } },
+    });
+  });
+  await page.click("#copySpec");
+  assert(await page.evaluate(() => window.__copiedSpec) === expected, "clipboard differs from canonical IO bytes");
+
+  await editor.fill("null");
+  await page.click("#resetSpec");
+  assert(await page.locator("#validationBadge").textContent() === "valid", "reset did not recover invalid draft");
+  assert(await page.locator("#downloadSpec").isEnabled(), "reset did not restore export");
+  await page.close();
+}
+
+async function unreadableFileFlow() {
+  const page = await newStandalonePage();
+  await page.evaluate(() => {
+    File.prototype.arrayBuffer = async () => { throw new Error("File access was denied"); };
+  });
+  await page.setInputFiles("#fileInput", {
+    name: "unreadable.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("1000;1010\n1;2\n"),
+  });
+  await page.waitForFunction(() => document.querySelector("#status")?.textContent.includes("File access was denied"));
+  assert(await page.locator("#downloadSpec").isDisabled(), "read failure left export enabled");
+  await page.close();
+}
+
+async function startupFlow() {
+  const page = await browser.newPage();
+  hook(page);
+  let releaseModule;
+  const moduleGate = new Promise((resolve) => { releaseModule = resolve; });
+  await page.route("**/pkg/io/nirs4all_io_wasm.js", async (route) => {
+    await moduleGate;
+    await route.continue();
+  });
+  try {
+    await page.goto(standalone, { waitUntil: "domcontentloaded" });
+    await page.click("#loadSample");
+    assert(await page.evaluate(() => window.NIRS4ALL_APP.state.spec === null), "import ran before runtime startup");
+    releaseModule();
+    await page.waitForFunction(() => document.querySelector("#status")?.textContent.includes("loaded"));
+    assert(await page.locator("#validationBadge").textContent() === "valid", "early import did not resume after startup");
+  } finally {
+    releaseModule();
+    await page.close();
+  }
 }
 
 async function dragAndDropFlow() {
