@@ -49,6 +49,10 @@ function assert(condition, message) {
 
 try {
   await sampleDatasetFlow();
+  await scatterExplanationFlow();
+  await auxiliaryTablesFlow();
+  await targetTableAuditFlow();
+  await tableValidationEditingFlow();
   await canonicalEditingFlow();
   await unreadableFileFlow();
   if (process.env.N4IO_PAGE_URL) await startupFlow();
@@ -105,6 +109,180 @@ async function sampleDatasetFlow() {
   assert(result.activeTab === "Y histogram", "Y histogram not active");
   assert(result.legend.includes("protein"), "Y histogram legend missing target");
   assert(result.canvasNonWhite > 1000, "dataviz canvas appears blank");
+  await page.close();
+}
+
+async function scatterExplanationFlow() {
+  const page = await newStandalonePage();
+  await page.click('[data-viz="scatter"]');
+  assert(await page.locator("#scatterInfo").isVisible(), "empty scatter explanation is hidden");
+  assert((await page.textContent("#scatterSummary")).includes("No scatter points"), "empty scatter retains stale data");
+
+  // Exercise the existing decoded-record seam with known values, including missing
+  // channels, a single finite channel, and a record without the selected signal.
+  await page.evaluate(() => {
+    const app = window.NIRS4ALL_APP;
+    app.state.decoded = [{ file: "preview.csv", ok: true, records: Array.from({ length: 24 }, (_, index) => ({
+      signals: {
+        signal: { values: index === 1 ? [7] : [1, NaN, null, Infinity, 3] },
+        ...(index === 2 ? {} : { alternate: { values: index === 1 ? [10] : [9, 5, 1] } }),
+      },
+      targets: { protein: 12, fat: 2 },
+      metadata: { partition: index < 12 ? "train" : "test" },
+    })) }];
+    app.state.activeSignal = "signal";
+    app.state.activeTarget = "protein";
+    app.renderAll();
+  });
+  await page.click("#scatterData summary");
+  const firstCells = await page.locator("#scatterValues tr").first().locator("th, td").allTextContents();
+  assert(firstCells.slice(3, 6).join(",") === "2,2,2", "scatter coordinates do not reflect finite signal values");
+  const singleCells = await page.locator("#scatterValues tr").nth(1).locator("th, td").allTextContents();
+  assert(singleCells.slice(3, 6).join(",") === "1,7,0", "single-channel endpoint change is incorrect");
+  assert(await page.locator("#scatterValues tr").count() === 24, "scatter table does not include all displayed points");
+  const axes = await page.textContent("#scatterAxes");
+  assert(axes.includes("Signal units are unknown") && axes.includes("last finite value minus its first"), "scatter axes or units are unexplained");
+  assert(await page.getAttribute("#vizCanvas", "aria-describedby") === "scatterAxes scatterSummary", "canvas is not connected to its text alternative");
+
+  await page.selectOption("#signalSelect", "alternate");
+  const alternateCells = await page.locator("#scatterValues tr").first().locator("th, td").allTextContents();
+  assert(alternateCells.slice(2, 6).join(",") === "alternate,3,5,-8", "signal selection did not update plotted values");
+  const fallbackCells = await page.locator("#scatterValues tr").nth(2).locator("th, td").allTextContents();
+  assert(fallbackCells.slice(2, 6).join(",") === "signal,2,2,2", "scatter table mislabels the fallback signal");
+  await page.selectOption("#targetSelect", "fat");
+  assert(await page.getAttribute('[data-viz="scatter"]', "class") === "tab active", "target selection leaves the scatter view");
+  const targetCells = await page.locator("#scatterValues tr").first().locator("th, td").allTextContents();
+  assert(targetCells[7] === "fat: 2" && targetCells.slice(4, 6).join(",") === "5,-8", "target selection changes coordinates or leaves stale labels");
+  await page.selectOption("#colorSelect", "index");
+  assert((await page.textContent("#legend")).includes("Colors cycle through record order"), "index coloring has a misleading target legend");
+  await page.locator("#sampleLimit").evaluate((input) => { input.value = "20"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+  assert(await page.locator("#scatterValues tr").count() === 20, "scatter values ignore the sample cap");
+  assert((await page.textContent("#scatterSummary")).includes("Showing 20 of 24"), "scatter summary ignores the sample cap");
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  const overflow = await page.locator("#scatterData").evaluate((element) => element.scrollWidth > element.clientWidth);
+  assert(!overflow, "scatter text/table overflows its container on a narrow screen");
+  await page.click('[data-viz="spectra"]');
+  assert(await page.locator("#scatterInfo").isHidden() && await page.locator("#scatterData").isHidden(), "scatter explanation remains visible in another view");
+  await page.close();
+}
+
+async function auxiliaryTablesFlow() {
+  const page = await newStandalonePage();
+  await page.setInputFiles("#fileInput", [
+    { name: "X.csv", mimeType: "text/csv", buffer: Buffer.from("1000;1010;1020\n0.1;0.2;0.3\n0.4;0.5;0.6\n") },
+    { name: "Y.csv", mimeType: "text/csv", buffer: Buffer.from("protein\n10\n12\n") },
+    { name: "M.csv", mimeType: "text/csv", buffer: Buffer.from("batch;site;2024\nA;north;1\nB;south;2\n") },
+  ]);
+  await page.waitForFunction(() => window.NIRS4ALL_APP?.state.spec, null, { timeout: 15000 });
+  const result = await page.evaluate(() => {
+    const { state } = window.NIRS4ALL_APP;
+    return { decoded: state.decoded, sources: state.spec.sources, warnings: state.plan.warnings };
+  });
+  assert(result.sources.some((source) => source.role === "metadata" && source.input === "M.csv"), "metadata table was not inferred");
+  assert(!result.decoded.some((entry) => entry.file === "M.csv" || entry.file === "Y.csv"), "auxiliary table was sent to the spectral reader");
+  assert(result.decoded.some((entry) => entry.file === "X.csv" && entry.ok), "spectral table was not decoded");
+  assert(!result.warnings.some((warning) => warning.includes("M.csv") && warning.includes("excluded")), "metadata table was excluded from inference");
+  await page.click('#modeToggle [data-mode="builder"]');
+  await page.waitForFunction(() => window.NIRS4ALL_APP.state.assembled || window.NIRS4ALL_APP.state.assembleError, null, { timeout: 15000 });
+  const preview = await page.evaluate(() => ({ assembled: window.NIRS4ALL_APP.state.assembled, error: window.NIRS4ALL_APP.state.assembleError }));
+  assert(preview.assembled, `dataset with metadata did not assemble: ${preview.error}`);
+  const blocks = Object.values(preview.assembled.blocks || {});
+  assert(blocks.some((block) => ["batch", "site", "2024"].every((name) => block.metadata?.columns.some((column) => column.name === name))), "metadata columns were lost during assembly");
+  await page.close();
+}
+
+async function targetTableAuditFlow() {
+  for (const [content, expected] of [
+    ["protein\n10\n12\n", "protein"],
+    ["class\nred\nblue\n", "class"],
+  ]) {
+    const page = await newStandalonePage();
+    await page.setInputFiles("#fileInput", [
+      { name: "X.csv", mimeType: "text/csv", buffer: Buffer.from("1000;1010;1020\n0.1;0.2;0.3\n0.4;0.5;0.6\n") },
+      { name: "Y.csv", mimeType: "text/csv", buffer: Buffer.from(content) },
+    ]);
+    await page.waitForFunction(() => window.NIRS4ALL_APP?.state.spec);
+    const row = page.locator("#fileList .file-row").filter({ hasText: "Y.csv" });
+    assert(!(await row.innerText()).toLowerCase().includes("unsupported"), "valid target shows an unsupported spectral audit");
+    assert(await page.locator("#targetSelect").inputValue() === expected, "target header was not selected");
+    const targetPreview = await page.evaluate(() => {
+      const view = window.NIRS4ALL_APP.datasetView();
+      return { values: view.targetPreviewValues.map((item) => item.value), aligned: view.rows.map((row) => row.target) };
+    });
+    const expectedValues = expected === "class" ? "red,blue" : "10,12";
+    assert(targetPreview.values.join(",") === expectedValues && targetPreview.aligned.join(",") === expectedValues, "target preview differs from IO assembly or includes the header as a value");
+    assert(!(await page.textContent("#datasetAlerts")).includes("assembly could not"), "valid target did not assemble");
+    await page.click('#modeToggle [data-mode="builder"]');
+    await page.waitForFunction(() => window.NIRS4ALL_APP.state.assembled || window.NIRS4ALL_APP.state.assembleError);
+    const block = await page.evaluate(() => Object.values(window.NIRS4ALL_APP.state.assembled?.blocks || {})[0]);
+    assert(block?.y_headers?.includes(expected) && block.y.n_rows === 2, "target was not assembled");
+    if (expected === "class") assert(block.y_categorical.class.categories.join(",") === "red,blue", "categorical labels were lost");
+    else assert(block.y.data.join(",") === "10,12", "numeric target values were lost");
+    await page.close();
+  }
+  const page = await newStandalonePage();
+  await page.setInputFiles("#fileInput", [
+    { name: "X.csv", mimeType: "text/csv", buffer: Buffer.from("1000;1010;1020\n0.1;0.2;0.3\n0.4;0.5;0.6\n") },
+    { name: "Y.csv", mimeType: "text/csv", buffer: Buffer.from('protein\n"unclosed\n12\n') },
+  ]);
+  await page.waitForFunction(() => window.NIRS4ALL_APP?.state.spec);
+  const alert = await page.textContent("#datasetAlerts");
+  assert(alert.includes("assembly could not validate") && alert.includes("train_y") && alert.includes("row-aligned"), "malformed target assembly error is not actionable");
+  assert(await page.locator("#validationBadge").textContent() === "invalid", "failed table assembly retains a successful validation badge");
+  await page.close();
+}
+
+async function tableValidationEditingFlow() {
+  const page = await newStandalonePage();
+  await page.setInputFiles("#fileInput", [
+    { name: "X.csv", mimeType: "text/csv", buffer: Buffer.from("1000;1010;1020\n0.1;0.2;0.3\n0.4;0.5;0.6\n") },
+    { name: "Y.csv", mimeType: "text/csv", buffer: Buffer.from("class\nred\nblue\n") },
+  ]);
+  await page.waitForFunction(() => window.NIRS4ALL_APP?.state.auxiliaryAssembly?.blocks);
+  // The first form commit also makes inferred defaults explicit. Thereafter,
+  // identity edits and display controls must reuse the materialized tables.
+  await page.locator('[name="name"]').fill("Named dataset");
+  await page.locator('[name="name"]').press("Tab");
+  await page.evaluate(() => { window.__tableAssembly = window.NIRS4ALL_APP.state.auxiliaryAssembly; });
+  await page.locator('[name="name"]').fill("Renamed dataset");
+  await page.locator('[name="name"]').press("Tab");
+  await page.selectOption("#colorSelect", "index");
+  assert(await page.evaluate(() => window.__tableAssembly === window.NIRS4ALL_APP.state.auxiliaryAssembly), "cosmetic edits or display controls rerun table assembly");
+  const sourceInput = page.locator('.source-row [name="source_input"]').nth(1);
+  await sourceInput.fill("missing.csv");
+  assert(await page.evaluate(() => window.__tableAssembly === window.NIRS4ALL_APP.state.auxiliaryAssembly), "table assembly runs before a text field is committed");
+  assert(await page.locator("#targetSelect").isDisabled(), "uncommitted source edit retains stale target values");
+  await sourceInput.press("Tab");
+  assert(await page.locator("#validationBadge").textContent() === "invalid", "missing table input does not invalidate assembly");
+  await sourceInput.fill("Y.csv");
+  await sourceInput.press("Tab");
+  assert(await page.locator("#validationBadge").textContent() === "valid", "correcting a source does not clear assembly failure");
+  assert(!(await page.textContent("#datasetAlerts")).includes("assembly could not"), "correcting a source leaves a stale assembly alert");
+
+  const editor = page.locator('textarea[name="json"]');
+  const originalSpec = await page.evaluate(() => structuredClone(window.NIRS4ALL_APP.state.spec));
+  const noHeader = structuredClone(originalSpec);
+  noHeader.sources[1].params.has_header = false;
+  await editor.fill(JSON.stringify(noHeader));
+  await page.locator("#status").click();
+  assert(await page.locator("#validationBadge").textContent() === "invalid", "loading parameter edit reused stale assembly success");
+  await editor.fill(JSON.stringify(originalSpec));
+  await page.locator("#status").click();
+  assert(await page.locator("#validationBadge").textContent() === "valid", "loading parameter recovery retains stale assembly failure");
+  const metadataOnly = structuredClone(originalSpec);
+  metadataOnly.sources[1].role = "metadata";
+  await editor.fill(JSON.stringify(metadataOnly));
+  await page.locator("#status").click();
+  assert(await page.locator("#targetSelect").isDisabled(), "role edit retains stale target values");
+
+  await page.setInputFiles("#fileInput", { name: "Y.csv", mimeType: "text/csv", buffer: Buffer.from('species\n"red,ripe"\n"blue,green"\n') });
+  await page.waitForFunction(() => window.NIRS4ALL_APP.datasetView().targetKeys.includes("species"));
+  const replaced = await page.evaluate(() => window.NIRS4ALL_APP.datasetView().rows.map((row) => row.target));
+  assert(replaced.join("|") === "red,ripe|blue,green", "same-name replacement or CSV quoting reuses stale or misparsed target values");
+  await page.click("#reset");
+  assert(await page.evaluate(() => window.NIRS4ALL_APP.state.auxiliaryAssembly === null), "reset retains materialized table data");
+  assert(await page.locator("#targetSelect").isDisabled(), "reset retains target options");
   await page.close();
 }
 

@@ -182,11 +182,31 @@
             <label>Color <select id="colorSelect"><option value="target">target</option><option value="partition">partition</option><option value="index">index</option></select></label>
             <label class="range-label">Samples <input id="sampleLimit" type="range" min="20" max="500" step="20" value="180" /></label>
           </div>
+          <div class="scatter-info" id="scatterInfo" hidden>
+            <h4 id="scatterTitle">Signal level vs. endpoint change</h4>
+            <p id="scatterPurpose">Compare overall signal levels and endpoint changes to find records worth inspecting in the Spectra view.</p>
+            <p id="scatterAxes">Each equal-size dot represents one decoded record. X is the mean of its finite signal values; Y is its last finite value minus its first, in stored channel order. Signal units are unknown in this preview; both axes keep the decoded signal scale, without conversion. Wavelength units do not apply.</p>
+            <p>This two-number summary can hide differences in spectral shape. Endpoint change depends on channel order and is not divided by the wavelength span. A record with one finite value has zero endpoint change.</p>
+            <p id="scatterControls">Signal selects the values used (falling back to a record's first signal when unavailable). Target selects the label used by target coloring; Color changes colors only. Samples limits the first records shown, in load order.</p>
+          </div>
           <div class="canvas-wrap">
-            <canvas id="vizCanvas" width="1200" height="520"></canvas>
+            <canvas id="vizCanvas" width="1200" height="520" role="img" aria-label="Dataset preview">The scatter view includes a text summary and a table of plotted values.</canvas>
             <div class="readout" id="readout"></div>
           </div>
           <div class="legend" id="legend"></div>
+          <div class="scatter-data" id="scatterData" hidden>
+            <p id="scatterSummary" role="status"></p>
+            <details>
+              <summary>View scatter values</summary>
+              <div class="scatter-table-scroll" role="region" aria-label="Scatter values" tabindex="0">
+                <table>
+                  <caption>Displayed records and their plotted coordinates, without rounding. Record numbers follow load order; non-finite signal values are omitted before calculation.</caption>
+                  <thead><tr><th scope="col">Record</th><th scope="col">File</th><th scope="col">Signal</th><th scope="col">Finite values</th><th scope="col">Mean signal (X)</th><th scope="col">Last minus first (Y)</th><th scope="col">Partition</th><th scope="col">Selected target</th></tr></thead>
+                  <tbody id="scatterValues"></tbody>
+                </table>
+              </div>
+            </details>
+          </div>
         </section>
 
         <section class="panel">
