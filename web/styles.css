@@ -1110,6 +1110,49 @@ input[type="range"] {
     linear-gradient(180deg, #fff, #fbfdfe),
     repeating-linear-gradient(90deg, rgba(15, 23, 42, .04) 0 1px, transparent 1px 56px);
 }
+.scatter-info, .scatter-data {
+  padding: 12px 15px;
+  color: var(--muted);
+  font-size: .82rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.scatter-info {
+  border-bottom: 1px solid var(--line-soft);
+}
+.scatter-info h4 {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-size: 1rem;
+}
+.scatter-info p, .scatter-data p {
+  margin: 6px 0;
+}
+.scatter-data summary {
+  cursor: pointer;
+  color: var(--teal-dark);
+  font-weight: 800;
+}
+.scatter-table-scroll {
+  max-height: 320px;
+  max-width: 100%;
+  overflow: auto;
+  margin-top: 10px;
+}
+.scatter-data table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.scatter-data caption {
+  text-align: left;
+  padding-bottom: 8px;
+}
+.scatter-data th, .scatter-data td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
 canvas {
   display: block;
   width: 100%;

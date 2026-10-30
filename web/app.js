@@ -13,6 +13,8 @@ const state = {
   sampleLimit: 180,
   validation: null,
   specEditError: null,
+  tableAssemblyError: null,
+  auxiliaryAssembly: null,
   userVizSelected: false,
   // The one-shot view (mode === "oneshot") is the landing experience, unchanged;
   // the iterative builder (mode === "builder") is the prominent toggle.
@@ -198,7 +200,7 @@ function wireUi() {
   });
   $("#targetSelect").addEventListener("change", (event) => {
     state.activeTarget = event.target.value;
-    state.activeViz = "targets";
+    if (state.activeViz !== "scatter") state.activeViz = "targets";
     state.userVizSelected = true;
     renderKpis();
     renderVizTabs();
@@ -402,6 +404,10 @@ async function loadSampleFiles() {
 
 async function recompute() {
   state.specEditError = null;
+  state.tableAssemblyError = null;
+  state.auxiliaryAssembly = null;
+  state.assembled = null;
+  state.assembleError = null;
   annotateProbes();
   annotateSidecars();
   await decodeFiles();
@@ -411,11 +417,11 @@ async function recompute() {
   }
   await inferDataset();
   state.spec = state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : null;
+  validateSpec();
   chooseDefaultSignal();
   chooseDefaultTarget();
   const view = datasetView();
   if (!state.userVizSelected && (view.targetValues.length || view.targetPreviewValues.length)) state.activeViz = "targets";
-  validateSpec();
   setStatus(datasetStatus());
   renderAll();
 }
@@ -448,8 +454,9 @@ async function decodeFiles() {
   state.decoded = [];
   if (!formats) return;
   const usedAsSidecar = sidecarUsage();
+  const auxiliaryTables = inferAuxiliaryTables();
   for (const file of state.files) {
-    if (usedAsSidecar.has(file.name)) continue;
+    if (usedAsSidecar.has(file.name) || auxiliaryTables.has(file.name)) continue;
     const missing = missingRequired(file);
     if (missing.length) {
       state.decoded.push({ ok: false, file: file.name, skipped: true, missing });
@@ -467,6 +474,26 @@ async function decodeFiles() {
       state.decoded.push({ ok: false, file: file.name, error: String(err.message || err) });
     }
   }
+}
+
+// Tabular targets and metadata belong to IO's table loader, not the spectral
+// reader. Ask IO for roles before decoding so text columns are not treated as
+// wavelength headers and numeric metadata cannot become decoded spectra.
+function inferAuxiliaryTables() {
+  const tables = new Set();
+  if (!io?.inferDataset || !state.files.length) return tables;
+  try {
+    const plan = io.inferDataset(state.files.map((f) => ({ name: f.name, bytes: f.bytes })), [], {});
+    for (const source of plan?.resolved_spec?.sources || []) {
+      if (!["targets", "metadata", "weights"].includes(source.role)) continue;
+      for (const input of asInputList(source.input)) {
+        if (["csv", "tsv", "txt"].includes(extOf(input))) tables.add(input);
+      }
+    }
+  } catch (_) {
+    // Let the normal inference path report errors and retain format diagnostics.
+  }
+  return tables;
 }
 
 async function inferDataset() {
@@ -541,6 +568,8 @@ function reset() {
   state.userVizSelected = false;
   state.validation = null;
   state.specEditError = null;
+  state.tableAssemblyError = null;
+  state.auxiliaryAssembly = null;
   state.confirmed = [];
   state.proposals = [];
   state.confirmedEchoes = [];
@@ -637,11 +666,15 @@ function renderDatasetAlerts() {
   const missing = missingSidecarAlerts();
   const refusals = nonSpectralRefusals();
   const failures = formatDecodeFailures();
-  if (!missing.length && !refusals.length && !failures.length) {
+  if (!missing.length && !refusals.length && !failures.length && !state.tableAssemblyError) {
     host.innerHTML = "";
     return;
   }
   const blocks = [];
+  if (state.tableAssemblyError) blocks.push(`<div class="dataset-alert refusal-alert">
+    <div class="alert-head"><strong>Dataset assembly could not validate the tables</strong></div>
+    <div class="alert-list"><div class="alert-row">${esc(state.tableAssemblyError)}</div></div>
+  </div>`);
   if (missing.length) blocks.push(`<div class="dataset-alert">
     <div class="alert-head">
       <strong>${fmtInt(missing.length)} required companion file${missing.length > 1 ? "s" : ""} missing</strong>
@@ -1034,8 +1067,8 @@ function resetSpecToInferred() {
   if (!state.files.length) return;
   state.specEditError = null;
   state.spec = state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : defaultSpec();
-  chooseDefaultTarget();
   validateSpec();
+  chooseDefaultTarget();
   setStatus("Dataset spec reset to the latest nirs4all-io inference.");
   renderAll();
 }
@@ -1495,6 +1528,7 @@ function handleSpecInput(event) {
       // Keep the editor and caret alive while typing; commit on blur.
       if (event.type === "change") {
         state.spec = spec;
+        validateSpec();
         chooseDefaultSignal();
         chooseDefaultTarget();
         renderAll();
@@ -1513,9 +1547,11 @@ function handleSpecInput(event) {
     const spec = specFromForm(form);
     state.spec = spec;
     state.specEditError = null;
+    // Schema errors remain immediate; materializing the full dataset waits for
+    // the committed change rather than running on every input keystroke.
+    validateSpec({ materialize: event.type === "change" });
     chooseDefaultSignal();
     chooseDefaultTarget();
-    validateSpec();
     form.elements.json.value = specEditorJson(spec);
     refreshSpecDrivenViews();
   } catch (err) {
@@ -1546,8 +1582,8 @@ function handleSpecClick(event) {
     spec.sources = (spec.sources || []).filter((_, i) => i !== index);
     state.spec = spec;
     state.specEditError = null;
-    chooseDefaultTarget();
     validateSpec();
+    chooseDefaultTarget();
     renderAll();
   }
 }
@@ -1776,7 +1812,8 @@ function parseInputList(text) {
   return parts.length > 1 ? parts : parts[0] || "";
 }
 
-function validateSpec() {
+function validateSpec({ materialize = true } = {}) {
+  state.tableAssemblyError = null;
   if (state.specEditError) {
     state.validation = { ok: false, message: state.specEditError };
     return;
@@ -1788,9 +1825,42 @@ function validateSpec() {
   try {
     canonicalSpecJson(state.spec);
     state.validation = { ok: true, message: "valid" };
+    const assembly = auxiliaryAssembly({ materialize });
+    if (assembly?.error) {
+      state.tableAssemblyError = assembly.error;
+      state.validation = { ok: false, message: assembly.error };
+    }
   } catch (err) {
     state.validation = { ok: false, message: err.message || String(err) };
   }
+}
+
+function auxiliaryAssembly({ materialize = false } = {}) {
+  if (!io?.assembleDataset || !(state.spec?.sources || []).some((source) =>
+    ["targets", "metadata", "weights"].includes(source.role)
+      && asInputList(source.input).some((input) => ["csv", "tsv", "txt"].includes(extOf(input))))) return null;
+  const { name, description, ...assemblySpec } = state.spec;
+  const key = JSON.stringify(assemblySpec);
+  const cached = state.auxiliaryAssembly;
+  if (cached?.key === key && cached.decoded === state.decoded
+      && cached.files.length === state.files.length
+      && cached.files.every((file, index) => file === state.files[index])) return cached;
+  if (!materialize) return null;
+  const result = { key, decoded: state.decoded, files: [...state.files], blocks: null, error: null };
+  try {
+    const { files, recordSets } = usableFilesForIo();
+    const decodedNames = new Set(recordSets.map((record) => record.source));
+    const assembled = io.assembleDataset(files.filter((file) => !decodedNames.has(file.name)), recordSets, JSON.stringify(state.spec));
+    // Retain only the table preview, not another copy of the large X matrices.
+    result.blocks = Object.fromEntries(Object.entries(assembled.blocks || {}).map(([partition, block]) => [partition, {
+      n_samples: block.n_samples, source_ids: block.source_ids,
+      y: block.y, y_headers: block.y_headers, y_categorical: block.y_categorical, metadata: block.metadata,
+    }]));
+  } catch (err) {
+    result.error = String(err?.message || err);
+  }
+  state.auxiliaryAssembly = result;
+  return result;
 }
 
 function renderValidationBadge() {
@@ -1830,7 +1900,7 @@ function datasetView() {
   const signal = state.activeSignal || signals[0] || "";
   const rows = records.map((record, i) => {
     const arr = record.signals?.[signal] || Object.values(record.signals || {})[0];
-    const values = (arr?.values || []).map(Number).filter(Number.isFinite);
+    const values = (arr?.values || []).filter(Number.isFinite);
     const axis = (arr?.axis?.values || []).map(Number).filter(Number.isFinite);
     const targetEntries = Object.entries(record.targets || {});
     const recordTarget = activeTarget && Object.prototype.hasOwnProperty.call(record.targets || {}, activeTarget)
@@ -1876,48 +1946,56 @@ function datasetView() {
 
 function targetPreview() {
   const spec = state.spec || state.plan?.resolved_spec || {};
-  const sources = spec.sources || [];
-  const byId = new Map(sources.map((src) => [src.id, src]));
+  const assembly = auxiliaryAssembly()
+    || (state.mode === "builder" && state.spec === state.workingSpec ? state.assembled : null);
   const byFileRow = new Map();
-  const byPartitionRow = new Map();
   const bySampleId = new Map();
   const values = [];
   const keys = [];
 
-  for (const src of sources) {
-    if (src.role !== "targets") continue;
-    for (const input of asInputList(src.input)) {
-      const file = state.files.find((f) => f.name === input || baseName(f.name) === input);
-      if (!file) continue;
-      const table = parsePreviewTable(file, src.params || {});
-      if (!table.rows.length) continue;
-      const targetCols = chooseTargetColumns(table);
-      if (!targetCols.length) continue;
-      const idCol = chooseIdColumn(table);
-      const linked = byId.get(src.join?.right);
-      const linkedInputs = linked ? asInputList(linked.input) : [];
-      table.rows.forEach((row, rowIndex) => {
-        for (const targetCol of targetCols) {
-          if (!keys.includes(targetCol)) keys.push(targetCol);
-          const raw = row[targetCol];
-          if (raw == null || String(raw).trim() === "") continue;
-          const numeric = Number(String(raw).replace(",", "."));
-          const value = Number.isFinite(numeric) ? numeric : raw;
-          const item = {
-            key: targetCol,
-            value,
-            rowIndex,
-            partition: src.partition || linked?.partition || "",
-            source: src.id || input,
-            sampleId: idCol ? String(row[idCol] ?? "") : "",
-          };
-          values.push(item);
-          if (item.sampleId) addAligned(bySampleId, item.sampleId, item);
-          for (const linkedInput of linkedInputs) addAligned(byFileRow, rowKey(linkedInput, rowIndex), item);
-          if (item.partition) addAligned(byPartitionRow, rowKey(item.partition, rowIndex), item);
-        }
-      });
+  // IO has already applied header detection, CSV quoting, column selection,
+  // categorical encoding and joins. Project its materialized y values rather
+  // than independently interpreting raw table bytes in the preview.
+  for (const [partition, block] of Object.entries(assembly?.blocks || {})) {
+    if (!block.y) continue;
+    const headers = block.y_headers || [];
+    const metadata = block.metadata?.columns || [];
+    const idColumn = metadata.find((column) => column.name === spec.sample_index?.key)
+      || metadata.find((column) => isIdColumn(column.name));
+    const fileRows = [];
+    for (const sourceId of block.source_ids || []) {
+      const source = (spec.sources || []).find((item) => item.id === sourceId);
+      const decoded = asInputList(source?.input).map((input) =>
+        state.decoded.find((item) => item.ok && (item.file === input || baseName(item.file) === input)));
+      // Row alignment is safe only when the materialized source retains every
+      // decoded record. Otherwise use identity metadata, without guessing after
+      // row filtering, aggregation or partitioning.
+      if (!decoded.length || decoded.some((item) => !item)
+          || decoded.reduce((count, item) => count + item.records.length, 0) !== block.n_samples) continue;
+      let offset = 0;
+      for (const item of decoded) {
+        fileRows.push({ file: item.file, offset, count: item.records.length });
+        offset += item.records.length;
+      }
     }
+    headers.forEach((key, column) => {
+      if (!keys.includes(key)) keys.push(key);
+      const categories = block.y_categorical?.[key]?.categories;
+      for (let rowIndex = 0; rowIndex < block.y.n_rows; rowIndex++) {
+        const raw = block.y.data[rowIndex * block.y.n_cols + column];
+        const value = categories && raw != null ? categories[raw] : raw;
+        if (value == null) continue;
+        const item = { key, value, rowIndex, partition, source: "assembled targets" };
+        values.push(item);
+        const sampleId = idColumn?.values?.[rowIndex];
+        if (sampleId != null && sampleId !== "") addAligned(bySampleId, String(sampleId), item);
+        for (const file of fileRows) {
+          if (rowIndex >= file.offset && rowIndex < file.offset + file.count) {
+            addAligned(byFileRow, rowKey(file.file, rowIndex - file.offset), item);
+          }
+        }
+      }
+    });
   }
 
   return {
@@ -1929,10 +2007,7 @@ function targetPreview() {
         const found = pickAligned(bySampleId.get(String(sampleId)), key);
         if (found) return found;
       }
-      return pickAligned(byFileRow.get(rowKey(file, rowIndex)), key)
-        || pickAligned(byFileRow.get(rowKey(baseName(file), rowIndex)), key)
-        || pickAligned(byPartitionRow.get(rowKey(partition, rowIndex)), key)
-        || null;
+      return pickAligned(byFileRow.get(rowKey(file, rowIndex)), key) || null;
     },
   };
 }
@@ -1959,52 +2034,8 @@ function asInputList(input) {
   return input ? [input] : [];
 }
 
-function parsePreviewTable(file, params) {
-  const text = new TextDecoder().decode(file.bytes);
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (!lines.length) return { headers: [], rows: [] };
-  const delimiter = previewDelimiter(lines, params?.delimiter);
-  const split = (line) => delimiter ? line.split(delimiter).map((s) => s.trim()) : [line.trim()];
-  const first = split(lines[0]);
-  const second = lines[1] ? split(lines[1]) : [];
-  const hasHeader = params?.has_header !== false && first.some((cell, i) => !isNumericCell(cell) && isNumericCell(second[i] ?? ""));
-  const headers = hasHeader ? first : first.map((_, i) => i === 0 ? "target" : `col_${i + 1}`);
-  const dataLines = hasHeader ? lines.slice(1) : lines;
-  const rows = dataLines.map((line) => {
-    const cells = split(line);
-    const row = {};
-    headers.forEach((header, i) => { row[header || `col_${i + 1}`] = cells[i] ?? ""; });
-    return row;
-  });
-  return { headers, rows };
-}
-
-function previewDelimiter(lines, declared) {
-  const first = lines[0] || "";
-  if (declared && first.includes(declared)) return declared;
-  const candidates = [";", "\t", ","];
-  const scored = candidates.map((d) => [d, first.split(d).length - 1]).sort((a, b) => b[1] - a[1]);
-  return scored[0][1] > 0 ? scored[0][0] : "";
-}
-
-function chooseTargetColumns(table) {
-  const candidates = table.headers.filter((h) => h && !isIdColumn(h));
-  const cols = candidates.length ? candidates : table.headers.filter(Boolean);
-  const numeric = cols.filter((h) => table.rows.some((row) => isNumericCell(row[h])));
-  return [...numeric, ...cols.filter((h) => !numeric.includes(h))];
-}
-
-function chooseIdColumn(table) {
-  return table.headers.find(isIdColumn) || "";
-}
-
 function isIdColumn(name) {
   return /^(sample[_ ]?id|sampleid|sample|id|name|code|ref(erence)?|key|index|.*_id|id_.*)$/i.test(String(name || ""));
-}
-
-function isNumericCell(value) {
-  if (value == null || String(value).trim() === "") return false;
-  return Number.isFinite(Number(String(value).replace(",", ".")));
 }
 
 function sourcePartition(fileName) {
@@ -2048,7 +2079,14 @@ function drawViz() {
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, rect.width, rect.height);
   const view = datasetView();
+  const scatter = state.activeViz === "scatter";
+  $("#scatterInfo").hidden = !scatter;
+  $("#scatterData").hidden = !scatter;
+  canvas.setAttribute("aria-label", scatter ? "Signal level vs. endpoint change scatter plot" : "Dataset preview");
+  if (scatter) canvas.setAttribute("aria-describedby", "scatterAxes scatterSummary");
+  else canvas.removeAttribute("aria-describedby");
   if (!view.rows.length && state.activeViz !== "targets") {
+    if (scatter) renderScatterData(view, []);
     drawEmpty(ctx, rect.width, rect.height);
     return;
   }
@@ -2150,17 +2188,23 @@ function drawHeatmap(ctx, w, h, view) {
 }
 
 function drawScatter(ctx, w, h, view) {
-  const rows = view.rows.slice(0, state.sampleLimit).map((row) => {
+  const selected = view.rows.slice(0, state.sampleLimit).map((row) => {
     const mean = avg(row.values);
-    const slope = row.values.length > 1 ? row.values[row.values.length - 1] - row.values[0] : 0;
-    return { ...row, px: mean, py: slope };
+    const endpointChange = row.values.length > 1 ? row.values[row.values.length - 1] - row.values[0] : 0;
+    return { ...row, px: mean, py: endpointChange };
   });
+  const rows = selected.filter((row) => Number.isFinite(row.px) && Number.isFinite(row.py));
+  renderScatterData(view, rows, selected.length - rows.length);
+  if (!rows.length) {
+    drawEmpty(ctx, w, h);
+    return;
+  }
   const box = plotBox(w, h);
   const xmin = Math.min(...rows.map((r) => r.px)), xmax = Math.max(...rows.map((r) => r.px));
   const ymin = Math.min(...rows.map((r) => r.py)), ymax = Math.max(...rows.map((r) => r.py));
   const sx = (x) => box.x + ((x - xmin) / (xmax - xmin || 1)) * box.w;
   const sy = (y) => box.y + box.h - ((y - ymin) / (ymax - ymin || 1)) * box.h;
-  drawAxes(ctx, box, "mean signal", "end-start");
+  drawAxes(ctx, box, "mean signal", "last minus first signal");
   rows.forEach((row, i) => {
     ctx.fillStyle = colorFor(row, i);
     ctx.globalAlpha = .82;
@@ -2169,7 +2213,24 @@ function drawScatter(ctx, w, h, view) {
     ctx.fill();
   });
   ctx.globalAlpha = 1;
-  $("#legend").innerHTML = legendFor(rows);
+  $("#legend").innerHTML = state.colorBy === "index"
+    ? "Colors cycle through record order; repeated colors do not indicate a shared group."
+    : legendFor(rows);
+}
+
+function renderScatterData(view, rows, omitted = 0) {
+  const scope = `Showing ${fmtInt(rows.length)} of ${fmtInt(view.rows.length)} decoded records with finite signal values, from the first ${fmtInt(Math.min(state.sampleLimit, view.rows.length))} records in load order.`;
+  const ranges = rows.length
+    ? ` Mean signal ranges from ${fmtNum(Math.min(...rows.map((row) => row.px)), 5)} to ${fmtNum(Math.max(...rows.map((row) => row.px)), 5)}; last minus first ranges from ${fmtNum(Math.min(...rows.map((row) => row.py)), 5)} to ${fmtNum(Math.max(...rows.map((row) => row.py)), 5)} (ranges rounded to five significant digits).`
+    : " No scatter points are available.";
+  const color = state.colorBy === "target" ? `Color uses ${view.targetKey || "the selected target"}; missing target values are labeled none.`
+    : state.colorBy === "partition" ? "Color uses the partition; missing partitions are labeled none."
+      : "Colors cycle through record order and can repeat.";
+  $("#scatterSummary").textContent = `${scope}${ranges}${omitted ? ` ${fmtInt(omitted)} records omitted because their calculated coordinates are not finite.` : ""} ${color}`;
+  $("#scatterValues").innerHTML = rows.map((row) => {
+    const signal = row.record.signals?.[view.signal] ? view.signal : Object.keys(row.record.signals || {})[0] || "unknown";
+    return `<tr><th scope="row">${fmtInt(row.index + 1)}</th><td>${esc(row.file)}</td><td>${esc(signal)}</td><td>${fmtInt(row.values.length)}</td><td>${esc(String(row.px))}</td><td>${esc(String(row.py))}</td><td>${esc(row.partition || "none")}</td><td>${esc(row.target == null ? "none" : `${row.targetKey}: ${row.target}`)}</td></tr>`;
+  }).join("");
 }
 
 function drawTargets(ctx, w, h, view) {
@@ -2467,6 +2528,7 @@ function datasetStatus() {
     return `${missing.length} required companion file${missing.length > 1 ? "s" : ""} missing: ${names}${more}.`;
   }
   if (state.plan?.blocked) return state.plan.warnings?.[0] || "Dataset inference failed. Review the inference warnings.";
+  if (state.tableAssemblyError) return `Dataset assembly failed: ${state.tableAssemblyError}`;
   const structure = decisionLabel(state.plan?.structure?.value || "unknown");
   const score = state.plan?.overall_score == null ? "" : `, io score ${fmtNum(state.plan.overall_score, 3)}`;
   const excluded = exclusions.length
