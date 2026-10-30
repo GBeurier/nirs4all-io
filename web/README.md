@@ -46,6 +46,10 @@ axis, browser inference parameters, warnings, and recommendations. The
 `Dataset properties` form is pre-filled from `nirs4all-io` and edits the
 canonical `DatasetSpec` fields for identity, repetitions, partitions/folds,
 aggregation, sources, joins, column selectors, and loading parameters.
+The JSON editor, clipboard, and download use the IO WASM canonical serializer.
+JSON edits are applied when the editor loses focus; invalid drafts keep the last
+accepted spec and disable export until corrected or reset. Form edits preserve
+loading options authored in JSON, including NA fill settings.
 The same panel also reads the `nirs4all-formats` WASM registry at runtime and
 shows the compiled reader catalog, including optional HDF5/NetCDF, MATLAB/RData,
 and Parquet support in the default bundle.
@@ -75,6 +79,16 @@ node tests/standalone-smoke.mjs
 node tests/standalone-formats-smoke.mjs
 node tests/standalone-all-samples-smoke.mjs
 ```
+
+To check the served main page with the same smoke test, start the local HTTP
+server and run:
+
+```bash
+N4IO_PAGE_URL=http://localhost:8080/ node tests/standalone-smoke.mjs
+```
+
+The smoke test also checks JSON editing, invalid-draft recovery, loading-option
+preservation, and byte-exact canonical downloads and clipboard output.
 
 If Playwright is not installed in this directory, point `PLAYWRIGHT_MODULE` at an
 installed `playwright/index.mjs`. The test opens the standalone file through
