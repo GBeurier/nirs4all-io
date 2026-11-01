@@ -5,6 +5,7 @@ const state = {
   files: [],
   decoded: [],
   plan: null,
+  tablePlan: null,
   spec: null,
   activeViz: "spectra",
   activeSignal: "",
@@ -71,7 +72,11 @@ function exposeApp() {
     state,
     getIo: () => io,
     usableFilesForIo,
+    assemblyInputsForIo,
     recordSetsForIo,
+    assemblePreview,
+    missingValueSummary,
+    missingRowsLabel,
     renderAll,
     drawViz,
     datasetView,
@@ -94,6 +99,16 @@ function setMode(mode) {
   $$("#modeToggle [data-mode]").forEach((btn) => btn.classList.toggle("active", btn.dataset.mode === mode));
   if (state.files.length) recompute();
   else renderAll();
+}
+
+// Assembly reads generic delimited tables from bytes: IO's table loader owns
+// their NA policy and row identity, whereas decoded records omit incomplete
+// rows. Inference keeps the decoded records it is qualified with.
+function assemblyInputsForIo() {
+  const { files, recordSets } = usableFilesForIo();
+  const vendorSets = recordSets.filter((set) => set.format !== "delimited-text");
+  const decodedNames = new Set(vendorSets.map((set) => set.source));
+  return { files: files.filter((file) => !decodedNames.has(file.name)), recordSets: vendorSets };
 }
 
 function usableFilesForIo() {
@@ -294,6 +309,7 @@ async function addFiles(files) {
   if (!await runtimeReady) return;
   setStatus(`Reading ${files.length} file${files.length > 1 ? "s" : ""}...`);
   try {
+    await showProgress(`Reading ${files.length} file${files.length > 1 ? "s" : ""}`, 0, 1);
     const loaded = await Promise.all(files.map(async (file) => ({
       name: browserFileName(file),
       size: file.size,
@@ -307,6 +323,7 @@ async function addFiles(files) {
     }
     await recompute();
   } catch (err) {
+    hideProgress();
     state.validation = { ok: false, message: err.message || String(err) };
     renderValidationBadge();
     renderSpecActions();
@@ -402,28 +419,65 @@ async function loadSampleFiles() {
   }));
 }
 
-async function recompute() {
+// Recomputations yield between steps, so serialize them: a drop during a long
+// load must not interleave with the run that is still reading state.
+let recomputeQueue = Promise.resolve();
+function recompute() {
+  recomputeQueue = recomputeQueue.then(runRecompute, runRecompute);
+  return recomputeQueue;
+}
+
+async function runRecompute() {
   state.specEditError = null;
   state.tableAssemblyError = null;
   state.auxiliaryAssembly = null;
   state.assembled = null;
   state.assembleError = null;
-  annotateProbes();
-  annotateSidecars();
-  await decodeFiles();
-  if (state.mode === "builder" && window.NIRS4ALL_BUILDER) {
-    await window.NIRS4ALL_BUILDER.runProposeCycle();
-    return;
+  // Each IO pass reads every table, so it weighs more than one file decode.
+  const total = state.files.length + 10;
+  let done = 0;
+  const step = (label, weight = 1) => {
+    const shown = showProgress(label, done, total);
+    done += weight;
+    return shown;
+  };
+  try {
+    await step("Reading file signatures");
+    annotateProbes();
+    annotateSidecars();
+    await decodeFiles(step);
+    if (state.mode === "builder" && window.NIRS4ALL_BUILDER) {
+      await step("Proposing dataset decisions with nirs4all-io", 6);
+      await window.NIRS4ALL_BUILDER.runProposeCycle();
+      return;
+    }
+    await step("Inferring the dataset structure with nirs4all-io", 3);
+    await inferDataset();
+    state.spec = state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : null;
+    await step("Assembling tables and checking missing values with nirs4all-io", 3);
+    validateSpec();
+    chooseDefaultSignal();
+    chooseDefaultTarget();
+    const view = datasetView();
+    if (!state.userVizSelected && (view.targetValues.length || view.targetPreviewValues.length)) state.activeViz = "targets";
+    setStatus(datasetStatus());
+    renderAll();
+  } finally {
+    hideProgress();
   }
-  await inferDataset();
-  state.spec = state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : null;
-  validateSpec();
-  chooseDefaultSignal();
-  chooseDefaultTarget();
-  const view = datasetView();
-  if (!state.userVizSelected && (view.targetValues.length || view.targetPreviewValues.length)) state.activeViz = "targets";
-  setStatus(datasetStatus());
-  renderAll();
+}
+
+// WASM calls run synchronously on the main thread; yield one painted frame
+// before each step so the progress indicator stays current on large datasets.
+async function showProgress(label, done, total) {
+  $("#progress").hidden = false;
+  $("#progressLabel").textContent = label;
+  $("#progressBar").style.width = `${Math.round((100 * done) / total)}%`;
+  await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+}
+
+function hideProgress() {
+  $("#progress").hidden = true;
 }
 
 function annotateProbes() {
@@ -450,13 +504,15 @@ function annotateSidecars() {
   }
 }
 
-async function decodeFiles() {
+async function decodeFiles(step) {
   state.decoded = [];
   if (!formats) return;
   const usedAsSidecar = sidecarUsage();
+  await step("Detecting target and metadata tables with nirs4all-io", 3);
   const auxiliaryTables = inferAuxiliaryTables();
-  for (const file of state.files) {
+  for (const [index, file] of state.files.entries()) {
     if (usedAsSidecar.has(file.name) || auxiliaryTables.has(file.name)) continue;
+    await step(`Decoding ${baseName(file.name)} (${index + 1}/${state.files.length})`);
     const missing = missingRequired(file);
     if (missing.length) {
       state.decoded.push({ ok: false, file: file.name, skipped: true, missing });
@@ -481,9 +537,11 @@ async function decodeFiles() {
 // wavelength headers and numeric metadata cannot become decoded spectra.
 function inferAuxiliaryTables() {
   const tables = new Set();
+  state.tablePlan = null;
   if (!io?.inferDataset || !state.files.length) return tables;
   try {
     const plan = io.inferDataset(state.files.map((f) => ({ name: f.name, bytes: f.bytes })), [], {});
+    state.tablePlan = plan;
     for (const source of plan?.resolved_spec?.sources || []) {
       if (!["targets", "metadata", "weights"].includes(source.role)) continue;
       for (const input of asInputList(source.input)) {
@@ -522,11 +580,12 @@ async function inferDataset() {
     return;
   }
   try {
-    state.plan = io.inferDataset(
-      usableFiles.map((f) => ({ name: f.name, bytes: f.bytes })),
-      recordSetsForIo(),
-      {}
-    );
+    const recordSets = recordSetsForIo();
+    // Without vendor records the inference request is the one already answered
+    // by inferAuxiliaryTables; reuse it rather than re-reading every table.
+    state.plan = !recordSets.length && usableFiles.length === state.files.length && state.tablePlan
+      ? state.tablePlan
+      : io.inferDataset(usableFiles.map((f) => ({ name: f.name, bytes: f.bytes })), recordSets, {});
     const exclusions = inferenceExclusions();
     if (exclusions.length) {
       state.plan.warnings = [
@@ -561,6 +620,7 @@ function reset() {
   state.files = [];
   state.decoded = [];
   state.plan = null;
+  state.tablePlan = null;
   state.spec = null;
   state.activeSignal = "";
   state.activeTarget = "";
@@ -666,14 +726,28 @@ function renderDatasetAlerts() {
   const missing = missingSidecarAlerts();
   const refusals = nonSpectralRefusals();
   const failures = formatDecodeFailures();
-  if (!missing.length && !refusals.length && !failures.length && !state.tableAssemblyError) {
+  const assembly = auxiliaryAssembly();
+  const naWarnings = assembly?.missing || [];
+  if (!missing.length && !refusals.length && !failures.length && !state.tableAssemblyError && !naWarnings.length) {
     host.innerHTML = "";
     return;
   }
   const blocks = [];
+  if (naWarnings.length) blocks.push(`<div class="dataset-alert">
+    <div class="alert-head"><strong>Missing values kept in the dataset preview</strong></div>
+    <div class="alert-list">
+      ${assembly.naAbort ? `<div class="alert-row alert-note">The current NA policy refuses these tables (${esc(assembly.naAbort)}) Choose an NA policy in Dataset properties before using this spec in a pipeline. Records with missing signal values are hidden from the spectra and heatmap views.</div>` : ""}
+      ${naWarnings.map((item) => `<div class="alert-row">
+        <span class="alert-path">${esc(item.label)}</span>
+        <span>${esc(item.partition)}</span>
+        <span>${fmtInt(item.rows.length)} of ${fmtInt(item.total)} samples</span>
+        <span title="${esc(item.rows.join(", "))}">${esc(missingRowsLabel(item.rows))}</span>
+      </div>`).join("")}
+    </div>
+  </div>`);
   if (state.tableAssemblyError) blocks.push(`<div class="dataset-alert refusal-alert">
     <div class="alert-head"><strong>Dataset assembly could not validate the tables</strong></div>
-    <div class="alert-list"><div class="alert-row">${esc(state.tableAssemblyError)}</div></div>
+    <div class="alert-list"><div class="alert-row alert-note">${esc(state.tableAssemblyError)}</div></div>
   </div>`);
   if (missing.length) blocks.push(`<div class="dataset-alert">
     <div class="alert-head">
@@ -1848,9 +1922,10 @@ function auxiliaryAssembly({ materialize = false } = {}) {
   if (!materialize) return null;
   const result = { key, decoded: state.decoded, files: [...state.files], blocks: null, error: null };
   try {
-    const { files, recordSets } = usableFilesForIo();
-    const decodedNames = new Set(recordSets.map((record) => record.source));
-    const assembled = io.assembleDataset(files.filter((file) => !decodedNames.has(file.name)), recordSets, JSON.stringify(state.spec));
+    const { files, recordSets } = assemblyInputsForIo();
+    const assembled = assemblePreview(files, recordSets, state.spec);
+    result.naAbort = assembled.naAbort;
+    result.missing = missingValueSummary(assembled);
     // Retain only the table preview, not another copy of the large X matrices.
     result.blocks = Object.fromEntries(Object.entries(assembled.blocks || {}).map(([partition, block]) => [partition, {
       n_samples: block.n_samples, source_ids: block.source_ids,
@@ -1861,6 +1936,65 @@ function auxiliaryAssembly({ materialize = false } = {}) {
   }
   state.auxiliaryAssembly = result;
   return result;
+}
+
+// Missing values must not block exploration: when the spec's NA policy aborts,
+// re-materialize the preview with missing values kept. IO then reports where
+// they are, and the exported spec keeps the policy the user chose.
+function assemblePreview(files, recordSets, spec) {
+  try {
+    return io.assembleDataset(files, recordSets, JSON.stringify(spec));
+  } catch (err) {
+    const message = String(err?.message || err);
+    if (!message.includes("na_policy is 'abort'")) throw err;
+    const assembled = io.assembleDataset(files, recordSets, JSON.stringify(keepMissingValues(spec)));
+    assembled.naAbort = message;
+    return assembled;
+  }
+}
+
+// Locate the missing (null) cells of IO's materialized preview, per partition
+// and column, as 1-based sample positions.
+function missingValueSummary(assembled) {
+  const lines = [];
+  const report = (partition, label, isMissing, total) => {
+    const rows = [];
+    for (let row = 0; row < total; row++) if (isMissing(row)) rows.push(row + 1);
+    if (rows.length) lines.push({ partition, label, rows, total });
+  };
+  for (const [partition, block] of Object.entries(assembled.blocks || {})) {
+    (block.x || []).forEach((matrix, index) => {
+      report(partition, `X ${block.source_ids?.[index] || index + 1}`, (row) => {
+        for (let col = 0; col < matrix.n_cols; col++) if (matrix.data[row * matrix.n_cols + col] == null) return true;
+        return false;
+      }, matrix.n_rows);
+    });
+    (block.y_headers || []).forEach((header, col) => {
+      report(partition, `y '${header}'`, (row) => block.y.data[row * block.y.n_cols + col] == null, block.y.n_rows);
+    });
+    for (const column of block.metadata?.columns || []) {
+      report(partition, `metadata '${column.name}'`, (row) => column.values[row] == null, column.values.length);
+    }
+  }
+  return lines;
+}
+
+function missingRowsLabel(rows) {
+  return `row${rows.length > 1 ? "s" : ""} ${rows.slice(0, 5).map(fmtInt).join(", ")}${rows.length > 5 ? ", ..." : ""}`;
+}
+
+function keepMissingValues(spec) {
+  const aborts = (na, inherited) => na?.policy === "abort" || (inherited && (!na?.policy || na.policy === "auto"));
+  const keep = (params, inherited) => aborts(params?.na, inherited) ? { ...params, na: { ...params?.na, policy: "ignore" } } : params;
+  return {
+    ...spec,
+    params: keep(spec.params || {}, true),
+    sources: (spec.sources || []).map((source) => ({
+      ...source,
+      params: keep(source.params, false),
+      ...(source.variations ? { variations: source.variations.map((variation) => ({ ...variation, params: keep(variation.params, false) })) } : {}),
+    })),
+  };
 }
 
 function renderValidationBadge() {
@@ -1926,6 +2060,8 @@ function datasetView() {
       metadata: record.metadata || {},
       file: record.__file,
       signal: arr,
+      // Hidden from the views that cannot draw a partial spectrum (see drawViz).
+      missing: values.length !== (arr?.values || []).length,
     };
   }).filter((r) => r.values.length);
   const first = rows[0] || null;
@@ -2090,10 +2226,15 @@ function drawViz() {
     drawEmpty(ctx, rect.width, rect.height);
     return;
   }
-  if (state.activeViz === "heatmap") drawHeatmap(ctx, rect.width, rect.height, view);
-  else if (state.activeViz === "scatter") drawScatter(ctx, rect.width, rect.height, view);
+  if (state.activeViz === "scatter") drawScatter(ctx, rect.width, rect.height, view);
   else if (state.activeViz === "targets") drawTargets(ctx, rect.width, rect.height, view);
-  else drawSpectra(ctx, rect.width, rect.height, view);
+  else {
+    const complete = { ...view, rows: view.rows.filter((row) => !row.missing) };
+    if (state.activeViz === "heatmap") drawHeatmap(ctx, rect.width, rect.height, complete);
+    else drawSpectra(ctx, rect.width, rect.height, complete);
+    const hidden = view.rows.length - complete.rows.length;
+    if (hidden) $("#legend").insertAdjacentHTML("beforeend", `<span>${fmtInt(hidden)} record${hidden > 1 ? "s" : ""} with missing signal values hidden</span>`);
+  }
 }
 
 function drawEmpty(ctx, w, h) {

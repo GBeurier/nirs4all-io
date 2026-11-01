@@ -137,15 +137,12 @@ async function materializePreview() {
     return;
   }
   try {
-    const { files, recordSets } = app.usableFilesForIo();
     // proposeDataset discovers sources from the file list (by name), so it needs
     // every file; assembleDataset instead resolves each spec `input` against the
-    // union of files + record sets and rejects a name present in both. Drop the
-    // raw bytes of any file already decoded into a record set (records win —
-    // vendor formats can't be re-read from bytes) so each input resolves once.
-    const decodedNames = new Set(recordSets.map((r) => r.source));
-    const assembleFiles = files.filter((f) => !decodedNames.has(f.name));
-    s.assembled = io.assembleDataset(assembleFiles, recordSets, JSON.stringify(s.workingSpec));
+    // union of files + record sets and rejects a name present in both, so each
+    // input is sent once (vendor records, or table bytes).
+    const { files, recordSets } = app.assemblyInputsForIo();
+    s.assembled = app.assemblePreview(files, recordSets, s.workingSpec);
   } catch (err) {
     s.assembleError = String(err?.message || err);
   }
@@ -385,7 +382,10 @@ function renderPreview() {
     })
     .join("");
   const folds = (a.folds || []).length ? `<div class="preview-foot">${a.folds.length} fold(s)</div>` : "";
-  host.innerHTML = blocks + folds;
+  const missing = APP().missingValueSummary(a).map((item) =>
+    `<div class="preview-foot">${esc(`${item.partition} · ${item.label}: ${item.rows.length} of ${item.total} samples missing (${APP().missingRowsLabel(item.rows)})`)}</div>`).join("");
+  const refused = a.naAbort ? `<div class="preview-foot">Missing values are kept for the preview; the current NA policy refuses them when loading.</div>` : "";
+  host.innerHTML = blocks + folds + refused + missing;
 }
 
 // --------------------------------------------------------------------------- //
