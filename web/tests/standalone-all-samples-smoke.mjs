@@ -164,7 +164,9 @@ async function runCase(page, testCase) {
     if (state.sourceRows < 1) {
       throw withState("loaded but no DatasetSpec source rows were rendered", state);
     }
-    if (lower.includes("missing")) {
+    // Match the page's missing-file wording only: reader metadata keys such as
+    // `missing_value_count` legitimately contain the word.
+    if (/required companion files? missing|missing sidecar/.test(lower)) {
       throw withState("loaded with a missing-file alert", state);
     }
     if (state.canvasNonWhite < 1000) {

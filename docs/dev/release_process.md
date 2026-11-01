@@ -278,7 +278,7 @@ rustc toolchain is declared in SystemRequirements.
 
 Test environments: local Ubuntu/WSL2 R release (offline standalone install ->
 installs, loads, native path active); CI matrix (release-r.yml) on Ubuntu 22.04
-(R release + devel), macOS 14 (R release, arm64), Windows Server 2022 (R
+(R release + devel), macOS 15 (R release, arm64), Windows Server 2022 (R
 release); win-builder + R-hub v2 run manually before submission.
 
 R CMD check --as-cran: 0 ERRORs. Any WARNING/NOTE comes from the bundled

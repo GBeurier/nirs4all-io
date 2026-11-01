@@ -46,7 +46,7 @@ jobs:
           fi
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
