@@ -5,7 +5,7 @@
     "Gregory Beurier <gregory.beurier@cirad.fr>"
   ],
   "description": "WebAssembly bindings for nirs4all-formats.",
-  "version": "0.2.9",
+  "version": "0.2.14",
   "license": "CECILL-2.1 OR AGPL-3.0-or-later",
   "repository": {
     "type": "git",
