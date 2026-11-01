@@ -556,6 +556,38 @@ svg { width: 1em; height: 1em; }
   font-size: .84rem;
 }
 
+.progress-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 30;
+  width: min(440px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  box-shadow: var(--shadow-strong);
+  color: var(--muted);
+  font-size: .84rem;
+}
+.progress-toast[hidden] { display: none; }
+.progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--teal-soft);
+}
+.progress-track span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--teal);
+  transition: width .2s ease;
+}
+
 .dataset-map {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -693,6 +725,10 @@ svg { width: 1em; height: 1em; }
   align-items: center;
   color: var(--muted);
   font-size: .73rem;
+}
+.alert-note {
+  display: block;
+  line-height: 1.5;
 }
 .alert-row span {
   min-width: 0;
