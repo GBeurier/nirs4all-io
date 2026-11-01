@@ -592,6 +592,11 @@ fn load_source_frame_mem(
     // Removing rows independently loses positional correspondence between X,
     // targets, metadata and variations. Keep original rows until joining.
     defer_sample_removal(&mut params);
+    // nirs4all parity: metadata permits missing values and joins sample removal
+    // only when that policy is explicitly requested.
+    if source.role == Role::Metadata {
+        params.na.policy = NaPolicy::Ignore;
+    }
     let matched = resolve_inputs_mem(&source.input, sources)?;
     if matched.is_empty() {
         return Err(SpecError::new(format!(
@@ -2170,6 +2175,33 @@ mod tests {
             block.metadata.as_ref().unwrap().str_column("label"),
             vec!["a", "f"]
         );
+    }
+
+    #[test]
+    fn metadata_keeps_missing_values_under_the_dataset_policy() {
+        // nirs4all parity: metadata ignores the dataset NA policy unless it is remove_sample.
+        let spec = DatasetSpec::from_value(&json!({
+            "params": {"na": {"policy": "abort"}},
+            "sources": [
+                {"id": "x", "role": "features", "input": "x.csv"},
+                {"id": "y", "role": "targets", "input": "y.csv"},
+                {"id": "m", "role": "metadata", "input": "m.csv"}
+            ]
+        }))
+        .unwrap();
+        let sources: Vec<_> = [
+            ("x", "w\n1\n2\n3\n"),
+            ("y", "y\n1\n2\n3\n"),
+            ("m", "location;site\n;s1\nfield;\n;s3\n"),
+        ]
+        .into_iter()
+        .map(|(name, text)| InMemorySource {
+            name: format!("{name}.csv"),
+            payload: SourcePayload::Bytes(text.as_bytes().to_vec()),
+        })
+        .collect();
+        let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap();
+        assert_eq!(assembled.blocks["train"].n_samples, 3);
     }
 
     #[test]

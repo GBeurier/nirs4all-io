@@ -121,7 +121,9 @@ def _resolve_inputs(source: SourceSpec, base_dir: Path) -> list[Path]:
 
 def _load_source_frame(source: SourceSpec, spec: DatasetSpec, base_dir: Path, audits: list[dict]) -> tuple[pd.DataFrame, str, str | None, list[str] | None]:
     params = effective_params(spec.params, source.params)
-    if params.na.policy is NaPolicy.REMOVE_SAMPLE:
+    # nirs4all parity: metadata permits missing values and joins sample removal
+    # only when that policy is explicitly requested.
+    if params.na.policy is NaPolicy.REMOVE_SAMPLE or source.role is Role.METADATA:
         params.na = replace(params.na, policy=NaPolicy.IGNORE)
     paths = _resolve_inputs(source, base_dir)
     if not paths:

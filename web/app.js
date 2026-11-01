@@ -2376,7 +2376,9 @@ function renderScatterData(view, rows, omitted = 0) {
 
 function drawTargets(ctx, w, h, view) {
   const rows = view.rows.filter((r) => r.target != null);
-  const samples = rows.length
+  // Spectrum alignment may cover only part of IO's y values (e.g. one source
+  // without sample ids and a different row count); never plot that subset.
+  const samples = rows.length && rows.length >= view.targetPreviewValues.length
     ? rows.map((r) => ({ key: r.targetKey, value: r.target, aligned: true }))
     : view.targetPreviewValues.map((item) => ({ key: item.key, value: item.value, aligned: false }));
   const box = plotBox(w, h);
