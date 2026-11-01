@@ -77,3 +77,21 @@ def test_blank_target_is_not_silently_skipped_under_strict_policy(tmp_path, poli
             {"id": "x", "role": "features", "input": "x.csv"},
             {"id": "y", "role": "targets", "input": "y.csv"},
         ]}, base_dir=tmp_path, target="assembled")
+
+
+def test_metadata_keeps_missing_values_under_the_dataset_policy(tmp_path):
+    # nirs4all parity: metadata ignores the dataset NA policy unless it is remove_sample.
+    (tmp_path / "x.csv").write_text("w\n1\n2\n3\n")
+    (tmp_path / "y.csv").write_text("y\n1\n2\n3\n")
+    (tmp_path / "m.csv").write_text("location;site\n;s1\nfield;\n;s3\n")
+    sources = [
+        {"id": "x", "role": "features", "input": "x.csv"},
+        {"id": "y", "role": "targets", "input": "y.csv"},
+        {"id": "m", "role": "metadata", "input": "m.csv"},
+    ]
+    block = nio.load({"params": {"na": {"policy": "abort"}}, "sources": sources}, base_dir=tmp_path, target="assembled").blocks["train"]
+    assert block.n_samples == 3
+    assert list(block.metadata["site"].isna()) == [False, True, False]
+    (tmp_path / "y.csv").write_text("y\n1\n\n3\n")
+    with pytest.raises(nio.SpecError, match="na_policy is 'abort'"):
+        nio.load({"sources": sources}, base_dir=tmp_path, target="assembled")
