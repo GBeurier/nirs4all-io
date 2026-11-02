@@ -386,11 +386,13 @@ impl Frame {
     /// `coerce_numeric(df[cols])` → row-major `f32` matrix (non-numeric → NaN).
     pub fn coerce_numeric(&self, cols: &[String]) -> Matrix {
         let n_cols = cols.len();
+        // Resolve each column once: a per-cell name lookup is quadratic in the
+        // column count, which dominates wide spectral tables.
+        let columns: Vec<Option<&Column>> = cols.iter().map(|name| self.column(name)).collect();
         let mut data = Vec::with_capacity(self.n_rows * n_cols);
         for row in 0..self.n_rows {
-            for name in cols {
-                let v = self
-                    .column(name)
+            for column in &columns {
+                let v = column
                     .map(|c| c.values[row].to_numeric())
                     .unwrap_or(f64::NAN);
                 data.push(v as f32);

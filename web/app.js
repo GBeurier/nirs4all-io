@@ -51,6 +51,9 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtInt = (n) => Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : "-";
 const fmtNum = (n, d = 4) => Number.isFinite(n) ? Number(n.toPrecision(d)).toString() : "-";
+// Displayed data values keep six significant digits: raw doubles expose float
+// artifacts such as 0.30000000000000004.
+const fmtValue = (v) => typeof v === "number" ? fmtNum(v, 6) : String(v);
 const baseName = (name) => String(name || "").replace(/\\/g, "/").split("/").pop();
 const dirName = (name) => {
   const s = String(name || "").replace(/\\/g, "/");
@@ -2370,7 +2373,7 @@ function renderScatterData(view, rows, omitted = 0) {
   $("#scatterSummary").textContent = `${scope}${ranges}${omitted ? ` ${fmtInt(omitted)} records omitted because their calculated coordinates are not finite.` : ""} ${color}`;
   $("#scatterValues").innerHTML = rows.map((row) => {
     const signal = row.record.signals?.[view.signal] ? view.signal : Object.keys(row.record.signals || {})[0] || "unknown";
-    return `<tr><th scope="row">${fmtInt(row.index + 1)}</th><td>${esc(row.file)}</td><td>${esc(signal)}</td><td>${fmtInt(row.values.length)}</td><td>${esc(String(row.px))}</td><td>${esc(String(row.py))}</td><td>${esc(row.partition || "none")}</td><td>${esc(row.target == null ? "none" : `${row.targetKey}: ${row.target}`)}</td></tr>`;
+    return `<tr><th scope="row">${fmtInt(row.index + 1)}</th><td>${esc(row.file)}</td><td>${esc(signal)}</td><td>${fmtInt(row.values.length)}</td><td>${esc(fmtValue(row.px))}</td><td>${esc(fmtValue(row.py))}</td><td>${esc(row.partition || "none")}</td><td>${esc(row.target == null ? "none" : `${row.targetKey}: ${fmtValue(row.target)}`)}</td></tr>`;
   }).join("");
 }
 
@@ -2519,7 +2522,7 @@ function columnStats(rows) {
 function colorFor(row, i) {
   if (state.colorBy === "partition") return colorToken(row.partition || "none");
   if (state.colorBy === "index") return PALETTE[i % PALETTE.length];
-  return colorToken(String(row.target ?? "none"));
+  return colorToken(fmtValue(row.target ?? "none"));
 }
 
 function colorToken(token) {
@@ -2529,7 +2532,7 @@ function colorToken(token) {
 }
 
 function legendFor(rows) {
-  const tokens = [...new Set(rows.map((r) => state.colorBy === "partition" ? (r.partition || "none") : String(r.target ?? "none")))].slice(0, 8);
+  const tokens = [...new Set(rows.map((r) => state.colorBy === "partition" ? (r.partition || "none") : fmtValue(r.target ?? "none")))].slice(0, 8);
   return tokens.map((t) => `<span class="legend-item"><span class="sw" style="background:${colorToken(t)}"></span>${esc(t)}</span>`).join("");
 }
 

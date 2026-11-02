@@ -118,8 +118,9 @@ pub fn infer_named_bytes(
     };
 
     enrich_params(&mut spec_dict, &by_name, &mut plan);
-    infer_identity_and_alignment(&mut spec_dict, &by_name, &mut plan);
-    infer_signal_and_task(&mut spec_dict, &by_name, &mut plan);
+    let mut tables = TableCache::default();
+    infer_identity_and_alignment(&mut spec_dict, &by_name, &mut tables, &mut plan);
+    infer_signal_and_task(&mut spec_dict, &by_name, &mut tables, &mut plan);
     if let Some(t) = &plan.task_type {
         if matches!(t.value.as_str(), Some("binary") | Some("multiclass")) {
             if let Some(agg) = spec_dict
@@ -1433,9 +1434,36 @@ fn enrich_params(
     }
 }
 
+/// Parsed tables shared by the inference steps that read the same source, so a
+/// wide feature table is decoded once per inference.
+#[derive(Default)]
+struct TableCache {
+    entries: Vec<(String, Value, Option<MemTable>)>,
+}
+
+impl TableCache {
+    fn read(&mut self, file: &NamedBytes, source: &Value) -> Option<&MemTable> {
+        let params = source.get("params").cloned().unwrap_or(Value::Null);
+        let index = match self
+            .entries
+            .iter()
+            .position(|(name, cached, _)| name == &file.name && cached == &params)
+        {
+            Some(index) => index,
+            None => {
+                let table = read_table_bytes(&file.bytes, &params_from(source));
+                self.entries.push((file.name.clone(), params, table));
+                self.entries.len() - 1
+            }
+        };
+        self.entries[index].2.as_ref()
+    }
+}
+
 fn infer_identity_and_alignment(
     spec_dict: &mut Value,
     by_name: &HashMap<String, &NamedBytes>,
+    tables: &mut TableCache,
     plan: &mut DatasetPlan,
 ) {
     if plan.identity.is_some() {
@@ -1464,7 +1492,7 @@ fn infer_identity_and_alignment(
     let Some(file) = by_name.get(&first) else {
         return;
     };
-    let Some(table) = read_table_bytes(&file.bytes, &params_from(feature_src)) else {
+    let Some(table) = tables.read(file, feature_src) else {
         return;
     };
     let profile = table.to_table_profile();
@@ -1484,7 +1512,7 @@ fn infer_identity_and_alignment(
             json!({"by": "id", "key": id_guess.column.clone()}),
         );
         if let Some((observation_col, repetition_col, params)) =
-            infer_table_repetition(&table, Some(id_guess.column.as_str()))
+            infer_table_repetition(table, Some(id_guess.column.as_str()))
         {
             apply_repetition_fields(spec, observation_col.as_deref(), repetition_col.as_deref());
             plan.params
@@ -1498,6 +1526,7 @@ fn infer_identity_and_alignment(
 fn infer_signal_and_task(
     spec_dict: &mut Value,
     by_name: &HashMap<String, &NamedBytes>,
+    tables: &mut TableCache,
     plan: &mut DatasetPlan,
 ) {
     let sources = spec_dict
@@ -1519,11 +1548,11 @@ fn infer_signal_and_task(
     let Some(file) = by_name.get(&first) else {
         return;
     };
-    let Some(table) = read_table_bytes(&file.bytes, &params_from(feature_src)) else {
+    let Some(table) = tables.read(file, feature_src) else {
         return;
     };
 
-    let mut feature_cols = resolve_role_columns(feature_src, &table, "features");
+    let mut feature_cols = resolve_role_columns(feature_src, table, "features");
     if feature_cols.is_empty() {
         feature_cols = table
             .column_names()
@@ -1562,7 +1591,7 @@ fn infer_signal_and_task(
         });
     }
 
-    if let Some((values, where_)) = first_target_values(&sources, feature_src, &table, by_name) {
+    if let Some((values, where_)) = first_target_values(&sources, feature_src, table, by_name) {
         if !values.is_empty() {
             let (task, tscore) = detect_task_type(&values, 0.05);
             plan.task_type = Some(Decision::new(
@@ -1764,11 +1793,13 @@ impl MemTable {
     }
 
     fn feature_matrix_f32(&self, cols: &[String]) -> (Vec<f64>, usize) {
+        // Resolve each column once: a per-cell name lookup is quadratic in the
+        // column count, which dominates wide spectral tables.
+        let columns: Vec<_> = cols.iter().map(|name| self.column(name)).collect();
         let mut data = Vec::with_capacity(self.n_rows * cols.len());
         for row in 0..self.n_rows {
-            for name in cols {
-                let v = self
-                    .column(name)
+            for column in &columns {
+                let v = column
                     .map(|c| c.values[row].to_numeric())
                     .unwrap_or(f64::NAN);
                 data.push(v as f32 as f64);
