@@ -341,3 +341,7 @@ existing CLI conformance tests exercise this. Library consumers and reader
 byte/shape budgets are unchanged. Absolute role-tagged paths use Windows native
 canonicalization to compare long, DOS 8.3 and verbatim spellings consistently;
 all byte reads remain capability-rooted and confined to the dataset directory.
+
+For 0.2.12, the WASM legal-closure checksum was reviewed against 0.2.11: all 55
+license expressions are unchanged. Only the two owner packages change identity
+from 0.2.11 to 0.2.12. Third-party pinned license-file checks remain enforced.
