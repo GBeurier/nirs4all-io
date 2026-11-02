@@ -614,10 +614,12 @@ fn infer_single_file(file: &NamedBytes, plan: &mut DatasetPlan) -> Result<Value,
     if let Some((observation_col, repetition_col, params)) =
         infer_table_repetition(&table, id_col.as_deref())
     {
+        let repeats = !params["avg_reps"].is_null();
         apply_repetition_fields(
             &mut spec,
             observation_col.as_deref(),
             repetition_col.as_deref(),
+            repeats,
         );
         plan.params
             .as_object_mut()
@@ -1212,7 +1214,7 @@ fn infer_decoded_repetition(
     );
     let Some(sample_key) = sample_key else {
         if let Some(rep_key) = repetition_key {
-            apply_repetition_fields(spec_dict, None, Some(&rep_key));
+            apply_repetition_fields(spec_dict, None, Some(&rep_key), false);
             plan.params.as_object_mut().unwrap().insert(
                 "repetition".into(),
                 json!({
@@ -1237,7 +1239,12 @@ fn infer_decoded_repetition(
     let repetition_ref = repetition_key;
 
     if profile.is_repetition || repetition_ref.is_some() {
-        apply_repetition_fields(spec_dict, Some(&observation_ref), repetition_ref.as_deref());
+        apply_repetition_fields(
+            spec_dict,
+            Some(&observation_ref),
+            repetition_ref.as_deref(),
+            profile.is_repetition,
+        );
         let mut evidence = vec![if profile.is_repetition {
             format!(
                 "decoded metadata '{sample_key}' groups {} records into {} observation(s), avg {} reps",
@@ -1325,10 +1332,17 @@ fn infer_table_repetition(
     }
 }
 
+/// Record the inferred identity columns. `repetition_id` is the per-scan index
+/// (`rep`, `scan_id`, ...): it stays an identity column and never becomes the
+/// top-level `repetition`, which names the column whose equal values are
+/// repeated measurements of one physical sample (nirs4all `set_repetition`).
+/// That grouping is only proposed when the observation id systematically
+/// repeats, as the native inference does.
 fn apply_repetition_fields(
     spec_dict: &mut Map<String, Value>,
     observation_id: Option<&str>,
     repetition_id: Option<&str>,
+    repeats: bool,
 ) {
     let si = spec_dict
         .entry("sample_index")
@@ -1342,7 +1356,9 @@ fn apply_repetition_fields(
     }
     if let Some(repetition_id) = repetition_id {
         si.insert("repetition_id".into(), json!(repetition_id));
-        spec_dict.insert("repetition".into(), json!(repetition_id));
+    }
+    if let (true, Some(observation_id)) = (repeats, observation_id) {
+        spec_dict.insert("repetition".into(), json!(observation_id));
     }
 }
 
@@ -1514,7 +1530,13 @@ fn infer_identity_and_alignment(
         if let Some((observation_col, repetition_col, params)) =
             infer_table_repetition(table, Some(id_guess.column.as_str()))
         {
-            apply_repetition_fields(spec, observation_col.as_deref(), repetition_col.as_deref());
+            let repeats = !params["avg_reps"].is_null();
+            apply_repetition_fields(
+                spec,
+                observation_col.as_deref(),
+                repetition_col.as_deref(),
+                repeats,
+            );
             plan.params
                 .as_object_mut()
                 .unwrap()
@@ -2219,7 +2241,9 @@ mod tests {
         assert_eq!(spec["sample_index"]["key"], json!("sample_id"));
         assert_eq!(spec["sample_index"]["observation_id"], json!("sample_id"));
         assert_eq!(spec["sample_index"]["repetition_id"], json!("replicate"));
-        assert_eq!(spec["repetition"], json!("replicate"));
+        // The per-scan index stays an identity column; the grouping key for
+        // repeated measurements is the sample id.
+        assert_eq!(spec["repetition"], json!("sample_id"));
 
         let source = &spec["sources"][0];
         assert_eq!(source["role"], json!("mixed"));
@@ -2269,7 +2293,7 @@ mod tests {
         let spec = plan.resolved_spec.unwrap().to_value();
         assert_eq!(spec["sample_index"]["observation_id"], json!("sample_id"));
         assert_eq!(spec["sample_index"]["repetition_id"], json!("replicate"));
-        assert_eq!(spec["repetition"], json!("replicate"));
+        assert_eq!(spec["repetition"], json!("sample_id"));
         assert_eq!(plan.params["repetition"]["avg_reps"], json!(1.5));
     }
 
