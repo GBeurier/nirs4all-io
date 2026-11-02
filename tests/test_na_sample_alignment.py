@@ -157,3 +157,20 @@ def test_metadata_keeps_missing_values_under_the_dataset_policy(tmp_path):
     (tmp_path / "x.csv").write_text("w\n1\nNA\n3\n")
     with pytest.raises(nio.SpecError, match="na_policy is 'abort'"):
         nio.load({"sources": sources}, base_dir=tmp_path, target="assembled")
+
+
+def test_scan_index_is_not_the_repetition_grouping_key(tmp_path):
+    # `repetition` groups repeated measurements of one sample and is opt-in; the
+    # per-scan `sample_index.repetition_id` stays an identity column only.
+    (tmp_path / "x.csv").write_text("sample_id;rep;w\ns1;1;0.1\ns1;2;0.2\ns2;1;0.3\n")
+    spec = {
+        "sample_index": {"by": "id", "key": "sample_id", "repetition_id": "rep"},
+        "sources": [{"id": "x", "role": "mixed", "input": "x.csv", "columns": [
+            {"select": ["sample_id", "rep"], "role": "metadata"},
+            {"select": "rest", "role": "features"},
+        ]}],
+    }
+    assembled = nio.load(spec, base_dir=tmp_path, target="assembled")
+    assert assembled.repetition is None
+    assert "rep" in assembled.blocks["train"].metadata.columns
+    assert nio.load({**spec, "repetition": "sample_id"}, base_dir=tmp_path, target="assembled").repetition == "sample_id"

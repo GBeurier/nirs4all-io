@@ -522,7 +522,9 @@ def assemble(spec: DatasetSpec, base_dir: str | Path = ".") -> AssembledDataset:
         task_type=spec.task_type.value,
         signal_type=spec.signal_type.value,
         n_sources=sum(1 for t in tables.values() if t.kind != SourceKind.LOOKUP.value and _has_role(t, "features")),
-        repetition=spec.repetition or (spec.sample_index.repetition_id if spec.sample_index.repetition_id and spec.sample_index.repetition_id != "auto" else None),
+        # `repetition` groups repeated measurements of one sample and is opt-in;
+        # `sample_index.repetition_id` is a per-scan index and never stands in for it.
+        repetition=spec.repetition,
         identity={
             "source_ids": [t.source_id for t in tables.values() if t.kind != SourceKind.LOOKUP.value and _has_role(t, "features")],
             "sample_id": spec.sample_index.key if spec.sample_index.by.value == "id" and isinstance(spec.sample_index.key, str) else None,

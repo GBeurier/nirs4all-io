@@ -506,11 +506,11 @@ fn collect_identity_rows(
             if let Some(value) = &group_id {
                 ensure_identifier("group id", value)?;
             }
+            // The per-scan index only: `repetition` names the grouping key.
             let repetition_id = assembled
                 .identity
                 .repetition_id
                 .as_deref()
-                .or(assembled.repetition.as_deref())
                 .map(|column| identity_value(block, column, partition, row))
                 .transpose()?;
             if let Some(value) = &repetition_id {

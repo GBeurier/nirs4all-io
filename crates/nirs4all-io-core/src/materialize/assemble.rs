@@ -1399,12 +1399,9 @@ pub fn assemble_in_memory_with_tabular_limits(
         .values()
         .filter(|t| t.kind != SourceKind::Lookup.value() && has_role(t, "features"))
         .count();
-    let repetition = spec.repetition.clone().or_else(|| {
-        spec.sample_index
-            .repetition_id
-            .clone()
-            .filter(|r| r != "auto")
-    });
+    // `repetition` groups repeated measurements of one sample and is opt-in;
+    // `sample_index.repetition_id` is a per-scan index and never stands in for it.
+    let repetition = spec.repetition.clone();
     let identity = IdentityProvenance {
         source_ids: tables
             .values()
@@ -2421,6 +2418,36 @@ mod tests {
             assert_eq!(block.x[0].data, vec![1.0, 5.0, 3.0, 7.0], "{policy}");
             assert_eq!(block.y.as_ref().unwrap().data, vec![10.0, 30.0]);
         }
+    }
+
+    #[test]
+    fn scan_index_is_not_the_repetition_grouping_key() {
+        let spec = |repetition: Value| {
+            let mut spec = json!({
+                "sample_index": {"by": "id", "key": "sample_id", "repetition_id": "rep"},
+                "sources": [{"id": "x", "role": "mixed", "input": "x.csv", "columns": [
+                    {"select": ["sample_id", "rep"], "role": "metadata"},
+                    {"select": "rest", "role": "features"}
+                ]}]
+            });
+            if !repetition.is_null() {
+                spec["repetition"] = repetition;
+            }
+            DatasetSpec::from_value(&spec).unwrap()
+        };
+        let sources = csv_sources(&[("x", "sample_id;rep;w\ns1;1;0.1\ns1;2;0.2\ns2;1;0.3\n")]);
+        let implicit =
+            assemble_in_memory(&spec(Value::Null), &sources, &HashMap::new(), None).unwrap();
+        assert_eq!(implicit.repetition, None);
+        assert_eq!(implicit.identity.repetition_id.as_deref(), Some("rep"));
+        assert!(implicit.blocks["train"]
+            .metadata
+            .as_ref()
+            .unwrap()
+            .has_column("rep"));
+        let explicit =
+            assemble_in_memory(&spec(json!("sample_id")), &sources, &HashMap::new(), None).unwrap();
+        assert_eq!(explicit.repetition.as_deref(), Some("sample_id"));
     }
 
     #[test]

@@ -123,7 +123,7 @@ sample_index:
   by: row            # row (default) | id
   key: Sample_ID     # column (or [composite]) when by=id
   observation_id: scan_id    # 🟡 parsed for the dag-ml `SampleRelationTable`; not used at SpectroDataset materialization (see below)
-  repetition_id: scan_id     # ✅ feeds set_repetition
+  repetition_id: scan_id     # ✅ per-scan index: kept as metadata + identity provenance; never the `repetition` grouping key
   group_id: site             # 🟡 parsed for dag-ml leakage groups; not used at SpectroDataset materialization
 ```
 
@@ -483,6 +483,9 @@ aggregate: { by: Sample_ID, method: median,   # ✅ mean | median | vote | robus
 ```
 
 These map to `SpectroDataset.set_repetition` / `set_aggregate*` at materialization.
+`repetition` names the column whose equal values are repeated measurements of one
+physical sample; it is opt-in and is never derived from the per-scan
+`sample_index.repetition_id`.
 
 ---
 
