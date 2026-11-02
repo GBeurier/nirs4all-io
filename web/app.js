@@ -1958,6 +1958,11 @@ function assemblePreview(files, recordSets, spec) {
 
 // Locate the missing (null) cells of IO's materialized preview, per partition
 // and column, as 1-based sample positions.
+// Assembled numbers are NaN when missing (null in bundles that predate typed arrays).
+function isMissingNumber(value) {
+  return value == null || Number.isNaN(value);
+}
+
 function missingValueSummary(assembled) {
   const lines = [];
   const report = (partition, label, isMissing, total) => {
@@ -1968,12 +1973,12 @@ function missingValueSummary(assembled) {
   for (const [partition, block] of Object.entries(assembled.blocks || {})) {
     (block.x || []).forEach((matrix, index) => {
       report(partition, `X ${block.source_ids?.[index] || index + 1}`, (row) => {
-        for (let col = 0; col < matrix.n_cols; col++) if (matrix.data[row * matrix.n_cols + col] == null) return true;
+        for (let col = 0; col < matrix.n_cols; col++) if (isMissingNumber(matrix.data[row * matrix.n_cols + col])) return true;
         return false;
       }, matrix.n_rows);
     });
     (block.y_headers || []).forEach((header, col) => {
-      report(partition, `y '${header}'`, (row) => block.y.data[row * block.y.n_cols + col] == null, block.y.n_rows);
+      report(partition, `y '${header}'`, (row) => isMissingNumber(block.y.data[row * block.y.n_cols + col]), block.y.n_rows);
     });
     for (const column of block.metadata?.columns || []) {
       report(partition, `metadata '${column.name}'`, (row) => column.values[row] == null, column.values.length);
@@ -2122,7 +2127,8 @@ function targetPreview() {
       const categories = block.y_categorical?.[key]?.categories;
       for (let rowIndex = 0; rowIndex < block.y.n_rows; rowIndex++) {
         const raw = block.y.data[rowIndex * block.y.n_cols + column];
-        const value = categories && raw != null ? categories[raw] : raw;
+        if (isMissingNumber(raw)) continue;
+        const value = categories ? categories[raw] : raw;
         if (value == null) continue;
         const item = { key, value, rowIndex, partition, source: "assembled targets" };
         values.push(item);

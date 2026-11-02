@@ -31,7 +31,11 @@ mirrored in `nirs4all_io/canonical_json.py`:
 - Two-space pretty indent, `": "` after keys, one element per line.
 - `\n` line endings; exactly one trailing `\n`.
 - Finite numbers only (NaN/Inf rejected on the Python side, mapped to `null`
-  by serde on the Rust side; the IR never emits non-finite numbers).
+  by serde on the Rust side). The `DatasetSpec` IR never emits non-finite
+  numbers. Assembled data does: in its JSON exports (`load_summary`,
+  `assembled_full`) a missing value is `null`, which hosts must read back as
+  NaN/NA rather than drop or coerce to 0. The WASM `assembleDataset` avoids the
+  JSON form for numbers: matrices and weights are `Float64Array`s holding NaN.
 
 The workspace enables serde_json's `preserve_order` so *input* object order
 mirrors Python dict insertion order (load-bearing for legacy-config

@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::conventions::engine::get_stem;
 use crate::spec::dataset_spec::{
-    AggregateSpec, DatasetSpec, JoinSpec, LoadingParams, SourceSpec, VariationSpec,
+    AggregateSpec, DatasetSpec, JoinSpec, LoadingParams, NaConfig, SourceSpec, VariationSpec,
 };
 use crate::spec::enums::{
     Cardinality, Coverage, MergeMode, NaPolicy, PartitionBy, Role, SourceKind, UnknownPolicy,
@@ -35,8 +35,8 @@ use super::join::{
     merge_by_key_with_limits,
 };
 use super::loaders::{
-    apply_na_policy, effective_params, read_table_bytes, read_table_bytes_with_limits,
-    TabularReadLimits,
+    apply_na_policy, apply_na_policy_to_rows, effective_params, read_table_bytes,
+    read_table_bytes_with_limits, TabularReadLimits,
 };
 
 /// A source payload supplied in-memory instead of a file path.
@@ -257,6 +257,7 @@ impl AssembledDataset {
             "identity": { "provenance": identity_provenance_value(&self.identity) },
             "repetition": self.repetition,
             "aggregate": aggregate,
+            "warnings": self.warnings,
         })
     }
 }
@@ -312,6 +313,9 @@ struct SourceTable {
     variations: Vec<(String, Matrix)>,
     /// Original source positions to remove, applied only after all sources align.
     remove_rows: Option<Vec<bool>>,
+    /// Original source positions whose target is missing; those samples are
+    /// excluded after all sources align.
+    missing_targets: Option<Vec<bool>>,
 }
 
 fn missing_rows(frame: &Frame) -> Vec<bool> {
@@ -329,6 +333,85 @@ fn defer_sample_removal(params: &mut LoadingParams) {
     if params.na.policy == NaPolicy::RemoveSample {
         params.na.policy = NaPolicy::Ignore;
     }
+}
+
+/// Source rows to remove and source rows whose target is missing.
+type RoleNaOutcome = (Option<Vec<bool>>, Option<Vec<bool>>);
+
+/// Apply a source's NA policy once its column roles are known.
+///
+/// A missing target is never imputed, never dropped as a column and never
+/// encoded as a class: its sample is excluded, unless the policy is `abort`
+/// (refuse the load) or `ignore` (keep NaN). Metadata keeps missing values.
+/// Every other column follows the policy (`auto` = `abort`) on the samples that
+/// remain, so a feature column is not dropped, and the load does not abort, for
+/// a sample that is excluded anyway. `remove_sample` removes every row with a
+/// missing value, as before.
+fn apply_role_na_policy(
+    df: &mut Frame,
+    roles: &mut Vec<(String, String)>,
+    na: &NaConfig,
+) -> Result<RoleNaOutcome, SpecError> {
+    match na.policy {
+        NaPolicy::Ignore => return Ok((None, None)),
+        NaPolicy::RemoveSample => return Ok((Some(missing_rows(df)), None)),
+        _ => {}
+    }
+    let (target_idx, policy_idx): (Vec<usize>, Vec<usize>) = {
+        let role_of: HashMap<&str, &str> = roles
+            .iter()
+            .map(|(column, role)| (column.as_str(), role.as_str()))
+            .collect();
+        let role = |idx: &usize| role_of.get(df.columns[*idx].name.as_str()).copied();
+        let indices = 0..df.columns.len();
+        (
+            indices
+                .clone()
+                .filter(|idx| role(idx) == Some("targets"))
+                .collect(),
+            indices
+                .filter(|idx| !matches!(role(idx), Some("targets" | "metadata")))
+                .collect(),
+        )
+    };
+    let sub_frame = |idx: &[usize]| Frame {
+        columns: idx.iter().map(|&i| df.columns[i].clone()).collect(),
+        n_rows: df.n_rows,
+        header_unit: df.header_unit.clone(),
+    };
+
+    let targets = sub_frame(&target_idx);
+    if na.policy == NaPolicy::Abort {
+        apply_na_policy(&targets, na)?;
+    }
+    let missing = missing_rows(&targets);
+    let missing_targets = missing.iter().any(|&row| row).then_some(missing);
+    let keep: Vec<bool> = match &missing_targets {
+        Some(missing) => missing.iter().map(|&row| !row).collect(),
+        None => vec![true; df.n_rows],
+    };
+
+    let treated = apply_na_policy_to_rows(&sub_frame(&policy_idx), na, &keep)?;
+    let mut treated: HashMap<String, Column> = treated
+        .columns
+        .into_iter()
+        .map(|column| (column.name.clone(), column))
+        .collect();
+    let policy_idx: HashSet<usize> = policy_idx.into_iter().collect();
+    let mut dropped: HashSet<String> = HashSet::new();
+    let mut columns = Vec::with_capacity(df.columns.len());
+    for (idx, column) in std::mem::take(&mut df.columns).into_iter().enumerate() {
+        if !policy_idx.contains(&idx) {
+            columns.push(column);
+        } else if let Some(treated) = treated.remove(&column.name) {
+            columns.push(treated);
+        } else {
+            dropped.insert(column.name);
+        }
+    }
+    df.columns = columns;
+    roles.retain(|(column, _)| !dropped.contains(column));
+    Ok((None, missing_targets))
 }
 
 fn key_list(v: &Value) -> Option<Vec<String>> {
@@ -589,14 +672,9 @@ fn load_source_frame_mem(
     tabular_limits: Option<TabularReadLimits>,
 ) -> Result<LoadedSource, SpecError> {
     let mut params = effective_params(&spec.params, &source.params);
-    // Removing rows independently loses positional correspondence between X,
-    // targets, metadata and variations. Keep original rows until joining.
-    defer_sample_removal(&mut params);
-    // nirs4all parity: metadata permits missing values and joins sample removal
-    // only when that policy is explicitly requested.
-    if source.role == Role::Metadata {
-        params.na.policy = NaPolicy::Ignore;
-    }
+    // The NA policy depends on each column's role, so it is applied once roles
+    // are split (`apply_role_na_policy`); rows are removed only after joining.
+    params.na.policy = NaPolicy::Ignore;
     let matched = resolve_inputs_mem(&source.input, sources)?;
     if matched.is_empty() {
         return Err(SpecError::new(format!(
@@ -1071,9 +1149,6 @@ fn build_source_table(
 ) -> Result<SourceTable, SpecError> {
     let (mut df, header_unit, signal, origins) =
         load_source_frame_mem(source, spec, sources, audits, tabular_limits)?;
-    let mut remove_rows = (effective_params(&spec.params, &source.params).na.policy
-        == NaPolicy::RemoveSample)
-        .then(|| missing_rows(&df));
     if let Some(column) = df
         .columns
         .iter()
@@ -1126,6 +1201,13 @@ fn build_source_table(
             roles.push((identity_column.to_string(), "metadata".to_string()));
         }
     }
+    let mut na = effective_params(&spec.params, &source.params).na;
+    // nirs4all parity: metadata permits missing values and joins sample removal
+    // only when that policy is explicitly requested.
+    if source.role == Role::Metadata && na.policy != NaPolicy::RemoveSample {
+        na.policy = NaPolicy::Ignore;
+    }
+    let (mut remove_rows, missing_targets) = apply_role_na_policy(&mut df, &mut roles, &na)?;
     let row_idx_name = row_idx_col(&source.id);
     if df.has_column(&row_idx_name) {
         return Err(SpecError::new(format!(
@@ -1162,6 +1244,7 @@ fn build_source_table(
         header_unit,
         variations,
         remove_rows,
+        missing_targets,
     })
 }
 
@@ -1537,6 +1620,26 @@ fn source_feature_header(combined_col: &str, source: &SourceTable) -> String {
     combined_col.to_string()
 }
 
+/// For each combined row, the `table` source row it came from (`None` when a
+/// join left the row without a match in that source).
+fn source_rows(combined: &Frame, table: &SourceTable) -> Result<Vec<Option<usize>>, SpecError> {
+    let positions = combined.numeric_column_f64(&row_idx_col(&table.source_id));
+    if positions.len() != combined.n_rows {
+        return Err(SpecError::new(format!(
+            "source '{}': row-index column lost during assembly; NA samples cannot be aligned",
+            table.source_id
+        )));
+    }
+    Ok(positions
+        .into_iter()
+        .map(|row| (row.is_finite() && row >= 0.0).then_some(row as usize))
+        .collect())
+}
+
+fn missing_targets_warning(excluded: usize) -> String {
+    format!("{excluded} sample(s) with a missing target value were excluded; set na.policy to 'abort' to refuse them or 'ignore' to keep them as NaN")
+}
+
 fn assemble_block(
     tables: &IndexMap<&String, &SourceTable>,
     spec: &DatasetSpec,
@@ -1564,23 +1667,37 @@ fn assemble_block(
     let mut keep = vec![true; combined.n_rows];
     for table in tables.values() {
         if let Some(remove) = &table.remove_rows {
-            let positions = combined.numeric_column_f64(&row_idx_col(&table.source_id));
-            if positions.len() != combined.n_rows {
-                return Err(SpecError::new(format!("source '{}': row-index column lost during assembly; NA samples cannot be aligned", table.source_id)));
-            }
-            for (keep_row, original_row) in keep.iter_mut().zip(positions) {
-                *keep_row &= original_row.is_finite()
-                    && original_row >= 0.0
-                    && remove
-                        .get(original_row as usize)
-                        .is_some_and(|remove| !remove);
+            for (keep_row, original_row) in keep.iter_mut().zip(source_rows(&combined, table)?) {
+                *keep_row &=
+                    original_row.is_some_and(|row| remove.get(row).is_some_and(|remove| !remove));
             }
         }
     }
-    if keep.iter().any(|keep_row| !keep_row) {
-        let removed = keep.iter().filter(|keep_row| !**keep_row).count();
-        combined = combined.mask_rows(&keep);
+    let removed = keep.iter().filter(|keep_row| !**keep_row).count();
+    if removed > 0 {
         audits.push(serde_json::json!({"operation": "remove_na_samples", "removed": removed}));
+    }
+    // Rows a join left without a target keep their declared coverage semantics;
+    // only a target that the source holds as missing excludes its sample.
+    let mut excluded = 0;
+    for table in tables.values() {
+        if let Some(missing) = &table.missing_targets {
+            for (keep_row, original_row) in keep.iter_mut().zip(source_rows(&combined, table)?) {
+                if *keep_row && original_row.is_some_and(|row| missing.get(row) == Some(&true)) {
+                    *keep_row = false;
+                    excluded += 1;
+                }
+            }
+        }
+    }
+    if excluded > 0 {
+        audits.push(
+            serde_json::json!({"operation": "exclude_missing_targets", "excluded": excluded}),
+        );
+        warnings.push(missing_targets_warning(excluded));
+    }
+    if removed + excluded > 0 {
+        combined = combined.mask_rows(&keep);
     }
 
     let role_cols = collect_roles(&combined, tables);
@@ -2202,6 +2319,108 @@ mod tests {
         .collect();
         let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap();
         assert_eq!(assembled.blocks["train"].n_samples, 3);
+    }
+
+    fn csv_sources(files: &[(&str, &str)]) -> Vec<InMemorySource> {
+        files
+            .iter()
+            .map(|(name, text)| InMemorySource {
+                name: format!("{name}.csv"),
+                payload: SourcePayload::Bytes(text.as_bytes().to_vec()),
+            })
+            .collect()
+    }
+
+    fn assemble_xy(policy: &str, x: &str, y: &str) -> Result<AssembledDataset, SpecError> {
+        let spec = DatasetSpec::from_value(&json!({
+            "params": {"na": {"policy": policy}},
+            "sources": [
+                {"id": "x", "role": "features", "input": "x.csv"},
+                {"id": "y", "role": "targets", "input": "y.csv"}
+            ]
+        }))
+        .unwrap();
+        assemble_in_memory(
+            &spec,
+            &csv_sources(&[("x", x), ("y", y)]),
+            &HashMap::new(),
+            None,
+        )
+    }
+
+    #[test]
+    fn missing_target_excludes_its_sample() {
+        // A missing target is never imputed, dropped as a column or made a class.
+        for policy in ["auto", "remove_feature", "replace"] {
+            let assembled = assemble_xy(
+                policy,
+                "w;v\n1;10\n2;20\n3;30\n4;40\n",
+                "y;c\n10;a\n\n30;NA\n40;b\n",
+            )
+            .unwrap();
+            let block = &assembled.blocks["train"];
+            assert_eq!(block.y_headers, vec!["y", "c"], "{policy}");
+            assert_eq!(block.x[0].data, vec![1.0, 10.0, 4.0, 40.0], "{policy}");
+            assert_eq!(block.y.as_ref().unwrap().data, vec![10.0, 0.0, 40.0, 1.0]);
+            assert_eq!(block.y_categorical["c"], json!({"categories": ["a", "b"]}));
+            assert_eq!(assembled.warnings, vec![missing_targets_warning(2)]);
+            assert_eq!(
+                assembled.to_full_value()["warnings"],
+                json!([missing_targets_warning(2)])
+            );
+        }
+    }
+
+    #[test]
+    fn abort_refuses_and_ignore_keeps_a_missing_target() {
+        let err = assemble_xy("abort", "w\n1\n2\n3\n", "y\n10\n\n30\n").unwrap_err();
+        assert!(err.message.contains("First NA in column 'y' (row: 1)"));
+        let assembled = assemble_xy("ignore", "w\n1\n2\n3\n", "y\n10\n\n30\n").unwrap();
+        let y = &assembled.blocks["train"].y.as_ref().unwrap().data;
+        assert_eq!((y[0], y[2]), (10.0, 30.0));
+        assert!(y[1].is_nan());
+        assert!(assembled.warnings.is_empty());
+    }
+
+    #[test]
+    fn remove_feature_only_drops_feature_columns() {
+        let assembled = assemble_xy(
+            "remove_feature",
+            "w;v\n1;10\n2;NA\n3;30\n",
+            "y\n10\n20\n30\n",
+        )
+        .unwrap();
+        let block = &assembled.blocks["train"];
+        assert_eq!(block.feature_headers, vec![vec!["w".to_string()]]);
+        assert_eq!(block.y.as_ref().unwrap().data, vec![10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn auto_still_aborts_on_a_missing_feature() {
+        let err = assemble_xy("auto", "w\n1\nNA\n3\n", "y\n10\n20\n30\n").unwrap_err();
+        assert!(err.message.contains("First NA in column 'w' (row: 1)"));
+    }
+
+    #[test]
+    fn feature_policy_skips_samples_excluded_for_their_target() {
+        // One table holds X and y: a blank row is a missing target, so the
+        // sample is excluded rather than aborting, dropping or filling features.
+        for policy in ["auto", "remove_feature", "replace"] {
+            let spec = DatasetSpec::from_value(&json!({
+                "params": {"na": {"policy": policy}},
+                "sources": [{
+                    "id": "d", "role": "mixed", "input": "data.csv",
+                    "columns": [{"select": "y", "role": "targets"}, {"select": "rest", "role": "features"}]
+                }]
+            }))
+            .unwrap();
+            let sources = csv_sources(&[("data", "y;w;v\n10;1;5\n\n30;3;7\n")]);
+            let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap();
+            let block = &assembled.blocks["train"];
+            assert_eq!(block.feature_headers, vec![vec!["w", "v"]], "{policy}");
+            assert_eq!(block.x[0].data, vec![1.0, 5.0, 3.0, 7.0], "{policy}");
+            assert_eq!(block.y.as_ref().unwrap().data, vec![10.0, 30.0]);
+        }
     }
 
     #[test]

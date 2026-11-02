@@ -358,14 +358,32 @@ params:
 Root-level shorthand (A.12/75): `delimiter`/`has_header`/… may be placed at the
 top level of a **legacy** dict and are folded into `params`. ✅
 
-| NA `policy` | Status | Behavior |
-|---|---|---|
-| `auto` | ✅ | resolves to `abort` |
-| `abort` | ✅ | raise on any NA (reports first NA cell) |
-| `remove_sample` | ✅ | drop rows with any NA |
-| `remove_feature` | ✅ | drop columns with any NA (warns if >10%) |
-| `replace` | ✅ | fill via `fill.method` (value/mean/median per-column; ffill/bfill row-wise) |
-| `ignore` | ✅ | keep NA |
+The policy is applied per column role, once columns are assigned. A missing
+**target** is never imputed, never dropped as a column and never encoded as a
+class: unless the policy is `abort` or `ignore`, its sample is excluded and the
+assembled dataset carries a warning with the count. Metadata keeps missing
+values (unless the policy is `remove_sample`). Every other column follows the
+table below on the samples that remain.
+
+| NA `policy` | Status | Features (and other non-target, non-metadata columns) | Targets |
+|---|---|---|---|
+| `auto` | ✅ | resolves to `abort` | exclude the sample |
+| `abort` | ✅ | raise on any NA (reports first NA cell) | raise |
+| `remove_sample` | ✅ | drop rows with any NA | drop the row |
+| `remove_feature` | ✅ | drop columns with any NA (warns if >10%) | exclude the sample |
+| `replace` | ✅ | fill via `fill.method` (value/mean/median per-column; ffill/bfill row-wise) | exclude the sample |
+| `ignore` | ✅ | keep NA | keep NaN |
+
+A row a join leaves without a target (partial `coverage`) is not a missing
+target value and keeps its declared coverage semantics. An empty line in a
+delimited table is a row of missing values, never a skipped row; only the
+final line terminator does not create a row.
+
+Missing values in exports: the WASM `assembleDataset` delivers every numeric
+matrix and `weights` as a `Float64Array` with `NaN`; JSON exports (the Python
+`assembled_full` dict, the `load_summary` structural summary over every
+binding) carry a missing number as `null`, and a missing metadata cell is
+`null` everywhere.
 
 | `categorical` | Status | Behavior |
 |---|---|---|

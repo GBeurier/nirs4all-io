@@ -105,11 +105,40 @@ export interface ProposeResult {
   validation_errors: string[];
 }
 
+/** A row-major numeric matrix; a missing value is `NaN`. */
+export interface AssembledMatrix {
+  data: Float64Array;
+  n_rows: number;
+  n_cols: number;
+}
+
+/** One partition of a materialized dataset. */
+export interface AssembledBlock {
+  n_samples: number;
+  source_ids: string[];
+  x: AssembledMatrix[];
+  feature_headers: string[][];
+  header_units: string[];
+  signal_types: (string | null)[];
+  y: AssembledMatrix | null;
+  y_headers: string[];
+  y_categorical: Record<string, { categories: string[] }>;
+  /** Metadata cells are JSON values; a missing cell is `null`. */
+  metadata: { n_rows: number; columns: { name: string; values: (number | string | boolean | null)[] }[] } | null;
+  /** Per-sample weights; a missing weight is `NaN`. */
+  weights: Float64Array | null;
+  weights_header: string | null;
+  processings: { name: string; matrix: AssembledMatrix }[][];
+  [key: string]: unknown;
+}
+
 /** A materialized dataset (per-partition X/y/metadata blocks). */
 export interface AssembledDataset {
   name: string;
-  blocks: Record<string, unknown>;
+  blocks: Record<string, AssembledBlock>;
   folds?: unknown;
+  /** Assembly warnings, e.g. samples excluded because their target is missing. */
+  warnings: string[];
   [key: string]: unknown;
 }
 
