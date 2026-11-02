@@ -50,6 +50,10 @@ it deliberately contains no timestamp, UUID, or local build path.
 | `glob` | `MIT OR Apache-2.0` | https://github.com/rust-lang/glob |
 | `flate2` | `MIT OR Apache-2.0` | https://github.com/rust-lang/flate2-rs |
 | `zip` | `MIT` | https://github.com/zip-rs/zip2 |
+| `calamine`, `quick-xml` (spreadsheet reader; native builds, not WASM) | `MIT` | https://github.com/tafia/calamine, https://github.com/tafia/quick-xml |
+| `encoding_rs` (through `calamine`) | `MIT AND BSD-3-Clause` selected from `(Apache-2.0 OR MIT) AND BSD-3-Clause` | https://github.com/hsivonen/encoding_rs |
+| `byteorder` (through `calamine`) | `Unlicense OR MIT` | https://github.com/BurntSushi/byteorder |
+| `codepage`, `atoi_simd`, `fast-float2`, `simdutf8`, `scopeguard`, `debug_unsafe`, `multiversion_no_op`, `core_detect` (through `calamine`) | `MIT OR Apache-2.0` | https://crates.io |
 | Apache Arrow Rust (`arrow-*`, `parquet`) | `Apache-2.0` and, for `arrow-array`, `Apache-2.0 AND MIT` | https://github.com/apache/arrow-rs |
 | `clap` | `MIT OR Apache-2.0` | https://github.com/clap-rs/clap |
 | `wasm-bindgen`, `js-sys` | `MIT OR Apache-2.0` | https://github.com/wasm-bindgen/wasm-bindgen |
@@ -70,6 +74,9 @@ the exact locked `ryu-1.0.23.crate` (crate SHA-256
 `9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f`;
 license-text SHA-256
 `62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a`).
+`encoding_rs 0.8.44` includes data derived from the WHATWG Encoding Standard
+under BSD-3-Clause (`LICENSES/BSD-3-Clause.txt`): Copyright © WHATWG (Apple,
+Google, Mozilla, Microsoft).
 The mandatory Unicode-3.0 branch for `unicode-ident 1.0.24` is likewise copied
 from its exact locked crate (crate SHA-256
 `e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75`;

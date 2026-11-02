@@ -137,7 +137,7 @@ export interface AssembledDataset {
   name: string;
   blocks: Record<string, AssembledBlock>;
   folds?: unknown;
-  /** Assembly warnings, e.g. samples excluded because their target is missing. */
+  /** Assembly warnings (for example partial join coverage). */
   warnings: string[];
   [key: string]: unknown;
 }

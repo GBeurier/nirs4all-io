@@ -61,8 +61,6 @@ class SourceTable:
     # columns (either by name or positionally).
     variations: list[tuple[str, np.ndarray]] = field(default_factory=list)
     remove_rows: np.ndarray | None = None
-    # Original rows whose target is missing; excluded after all sources align.
-    missing_targets: np.ndarray | None = None
 
 
 @dataclass
@@ -289,7 +287,7 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
     # only when that policy is explicitly requested.
     if source.role is Role.METADATA and na.policy is not NaPolicy.REMOVE_SAMPLE:
         na = replace(na, policy=NaPolicy.IGNORE)
-    df, roles, remove_rows, missing_targets = _apply_role_na_policy(df, roles, na)
+    df, roles, remove_rows = _apply_role_na_policy(df, roles, na)
     # stamp a per-source positional row index AFTER role-splitting so it does
     # not shift positional selectors (e.g. `-1` keeps pointing at the last user
     # column, not at the row-idx sentinel). The column survives joins as any
@@ -316,7 +314,6 @@ def _build_source_table(source: SourceSpec, spec: DatasetSpec, base_dir: Path, a
         origins=origins,
         variations=variations,
         remove_rows=remove_rows,
-        missing_targets=missing_targets,
     )
 
 
@@ -558,51 +555,37 @@ def _has_role(table: SourceTable, role: str) -> bool:
     return any(r == role for r in table.roles.values())
 
 
-def _source_rows(combined: pd.DataFrame, table: SourceTable) -> tuple[np.ndarray, np.ndarray]:
-    """Combined rows matched in ``table`` and the source row each came from."""
-    positions = combined[_row_idx_col(table.source_id)]
-    present = positions.notna().to_numpy()
-    return present, positions[present].to_numpy(dtype=np.int64)
-
-
-def _apply_role_na_policy(df: pd.DataFrame, roles: dict[str, str], na: NaConfig) -> tuple[pd.DataFrame, dict[str, str], np.ndarray | None, np.ndarray | None]:
+def _apply_role_na_policy(df: pd.DataFrame, roles: dict[str, str], na: NaConfig) -> tuple[pd.DataFrame, dict[str, str], np.ndarray | None]:
     """Apply a source's NA policy once its column roles are known.
 
-    A missing target is never imputed, never dropped as a column and never
-    encoded as a class: its sample is excluded, unless the policy is ``abort``
-    (refuse the load) or ``ignore`` (keep NaN). Metadata keeps missing values.
-    Every other column follows the policy (``auto`` = ``abort``) on the samples
-    that remain, so a feature column is not dropped, and the load does not
-    abort, for a sample that is excluded anyway. ``remove_sample`` removes every
-    row with a missing value, as before.
+    Loading is lossless for targets and metadata: a missing value stays NaN and
+    its sample is kept, because training and scoring exclude target-missing
+    samples downstream. Only ``remove_sample`` removes such a sample and only
+    ``abort`` refuses a missing target; a target is never imputed, dropped as a
+    column or encoded as a class. Every other column follows the policy
+    (``auto`` = ``abort``).
 
-    Returns the treated frame and roles, the rows to remove, and the rows whose
-    target is missing.
+    Returns the treated frame and roles, and the rows ``remove_sample`` removes
+    once all sources are joined.
     """
     if na.policy is NaPolicy.IGNORE:
-        return df, roles, None, None
+        return df, roles, None
     if na.policy is NaPolicy.REMOVE_SAMPLE:
-        return df, roles, df.isna().any(axis=1).to_numpy(), None
-    target_cols = [c for c in df.columns if roles.get(c) == "targets"]
-    policy_cols = [c for c in df.columns if roles.get(c) not in ("targets", "metadata")]
+        return df, roles, df.isna().any(axis=1).to_numpy()
     if na.policy is NaPolicy.ABORT:
-        apply_na_policy(df[target_cols], na)
-    missing = df[target_cols].isna().any(axis=1).to_numpy()
-    missing_targets = missing if missing.any() else None
-    keep = ~missing
+        apply_na_policy(df[[c for c in df.columns if roles.get(c) == "targets"]], na)
+    policy_cols = [c for c in df.columns if roles.get(c) not in ("targets", "metadata")]
     if not policy_cols:
-        return df, roles, None, missing_targets
-    # Original index labels are kept, so `abort` reports the original row.
-    treated, _ = apply_na_policy(df.loc[keep, policy_cols], na)
+        return df, roles, None
+    treated, _ = apply_na_policy(df[policy_cols], na)
     dropped = [c for c in policy_cols if c not in treated.columns]
     if dropped:
         df = df.drop(columns=dropped)
         roles = {c: r for c, r in roles.items() if c not in dropped}
     if na.policy is NaPolicy.REPLACE:
         df = df.copy()
-        for c in treated.columns:
-            df[c] = df[c].where(~keep, treated[c].reindex(df.index))
-    return df, roles, None, missing_targets
+        df[list(treated.columns)] = treated
+    return df, roles, None
 
 
 def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: list[dict], warnings: list[str]) -> tuple[PartitionBlock, pd.DataFrame]:
@@ -621,27 +604,13 @@ def _assemble_block(tables: dict[str, SourceTable], spec: DatasetSpec, audits: l
     keep = np.ones(len(combined), dtype=bool)
     for table in tables.values():
         if table.remove_rows is not None:
-            present, rows = _source_rows(combined, table)
+            positions = combined[_row_idx_col(table.source_id)]
+            present = positions.notna().to_numpy()
             source_keep = np.zeros(len(combined), dtype=bool)
-            source_keep[present] = ~table.remove_rows[rows]
+            source_keep[present] = ~table.remove_rows[positions[present].to_numpy(dtype=np.int64)]
             keep &= source_keep
-    removed = int((~keep).sum())
-    if removed:
-        audits.append({"operation": "remove_na_samples", "removed": removed})
-    # Rows a join left without a target keep their declared coverage semantics;
-    # only a target that the source holds as missing excludes its sample.
-    excluded = 0
-    for table in tables.values():
-        if table.missing_targets is not None:
-            present, rows = _source_rows(combined, table)
-            missing = np.zeros(len(combined), dtype=bool)
-            missing[present] = table.missing_targets[rows]
-            excluded += int((keep & missing).sum())
-            keep &= ~missing
-    if excluded:
-        audits.append({"operation": "exclude_missing_targets", "excluded": excluded})
-        warnings.append(f"{excluded} sample(s) with a missing target value were excluded; set na.policy to 'abort' to refuse them or 'ignore' to keep them as NaN")
     if not keep.all():
+        audits.append({"operation": "remove_na_samples", "removed": int((~keep).sum())})
         combined = combined.loc[keep].reset_index(drop=True)
 
     # role -> columns across all joined sources

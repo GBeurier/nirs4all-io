@@ -8,6 +8,7 @@
 //! `.gz`/`.zip`, then delegate to the shared core decoder. A single decoder thus
 //! backs both the native (path) and the in-memory paths (D-R4).
 
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 use arrow_array::types::{
@@ -19,12 +20,16 @@ use arrow_array::{
     StringViewArray,
 };
 use arrow_schema::DataType;
+use calamine::{Data, DataRef, Reader, Xlsx};
 use nirs4all_io_core::infer::table::{ColDtype, NumericKind};
-use nirs4all_io_core::materialize::loaders::{apply_na_policy, read_table_bytes_with_limits};
+use nirs4all_io_core::materialize::loaders::{
+    apply_na_policy, read_sheet, read_table_bytes_with_limits, Sheet,
+};
 use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::SpecError;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ProjectionMask;
+use quick_xml::events::Event;
 use serde_json::Value;
 
 use super::frame::{Cell, Column, Frame};
@@ -40,6 +45,188 @@ fn is_parquet_path(path: &Path) -> bool {
             .as_deref(),
         Some("parquet" | "pq")
     )
+}
+
+/// Spreadsheet workbooks read like the Python loader: `.xlsx`, `.xlsm`, `.xls`.
+pub(crate) fn is_spreadsheet_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("xlsx" | "xlsm" | "xls")
+    )
+}
+
+/// One spreadsheet value as a typed cell, as pandas reads it: an integral
+/// number is an integer (the header `1000`, not `1000.0`), a date is ISO text,
+/// an empty or error cell is missing.
+fn sheet_cell(value: &Data) -> Cell {
+    match value {
+        Data::Empty | Data::Error(_) => Cell::Na,
+        Data::Int(value) => Cell::Int(*value),
+        // Below 2^53 every integral f64 is an exact i64.
+        Data::Float(value) if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 => {
+            Cell::Int(*value as i64)
+        }
+        Data::Float(value) => Cell::Float(*value),
+        Data::String(text) | Data::DateTimeIso(text) | Data::DurationIso(text) => {
+            Cell::Str(text.clone())
+        }
+        Data::Bool(value) => Cell::Bool(*value),
+        Data::DateTime(value) => value.as_datetime().map_or_else(
+            || Cell::Float(value.as_f64()),
+            |datetime| Cell::Str(datetime.to_string()),
+        ),
+    }
+}
+
+/// A worksheet's used cells (`(row, column)` positions with their value) as
+/// dense rows anchored at `A1`, as pandas reads them: leading empty rows and
+/// columns are kept, trailing ones are not. The dense grid may not hold more
+/// cells than the bytes the workbook decoded to, so a sparse sheet cannot turn
+/// a small file into a huge allocation.
+fn dense_rows(
+    name: &str,
+    cells: Vec<((u32, u32), Cell)>,
+    decoded: u64,
+) -> Result<Vec<Vec<Cell>>, SpecError> {
+    let (Some(bottom), Some(right)) = (
+        cells.iter().map(|((row, _), _)| *row).max(),
+        cells.iter().map(|((_, col), _)| *col).max(),
+    ) else {
+        return Ok(Vec::new());
+    };
+    let height = u64::from(bottom) + 1;
+    let width = u64::from(right) + 1;
+    if height.saturating_mul(width) > decoded {
+        return Err(SpecError::new(format!(
+            "worksheet '{name}' spans {height} x {width} cells, more than the {decoded} bytes it was decoded from; refusing a sparse sheet that would amplify memory"
+        )));
+    }
+    let mut rows = vec![vec![Cell::Na; width as usize]; height as usize];
+    for ((row, col), cell) in cells {
+        rows[row as usize][col as usize] = cell;
+    }
+    Ok(rows)
+}
+
+/// Whether every count the shared-strings reader could take from the first
+/// `<sst>` start tag fits in the part's `size` bytes; the reader reserves that
+/// many strings up front. The check does not depend on attribute syntax: after
+/// each `uniqueCount` in the tag's raw attributes, the next run of digits must
+/// fit.
+fn unique_strings_fit(part: impl Read, size: u64) -> Result<bool, quick_xml::Error> {
+    let mut xml = quick_xml::Reader::from_reader(std::io::BufReader::new(part));
+    // The reader's own configuration, so both see the same first `<sst>`.
+    let config = xml.config_mut();
+    config.check_end_names = false;
+    config.trim_text(false);
+    config.check_comments = false;
+    config.expand_empty_elements = true;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match xml.read_event_into(&mut buf)? {
+            Event::Start(start) if start.local_name().as_ref() == "sst" => {
+                let attributes = start.attributes_raw();
+                return Ok(attributes.match_indices("uniqueCount").all(|(at, key)| {
+                    let digits: String = attributes[at + key.len()..]
+                        .chars()
+                        .skip_while(|c| !c.is_ascii_digit())
+                        .take_while(char::is_ascii_digit)
+                        .collect();
+                    digits.is_empty() || digits.parse::<u64>().is_ok_and(|count| count <= size)
+                }));
+            }
+            Event::Eof => return Ok(true),
+            _ => {}
+        }
+    }
+}
+
+/// Decode every worksheet of an `.xlsx`/`.xlsm` workbook into rows of typed
+/// cells. The archive's declared decompressed size (which bounds every entry
+/// read) is charged against the decoded-bytes budget, a shared-strings count
+/// larger than its part is refused before the reader reserves for it, and
+/// sheets are streamed cell by cell. Legacy `.xls` workbooks are refused: their
+/// reader reserves a declared sheet size before any bound can apply.
+pub(crate) fn read_workbook_with_budget(
+    path: &Path,
+    budget: &mut ReadBudget,
+) -> Result<Vec<Sheet>, SpecError> {
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("xls"))
+    {
+        return Err(SpecError::new(format!(
+            "legacy .xls workbooks are not supported: save {} as .xlsx or export the sheet as CSV",
+            path.display()
+        )));
+    }
+    let raw = budget.read_raw(path)?;
+    let read_error = |e: &dyn std::fmt::Display| {
+        SpecError::new(format!(
+            "spreadsheet read failed for {}: {e}",
+            path.display()
+        ))
+    };
+    let mut archive =
+        zip::ZipArchive::new(Cursor::new(raw.as_slice())).map_err(|e| read_error(&e))?;
+    let mut decoded = 0_u64;
+    for index in 0..archive.len() {
+        let size = archive
+            .by_index_raw(index)
+            .map_err(|e| read_error(&e))?
+            .size();
+        decoded = decoded.saturating_add(size);
+    }
+    budget.charge_decoded(decoded)?;
+    for index in 0..archive.len() {
+        let part = archive.by_index(index).map_err(|e| read_error(&e))?;
+        let name = part.name().map_err(|e| read_error(&e))?;
+        if !name.to_ascii_lowercase().ends_with("sharedstrings.xml") {
+            continue;
+        }
+        let size = part.size();
+        if !unique_strings_fit(part, size).map_err(|e| read_error(&e))? {
+            return Err(read_error(&format!(
+                "the shared-strings part declares more strings than its {size} bytes can hold"
+            )));
+        }
+    }
+    drop(archive);
+    let mut workbook: Xlsx<_> = Xlsx::new(Cursor::new(raw)).map_err(|e| read_error(&e))?;
+    let mut sheets = Vec::new();
+    let mut file_decoded = decoded;
+    for name in workbook.sheet_names() {
+        let mut reader = workbook
+            .worksheet_cells_reader(&name)
+            .map_err(|e| read_error(&e))?;
+        let mut cells = Vec::new();
+        while let Some(cell) = reader.next_cell().map_err(|e| read_error(&e))? {
+            let value = cell.get_value();
+            // A shared string is copied into every cell that references it:
+            // charge the copy before making it.
+            if let DataRef::SharedString(text) = value {
+                file_decoded = file_decoded.saturating_add(text.len() as u64);
+                if file_decoded > budget.limits.max_decoded_file_bytes {
+                    return Err(limit_error(
+                        "decoded file bytes",
+                        budget.limits.max_decoded_file_bytes,
+                    ));
+                }
+                budget.charge_decoded(text.len() as u64)?;
+            }
+            // An error cell (`#N/A`) is a missing value that still occupies its row.
+            if *value != DataRef::Empty {
+                cells.push((cell.get_position(), sheet_cell(&Data::from(value.clone()))));
+            }
+        }
+        sheets.push((name.clone(), dense_rows(&name, cells, decoded)?));
+    }
+    Ok(sheets)
 }
 
 fn parquet_header_unit(params: &LoadingParams) -> String {
@@ -393,10 +580,10 @@ pub(crate) fn read_parquet_frame_with_budget(
     read_parquet_raw_with_budget(path, &params, budget)
 }
 
-/// Read a tabular file into a [`Frame`]: read bytes (+ gzip/zip), then run the
-/// shared core CSV decoder. v0: the CSV family. numpy/parquet/excel/vendor
-/// readers land with the broader load path; until then unknown extensions fall
-/// back to CSV (nirs4all's own fallback).
+/// Read a tabular file into a [`Frame`]: a spreadsheet worksheet, a Parquet
+/// table, or bytes (+ gzip/zip) run through the shared core CSV decoder.
+/// numpy/vendor readers land with the broader load path; until then other
+/// extensions fall back to CSV (nirs4all's own fallback).
 pub fn read_table(path: &Path, params: &LoadingParams) -> Result<Frame, SpecError> {
     read_table_with_limits(path, params, LoadLimits::default())
 }
@@ -408,6 +595,13 @@ pub fn read_table_with_limits(
     limits: LoadLimits,
 ) -> Result<Frame, SpecError> {
     let mut budget = ReadBudget::new(limits)?;
+    if is_spreadsheet_path(path) {
+        return read_sheet(
+            &read_workbook_with_budget(path, &mut budget)?,
+            params,
+            Some(limits.tabular()),
+        );
+    }
     if is_parquet_path(path) {
         return apply_na_policy(
             &read_parquet_raw_with_budget(path, params, &mut budget)?,

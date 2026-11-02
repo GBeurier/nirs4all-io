@@ -12,6 +12,11 @@
  * sources (exact, then file-stem, then glob). Returns `AssembledDataset` as a
  * plain JS object (per-partition `blocks` with `x`/`y`/headers/metadata + `folds`).
  *
+ * Every numeric matrix `data` (X, y, processings) and `weights` is a
+ * `Float64Array` in which a missing value is `NaN`. JSON has no NaN, so a
+ * plain array would carry it as `null`, which JS arithmetic reads as 0.
+ * Metadata cells stay JSON values; a missing metadata cell is `null`.
+ *
  * `index_file`/`folds.file` partitions are not browser-reachable here (no fs) and
  * raise an error — column/inline partitions and folds work.
  */

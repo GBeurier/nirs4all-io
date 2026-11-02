@@ -26,7 +26,9 @@ use serde_json::Value;
 
 use super::folds::{parse_fold_file_with_budget, Fold};
 use super::limits::{LoadLimits, ReadBudget};
-use super::loaders::read_parquet_frame_with_budget;
+use super::loaders::{
+    is_spreadsheet_path, read_parquet_frame_with_budget, read_workbook_with_budget,
+};
 
 pub use nirs4all_io_core::materialize::{
     AssembledDataset, FoldProvenance, IdentityProvenance, PartitionBlock, ASSEMBLED_DATASET_VERSION,
@@ -212,6 +214,11 @@ fn source_payload(
     parquet_columns: Option<&[String]>,
     budget: &mut ReadBudget,
 ) -> Result<SourcePayload, SpecError> {
+    if is_spreadsheet_path(path) {
+        return Ok(SourcePayload::Sheets(read_workbook_with_budget(
+            path, budget,
+        )?));
+    }
     if is_parquet_path(path) {
         return Ok(SourcePayload::Frame(read_parquet_frame_with_budget(
             path,

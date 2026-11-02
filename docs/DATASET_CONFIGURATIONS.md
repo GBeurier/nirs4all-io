@@ -358,20 +358,22 @@ params:
 Root-level shorthand (A.12/75): `delimiter`/`has_header`/… may be placed at the
 top level of a **legacy** dict and are folded into `params`. ✅
 
-The policy is applied per column role, once columns are assigned. A missing
-**target** is never imputed, never dropped as a column and never encoded as a
-class: unless the policy is `abort` or `ignore`, its sample is excluded and the
-assembled dataset carries a warning with the count. Metadata keeps missing
-values (unless the policy is `remove_sample`). Every other column follows the
-table below on the samples that remain.
+The policy is applied per column role, once columns are assigned. Loading is
+lossless for **targets**: a missing target stays `NaN` and its sample is kept,
+whatever the policy, unless the policy is `remove_sample` (remove the sample)
+or `abort` (refuse the load). A target is never imputed, never dropped as a
+column and never encoded as a class; excluding target-missing samples from
+model training and scoring is the job of the training engine (dag-ml), not of
+loading. Metadata keeps missing values unless the policy is `remove_sample`.
+Every other column follows the table below.
 
 | NA `policy` | Status | Features (and other non-target, non-metadata columns) | Targets |
 |---|---|---|---|
-| `auto` | ✅ | resolves to `abort` | exclude the sample |
+| `auto` | ✅ | resolves to `abort` | keep NaN |
 | `abort` | ✅ | raise on any NA (reports first NA cell) | raise |
 | `remove_sample` | ✅ | drop rows with any NA | drop the row |
-| `remove_feature` | ✅ | drop columns with any NA (warns if >10%) | exclude the sample |
-| `replace` | ✅ | fill via `fill.method` (value/mean/median per-column; ffill/bfill row-wise) | exclude the sample |
+| `remove_feature` | ✅ | drop columns with any NA (warns if >10%) | keep NaN |
+| `replace` | ✅ | fill via `fill.method` (value/mean/median per-column; ffill/bfill row-wise) | keep NaN |
 | `ignore` | ✅ | keep NA | keep NaN |
 
 A row a join leaves without a target (partial `coverage`) is not a missing
@@ -520,7 +522,7 @@ Accepted alias families (verbatim from nirs4all's normalizer) — partition × r
 | CSV / TSV / text | `.csv .tsv .txt` (+ `.csv.gz` `.csv.zip`) | ✅ | copied loader |
 | NumPy | `.npy .npz` (+ key) | ✅ | copied loader |
 | Parquet | `.parquet .pq` (+ columns) | ✅ | copied loader |
-| Excel | `.xlsx .xls .xlsm` (+ sheet/usecols/skiprows) | ✅ | copied loader |
+| Excel | `.xlsx .xls .xlsm` (+ `sheet_name`; `usecols`/`skiprows` in the Python oracle only, refused by the native reader) | ✅ | copied loader; native reader: `calamine` for `.xlsx`/`.xlsm` (typed cells read as pandas does: anchored at A1, numeric header row names the columns); legacy `.xls` is refused natively |
 | MATLAB | `.mat` (v5 + v7.3, + variable) | 🟡 | needs `scipy`/`h5py` |
 | Vendor spectra | OPUS/JCAMP/SPC/ASD/SED/SIG/… | 🟡 | `nirs4all-formats` (lazy; never reparsed here) |
 

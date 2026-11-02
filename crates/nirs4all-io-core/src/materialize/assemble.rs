@@ -35,8 +35,8 @@ use super::join::{
     merge_by_key_with_limits,
 };
 use super::loaders::{
-    apply_na_policy, apply_na_policy_to_rows, effective_params, read_table_bytes,
-    read_table_bytes_with_limits, TabularReadLimits,
+    apply_na_policy, effective_params, read_sheet, read_table_bytes, read_table_bytes_with_limits,
+    Sheet, TabularReadLimits,
 };
 
 /// A source payload supplied in-memory instead of a file path.
@@ -46,6 +46,8 @@ pub enum SourcePayload {
     /// A facade-decoded typed table for formats that need filesystem-backed
     /// native loaders (for example Parquet).
     Frame(Frame),
+    /// A facade-decoded spreadsheet; each source selects its worksheet.
+    Sheets(Vec<Sheet>),
     /// Pre-decoded nirs4all-formats records (signals[].values=X, targets{}, metadata{}).
     Records(Vec<Value>),
 }
@@ -313,9 +315,6 @@ struct SourceTable {
     variations: Vec<(String, Matrix)>,
     /// Original source positions to remove, applied only after all sources align.
     remove_rows: Option<Vec<bool>>,
-    /// Original source positions whose target is missing; those samples are
-    /// excluded after all sources align.
-    missing_targets: Option<Vec<bool>>,
 }
 
 fn missing_rows(frame: &Frame) -> Vec<bool> {
@@ -335,26 +334,24 @@ fn defer_sample_removal(params: &mut LoadingParams) {
     }
 }
 
-/// Source rows to remove and source rows whose target is missing.
-type RoleNaOutcome = (Option<Vec<bool>>, Option<Vec<bool>>);
-
 /// Apply a source's NA policy once its column roles are known.
 ///
-/// A missing target is never imputed, never dropped as a column and never
-/// encoded as a class: its sample is excluded, unless the policy is `abort`
-/// (refuse the load) or `ignore` (keep NaN). Metadata keeps missing values.
-/// Every other column follows the policy (`auto` = `abort`) on the samples that
-/// remain, so a feature column is not dropped, and the load does not abort, for
-/// a sample that is excluded anyway. `remove_sample` removes every row with a
-/// missing value, as before.
+/// Loading is lossless for targets and metadata: a missing value stays NaN and
+/// its sample is kept, because training and scoring exclude target-missing
+/// samples downstream. Only `remove_sample` removes such a sample and only
+/// `abort` refuses a missing target; a target is never imputed, dropped as a
+/// column or encoded as a class. Every other column follows the policy
+/// (`auto` = `abort`).
+///
+/// Returns the source rows `remove_sample` removes once all sources are joined.
 fn apply_role_na_policy(
     df: &mut Frame,
     roles: &mut Vec<(String, String)>,
     na: &NaConfig,
-) -> Result<RoleNaOutcome, SpecError> {
+) -> Result<Option<Vec<bool>>, SpecError> {
     match na.policy {
-        NaPolicy::Ignore => return Ok((None, None)),
-        NaPolicy::RemoveSample => return Ok((Some(missing_rows(df)), None)),
+        NaPolicy::Ignore => return Ok(None),
+        NaPolicy::RemoveSample => return Ok(Some(missing_rows(df))),
         _ => {}
     }
     let (target_idx, policy_idx): (Vec<usize>, Vec<usize>) = {
@@ -380,18 +377,10 @@ fn apply_role_na_policy(
         header_unit: df.header_unit.clone(),
     };
 
-    let targets = sub_frame(&target_idx);
     if na.policy == NaPolicy::Abort {
-        apply_na_policy(&targets, na)?;
+        apply_na_policy(&sub_frame(&target_idx), na)?;
     }
-    let missing = missing_rows(&targets);
-    let missing_targets = missing.iter().any(|&row| row).then_some(missing);
-    let keep: Vec<bool> = match &missing_targets {
-        Some(missing) => missing.iter().map(|&row| !row).collect(),
-        None => vec![true; df.n_rows],
-    };
-
-    let treated = apply_na_policy_to_rows(&sub_frame(&policy_idx), na, &keep)?;
+    let treated = apply_na_policy(&sub_frame(&policy_idx), na)?;
     let mut treated: HashMap<String, Column> = treated
         .columns
         .into_iter()
@@ -411,7 +400,7 @@ fn apply_role_na_policy(
     }
     df.columns = columns;
     roles.retain(|(column, _)| !dropped.contains(column));
-    Ok((None, missing_targets))
+    Ok(None)
 }
 
 fn key_list(v: &Value) -> Option<Vec<String>> {
@@ -621,6 +610,7 @@ fn frame_from_source(
             }
             frame_with_params(frame, params)
         }
+        SourcePayload::Sheets(sheets) => read_sheet(sheets, params, tabular_limits),
         SourcePayload::Records(records) => records_to_frame(records, params, tabular_limits),
     }
 }
@@ -1207,7 +1197,7 @@ fn build_source_table(
     if source.role == Role::Metadata && na.policy != NaPolicy::RemoveSample {
         na.policy = NaPolicy::Ignore;
     }
-    let (mut remove_rows, missing_targets) = apply_role_na_policy(&mut df, &mut roles, &na)?;
+    let mut remove_rows = apply_role_na_policy(&mut df, &mut roles, &na)?;
     let row_idx_name = row_idx_col(&source.id);
     if df.has_column(&row_idx_name) {
         return Err(SpecError::new(format!(
@@ -1244,7 +1234,6 @@ fn build_source_table(
         header_unit,
         variations,
         remove_rows,
-        missing_targets,
     })
 }
 
@@ -1617,26 +1606,6 @@ fn source_feature_header(combined_col: &str, source: &SourceTable) -> String {
     combined_col.to_string()
 }
 
-/// For each combined row, the `table` source row it came from (`None` when a
-/// join left the row without a match in that source).
-fn source_rows(combined: &Frame, table: &SourceTable) -> Result<Vec<Option<usize>>, SpecError> {
-    let positions = combined.numeric_column_f64(&row_idx_col(&table.source_id));
-    if positions.len() != combined.n_rows {
-        return Err(SpecError::new(format!(
-            "source '{}': row-index column lost during assembly; NA samples cannot be aligned",
-            table.source_id
-        )));
-    }
-    Ok(positions
-        .into_iter()
-        .map(|row| (row.is_finite() && row >= 0.0).then_some(row as usize))
-        .collect())
-}
-
-fn missing_targets_warning(excluded: usize) -> String {
-    format!("{excluded} sample(s) with a missing target value were excluded; set na.policy to 'abort' to refuse them or 'ignore' to keep them as NaN")
-}
-
 fn assemble_block(
     tables: &IndexMap<&String, &SourceTable>,
     spec: &DatasetSpec,
@@ -1664,37 +1633,23 @@ fn assemble_block(
     let mut keep = vec![true; combined.n_rows];
     for table in tables.values() {
         if let Some(remove) = &table.remove_rows {
-            for (keep_row, original_row) in keep.iter_mut().zip(source_rows(&combined, table)?) {
-                *keep_row &=
-                    original_row.is_some_and(|row| remove.get(row).is_some_and(|remove| !remove));
+            let positions = combined.numeric_column_f64(&row_idx_col(&table.source_id));
+            if positions.len() != combined.n_rows {
+                return Err(SpecError::new(format!("source '{}': row-index column lost during assembly; NA samples cannot be aligned", table.source_id)));
+            }
+            for (keep_row, original_row) in keep.iter_mut().zip(positions) {
+                *keep_row &= original_row.is_finite()
+                    && original_row >= 0.0
+                    && remove
+                        .get(original_row as usize)
+                        .is_some_and(|remove| !remove);
             }
         }
     }
-    let removed = keep.iter().filter(|keep_row| !**keep_row).count();
-    if removed > 0 {
-        audits.push(serde_json::json!({"operation": "remove_na_samples", "removed": removed}));
-    }
-    // Rows a join left without a target keep their declared coverage semantics;
-    // only a target that the source holds as missing excludes its sample.
-    let mut excluded = 0;
-    for table in tables.values() {
-        if let Some(missing) = &table.missing_targets {
-            for (keep_row, original_row) in keep.iter_mut().zip(source_rows(&combined, table)?) {
-                if *keep_row && original_row.is_some_and(|row| missing.get(row) == Some(&true)) {
-                    *keep_row = false;
-                    excluded += 1;
-                }
-            }
-        }
-    }
-    if excluded > 0 {
-        audits.push(
-            serde_json::json!({"operation": "exclude_missing_targets", "excluded": excluded}),
-        );
-        warnings.push(missing_targets_warning(excluded));
-    }
-    if removed + excluded > 0 {
+    if keep.iter().any(|keep_row| !keep_row) {
+        let removed = keep.iter().filter(|keep_row| !**keep_row).count();
         combined = combined.mask_rows(&keep);
+        audits.push(serde_json::json!({"operation": "remove_na_samples", "removed": removed}));
     }
 
     let role_cols = collect_roles(&combined, tables);
@@ -2345,9 +2300,20 @@ mod tests {
         )
     }
 
+    fn assert_nan_eq(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len(), "{actual:?}");
+        for (a, e) in actual.iter().zip(expected) {
+            assert!(
+                a == e || (a.is_nan() && e.is_nan()),
+                "{actual:?} != {expected:?}"
+            );
+        }
+    }
+
     #[test]
-    fn missing_target_excludes_its_sample() {
-        // A missing target is never imputed, dropped as a column or made a class.
+    fn missing_target_keeps_its_sample() {
+        // Loading is lossless: a missing target is never imputed, dropped as a
+        // column, made a class, or allowed to remove its sample.
         for policy in ["auto", "remove_feature", "replace"] {
             let assembled = assemble_xy(
                 policy,
@@ -2356,15 +2322,19 @@ mod tests {
             )
             .unwrap();
             let block = &assembled.blocks["train"];
+            assert_eq!(block.n_samples, 4, "{policy}");
             assert_eq!(block.y_headers, vec!["y", "c"], "{policy}");
-            assert_eq!(block.x[0].data, vec![1.0, 10.0, 4.0, 40.0], "{policy}");
-            assert_eq!(block.y.as_ref().unwrap().data, vec![10.0, 0.0, 40.0, 1.0]);
-            assert_eq!(block.y_categorical["c"], json!({"categories": ["a", "b"]}));
-            assert_eq!(assembled.warnings, vec![missing_targets_warning(2)]);
             assert_eq!(
-                assembled.to_full_value()["warnings"],
-                json!([missing_targets_warning(2)])
+                block.x[0].data,
+                vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0],
+                "{policy}"
             );
+            assert_nan_eq(
+                &block.y.as_ref().unwrap().data,
+                &[10.0, 0.0, f32::NAN, f32::NAN, 30.0, f32::NAN, 40.0, 1.0],
+            );
+            assert_eq!(block.y_categorical["c"], json!({"categories": ["a", "b"]}));
+            assert!(assembled.warnings.is_empty(), "{policy}");
         }
     }
 
@@ -2399,10 +2369,10 @@ mod tests {
     }
 
     #[test]
-    fn feature_policy_skips_samples_excluded_for_their_target() {
-        // One table holds X and y: a blank row is a missing target, so the
-        // sample is excluded rather than aborting, dropping or filling features.
-        for policy in ["auto", "remove_feature", "replace"] {
+    fn feature_policy_never_reaches_a_target_in_the_same_table() {
+        // One table holds X and y: a blank row is a missing target and missing
+        // features; the features follow the policy, the target stays missing.
+        let assemble = |policy: &str, data: &str| {
             let spec = DatasetSpec::from_value(&json!({
                 "params": {"na": {"policy": policy}},
                 "sources": [{
@@ -2411,13 +2381,20 @@ mod tests {
                 }]
             }))
             .unwrap();
-            let sources = csv_sources(&[("data", "y;w;v\n10;1;5\n\n30;3;7\n")]);
-            let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap();
-            let block = &assembled.blocks["train"];
-            assert_eq!(block.feature_headers, vec![vec!["w", "v"]], "{policy}");
-            assert_eq!(block.x[0].data, vec![1.0, 5.0, 3.0, 7.0], "{policy}");
-            assert_eq!(block.y.as_ref().unwrap().data, vec![10.0, 30.0]);
-        }
+            let sources = csv_sources(&[("data", data)]);
+            assemble_in_memory(&spec, &sources, &HashMap::new(), None)
+        };
+        let blank_row = "y;w;v\n10;1;5\n\n30;3;7\n";
+        let assembled = assemble("replace", blank_row).unwrap();
+        let block = &assembled.blocks["train"];
+        assert_eq!(block.x[0].data, vec![1.0, 5.0, 0.0, 0.0, 3.0, 7.0]);
+        assert_nan_eq(&block.y.as_ref().unwrap().data, &[10.0, f32::NAN, 30.0]);
+        let assembled = assemble("remove_feature", "y;w;v\n10;1;5\n;2;\n30;3;7\n").unwrap();
+        let block = &assembled.blocks["train"];
+        assert_eq!(block.feature_headers, vec![vec!["w"]]);
+        assert_nan_eq(&block.y.as_ref().unwrap().data, &[10.0, f32::NAN, 30.0]);
+        let err = assemble("auto", blank_row).unwrap_err();
+        assert!(err.message.contains("First NA in column 'w' (row: 1)"));
     }
 
     #[test]

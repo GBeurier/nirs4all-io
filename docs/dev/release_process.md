@@ -350,3 +350,9 @@ For 0.2.13, the WASM binding adds `serde_bytes` 0.11.19 (`MIT OR Apache-2.0`,
 the serde project), so the closure has 56 components; every other license
 expression is unchanged (only the two owner packages change identity from
 0.2.12 to 0.2.13) and the notices list it with `serde` and `serde_json`.
+
+For 0.2.14, the WASM legal-closure checksum was reviewed against 0.2.13: all 56
+license expressions are unchanged; only the two owner packages change identity
+from 0.2.13 to 0.2.14. The native builds (Python wheels, C ABI, CLI, R) gain the
+`calamine` spreadsheet reader and its closure, listed in the notices; it is not
+part of the WASM binding.

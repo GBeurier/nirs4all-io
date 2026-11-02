@@ -79,8 +79,9 @@ def test_blank_target_is_not_silently_skipped_under_abort(tmp_path):
 
 
 @pytest.mark.parametrize("policy", ["auto", "remove_feature", "replace"])
-def test_missing_target_excludes_its_sample(tmp_path, policy):
-    # A missing target is never imputed, dropped as a column or made a class.
+def test_missing_target_keeps_its_sample(tmp_path, policy):
+    # Loading is lossless: a missing target is never imputed, dropped as a
+    # column, made a class, or allowed to remove its sample.
     (tmp_path / "x.csv").write_text("w;v\n1;10\n2;20\n3;30\n4;40\n")
     (tmp_path / "y.csv").write_text("y;c\n10;a\n\n30;NA\n40;b\n")
     assembled = nio.load({"params": {"na": {"policy": policy}}, "sources": [
@@ -89,11 +90,11 @@ def test_missing_target_excludes_its_sample(tmp_path, policy):
     ]}, base_dir=tmp_path, target="assembled")
     block = assembled.blocks["train"]
     assert block.y_headers == ["y", "c"]
-    np.testing.assert_array_equal(block.X[0][:, 0], [1, 4])
-    np.testing.assert_array_equal(block.y[:, 0], [10, 40])
+    np.testing.assert_array_equal(block.X[0][:, 0], [1, 2, 3, 4])
+    np.testing.assert_array_equal(block.y[:, 0], [10, np.nan, 30, 40])
     assert block.y_categorical["c"]["categories"] == ["a", "b"]
-    np.testing.assert_array_equal(block.y[:, 1], [0, 1])
-    assert assembled.warnings == ["2 sample(s) with a missing target value were excluded; set na.policy to 'abort' to refuse them or 'ignore' to keep them as NaN"]
+    np.testing.assert_array_equal(block.y[:, 1], [0, np.nan, np.nan, 1])
+    assert assembled.warnings == []
 
 
 def test_ignore_keeps_missing_target_as_nan(tmp_path):
@@ -106,18 +107,26 @@ def test_ignore_keeps_missing_target_as_nan(tmp_path):
     np.testing.assert_array_equal(block.y[:, 0], [10, np.nan, 30])
 
 
-@pytest.mark.parametrize("policy", ["auto", "remove_feature", "replace"])
-def test_feature_policy_skips_samples_excluded_for_their_target(tmp_path, policy):
-    # One table holds X and y: a blank row is a missing target, so the sample is
-    # excluded rather than aborting, dropping or filling its feature cells.
-    (tmp_path / "data.csv").write_text("y;w;v\n10;1;5\n\n30;3;7\n")
-    block = nio.load({"params": {"na": {"policy": policy}}, "sources": [{
+def _load_mixed(tmp_path, policy, data):
+    (tmp_path / "data.csv").write_text(data)
+    return nio.load({"params": {"na": {"policy": policy}}, "sources": [{
         "id": "d", "role": "mixed", "input": "data.csv",
         "columns": [{"select": "y", "role": "targets"}, {"select": "rest", "role": "features"}],
     }]}, base_dir=tmp_path, target="assembled").blocks["train"]
-    assert block.feature_headers == [["w", "v"]]
-    np.testing.assert_array_equal(block.X[0], [[1, 5], [3, 7]])
-    np.testing.assert_array_equal(block.y[:, 0], [10, 30])
+
+
+def test_feature_policy_never_reaches_a_target_in_the_same_table(tmp_path):
+    # One table holds X and y: a blank row is a missing target and missing
+    # features; the features follow the policy, the target stays missing.
+    blank_row = "y;w;v\n10;1;5\n\n30;3;7\n"
+    block = _load_mixed(tmp_path, "replace", blank_row)
+    np.testing.assert_array_equal(block.X[0], [[1, 5], [0, 0], [3, 7]])
+    np.testing.assert_array_equal(block.y[:, 0], [10, np.nan, 30])
+    block = _load_mixed(tmp_path, "remove_feature", "y;w;v\n10;1;5\n;2;\n30;3;7\n")
+    assert block.feature_headers == [["w"]]
+    np.testing.assert_array_equal(block.y[:, 0], [10, np.nan, 30])
+    with pytest.raises(ValueError, match="First NA in column 'w' \\(row: 1\\)"):
+        _load_mixed(tmp_path, "auto", blank_row)
 
 
 def test_remove_feature_only_drops_feature_columns(tmp_path):
