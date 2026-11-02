@@ -560,7 +560,7 @@ svg { width: 1em; height: 1em; }
   position: fixed;
   left: 50%;
   bottom: 24px;
-  z-index: 30;
+  z-index: 1000;
   width: min(440px, calc(100vw - 32px));
   transform: translateX(-50%);
   display: grid;

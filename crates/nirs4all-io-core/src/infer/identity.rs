@@ -11,8 +11,9 @@ use std::sync::LazyLock;
 use regex::{Regex, RegexBuilder};
 use serde_json::Value;
 
+use super::plan::DatasetPlan;
 use super::table::TableProfile;
-use crate::pyfmt::{py_float_repr, py_round};
+use crate::pyfmt::{py_float_repr, py_repr, py_round};
 
 static ID_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
     RegexBuilder::new(
@@ -250,6 +251,120 @@ pub fn classify_metadata_relation(
         }
     }
     None
+}
+
+/// Keys the sources by the detected sample id `id_col` of the feature source
+/// `feature_id` (`x`), as the oracle `_infer_identity_and_alignment` does after
+/// detection: features carrying the id are keyed by it; targets carrying it
+/// get a keyed join and a coverage audit, 1:1 when the feature rows are
+/// unique per id or aggregated by it, m:1 (one reference for every repeated
+/// spectrum) otherwise; metadata tables get the 1:1 or
+/// m:1 (lookup) relation of [`classify_metadata_relation`]. Without these keys
+/// a convention join stays positional and rows in a different order are
+/// paired wrongly. `profile` reads the table of another source.
+pub fn key_sources_by_id(
+    spec_dict: &mut Value,
+    plan: &mut DatasetPlan,
+    id_col: &str,
+    feature_id: &str,
+    x: &TableProfile,
+    mut profile: impl FnMut(&Value) -> Option<TableProfile>,
+) {
+    let x_ids: Vec<String> = x
+        .column(id_col)
+        .map(|c| c.str_values.clone())
+        .unwrap_or_default();
+    let aggregated = spec_dict["aggregate"]["by"].as_str() == Some(id_col);
+    let one_row_per_id = aggregated || x.column(id_col).is_some_and(|c| c.is_unique);
+    let target_cardinality = if one_row_per_id { "1:1" } else { "m:1" };
+    let Some(sources) = spec_dict.get_mut("sources").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for source in sources.iter_mut() {
+        let role = source
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let lookup = source.get("kind").and_then(Value::as_str) == Some("lookup");
+        let id = source
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if matches!(role.as_str(), "features" | "mixed") && !lookup {
+            let keyed = id == feature_id || profile(source).is_some_and(|t| t.has_column(id_col));
+            if keyed {
+                if let Some(obj) = source.as_object_mut() {
+                    obj.entry("key").or_insert_with(|| Value::from(id_col));
+                }
+            }
+            continue;
+        }
+        let Some(table) = profile(source) else {
+            continue;
+        };
+        if role == "targets" {
+            let Some(column) = table.column(id_col) else {
+                continue;
+            };
+            set_key(source, id_col, target_cardinality, None);
+            let mut audit = coverage_audit(&x_ids, &column.str_values, &id);
+            audit["role"] = Value::from("targets");
+            if let Some(missing) = missing_warning(&audit, "sample(s) have NO target", &id) {
+                plan.warnings.push(missing);
+            }
+            plan.alignment.push(audit);
+        } else if role == "metadata" || lookup {
+            let Some((card, key, evidence)) = classify_metadata_relation(x, &table, id_col) else {
+                continue;
+            };
+            set_key(source, &key, &card, Some(card == "m:1"));
+            if let (Some(xc), Some(mc)) = (x.column(&key), table.column(&key)) {
+                let mut audit = coverage_audit(&xc.str_values, &mc.str_values, &id);
+                audit["role"] = Value::from("metadata");
+                audit["relation"] = Value::from(card.clone());
+                audit["evidence"] = serde_json::json!(evidence);
+                let label = format!("{key}(s) have NO metadata");
+                if let Some(missing) = missing_warning(&audit, &label, &id) {
+                    plan.warnings.push(missing);
+                }
+                plan.alignment.push(audit);
+            }
+        }
+    }
+}
+
+/// `src["key"] = key` and a declared join keyed on it (`on`/`how`, as the
+/// oracle's `_key_join`); a missing join stays absent. `lookup` marks an m:1
+/// dimension table.
+fn set_key(source: &mut Value, key: &str, how: &str, lookup: Option<bool>) {
+    let Some(obj) = source.as_object_mut() else {
+        return;
+    };
+    obj.insert("key".into(), Value::from(key));
+    if lookup == Some(true) {
+        obj.insert("kind".into(), Value::from("lookup"));
+    }
+    if let Some(join) = obj.get_mut("join").and_then(Value::as_object_mut) {
+        join.insert("on".into(), Value::from(key));
+        join.insert("how".into(), Value::from(how));
+    }
+}
+
+/// The oracle warning `"<n> <label> in '<id>' (e.g. <first three>)"`.
+fn missing_warning(audit: &Value, label: &str, id: &str) -> Option<String> {
+    let n = audit["n_missing"].as_u64().unwrap_or(0);
+    (n > 0).then(|| {
+        let first: Vec<Value> = audit["missing"]
+            .as_array()
+            .map(|m| m.iter().take(3).cloned().collect())
+            .unwrap_or_default();
+        format!(
+            "{n} {label} in '{id}' (e.g. {})",
+            py_repr(&Value::Array(first))
+        )
+    })
 }
 
 #[cfg(test)]

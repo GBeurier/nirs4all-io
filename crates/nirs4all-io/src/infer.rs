@@ -13,9 +13,9 @@ use nirs4all_io_core::conventions::{assignments_to_spec_dict, match_items, resol
 use nirs4all_io_core::infer::column_roles::{infer_column_roles, structure_kind};
 use nirs4all_io_core::infer::describe::{describe_text, FileDescription};
 use nirs4all_io_core::infer::detectors::{detect_signal_type, detect_task_type};
-use nirs4all_io_core::infer::identity::detect_sample_id;
+use nirs4all_io_core::infer::identity::{detect_sample_id, key_sources_by_id, repetition_profile};
 use nirs4all_io_core::infer::plan::{DatasetPlan, Decision};
-use nirs4all_io_core::pyfmt::py_round;
+use nirs4all_io_core::pyfmt::{py_float_repr, py_round};
 use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::selectors::Selector;
 use nirs4all_io_core::spec::{DatasetSpec, SpecError};
@@ -573,12 +573,77 @@ fn infer_identity_and_alignment(
         return Ok(());
     };
     let profile = table.to_table_profile();
-    if detect_sample_id(&profile).is_none() {
+    let Some(guess) = detect_sample_id(&profile) else {
         return Ok(());
+    };
+    let id_col = guess.column.clone();
+    plan.identity = Some(Decision {
+        value: json!(id_col),
+        score: guess.score,
+        evidence: guess.evidence.clone(),
+        alternatives: vec![],
+        ambiguous: !guess.unique,
+    });
+    let feature_id = feature_src
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if let Some(spec) = spec_dict.as_object_mut() {
+        spec.insert("sample_index".into(), json!({"by": "id", "key": id_col}));
+        if let Some(column) = profile.column(&id_col) {
+            apply_repetition(
+                spec,
+                plan,
+                &id_col,
+                column.str_values.len(),
+                column.nunique_with_na,
+            );
+        }
     }
-    // An id detected in a separate (non single-combined) feature source would
-    // drive keying/alignment; not reached by the contract corpus. Tracked.
+    key_sources_by_id(spec_dict, plan, &id_col, &feature_id, &profile, |source| {
+        let first = source_first_input(source)?;
+        let path = resolve_input_path(&first, base_dir);
+        let table = read_table(&path, &params_from(source)).ok()?;
+        Some(table.to_table_profile())
+    });
     Ok(())
+}
+
+/// Non-unique id: repetition + aggregation, else a duplicate-id warning
+/// (oracle `_apply_repetition`).
+fn apply_repetition(
+    spec: &mut Map<String, Value>,
+    plan: &mut DatasetPlan,
+    id_col: &str,
+    n_rows: usize,
+    n_unique: usize,
+) {
+    let profile = repetition_profile(n_rows, n_unique);
+    if profile.is_repetition {
+        spec.insert("repetition".into(), json!(id_col));
+        if let Some(index) = spec.get_mut("sample_index").and_then(Value::as_object_mut) {
+            index.insert("repetition_id".into(), json!(id_col));
+        }
+        spec.entry("aggregate")
+            .or_insert_with(|| json!({"by": id_col, "method": "median"}));
+        if let Some(identity) = plan.identity.as_mut() {
+            identity.evidence.push(format!(
+                "repeated measurements: {} rows / {} samples (avg {} reps)",
+                profile.n_rows,
+                profile.n_unique,
+                py_float_repr(profile.avg_reps)
+            ));
+        }
+        plan.recommendations.push(format!(
+            "repeated measurements detected -> set repetition='{id_col}' + aggregate by it (method default 'median')"
+        ));
+    } else if profile.n_unique < profile.n_rows {
+        plan.warnings.push(format!(
+            "sample id '{id_col}' has {} duplicate value(s) (not unique per row, not a clean repetition pattern)",
+            profile.n_rows - profile.n_unique
+        ));
+    }
 }
 
 fn absolutize_inputs(spec_dict: &mut Value, base_dir: &Path, iset: &InputSet) {
