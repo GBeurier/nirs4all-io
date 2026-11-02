@@ -125,7 +125,37 @@ const assembledCsv = wasm.assembleDataset(
 );
 const csvBlock = assembledCsv.blocks.train;
 assert.strictEqual(csvBlock.x[0].n_rows, 2, "CSV NA rows preserved");
-assert.deepStrictEqual(csvBlock.x[0].data, [1.0, 7.0, 2.0, 3.0], "CSV NA is replaced");
+assert.ok(csvBlock.x[0].data instanceof Float64Array, "matrix data is a Float64Array");
+assert.deepStrictEqual(Array.from(csvBlock.x[0].data), [1.0, 7.0, 2.0, 3.0], "CSV NA is replaced");
+
+// Missing values: a blank line in a single-column target file is a missing
+// value (never a skipped row), crosses to JS as NaN (never null), is excluded
+// under the default policy, and keeps the target column under remove_feature.
+const xyFiles = (y) => [
+  { name: "Xcal.csv", bytes: new TextEncoder().encode("a;b\n1;2\n3;4\n5;6\n7;8\n") },
+  { name: "Ycal.csv", bytes: new TextEncoder().encode(y) },
+];
+const xySpec = (policy) => JSON.stringify({
+  params: { na: { policy } },
+  sources: [
+    { id: "x", role: "features", input: "Xcal.csv" },
+    { id: "y", role: "targets", input: "Ycal.csv" },
+  ],
+});
+const kept = wasm.assembleDataset(xyFiles("y\n0.5\n\n1.5\n2\n"), [], xySpec("ignore"));
+const keptY = kept.blocks.train.y.data;
+assert.ok(keptY instanceof Float64Array, "y data is a Float64Array");
+assert.deepStrictEqual(Array.from(keptY), [0.5, NaN, 1.5, 2], "blank target line is NaN, not a skipped row");
+assert.deepStrictEqual(kept.warnings, [], "nothing excluded under ignore");
+for (const policy of ["auto", "remove_feature", "replace"]) {
+  const excluded = wasm.assembleDataset(xyFiles("y\n0.5\nNA\n1.5\n2\n"), [], xySpec(policy));
+  const b = excluded.blocks.train;
+  assert.deepStrictEqual(b.y_headers, ["y"], `${policy}: the target column is kept`);
+  assert.deepStrictEqual(Array.from(b.y.data), [0.5, 1.5, 2], `${policy}: missing-target sample excluded`);
+  assert.deepStrictEqual(Array.from(b.x[0].data), [1, 2, 5, 6, 7, 8], `${policy}: X follows`);
+  assert.strictEqual(excluded.warnings.length, 1, `${policy}: exclusion is reported`);
+}
+assert.throws(() => wasm.assembleDataset(xyFiles("y\n0.5\nNA\n1.5\n2\n"), [], xySpec("abort")), /na_policy is 'abort'/);
 const summaryCsv = JSON.parse(wasm.loadSummary(
   [{ name: "X.csv", bytes: new TextEncoder().encode("1000;1005\n1;\n2;3\n") }],
   [],

@@ -62,7 +62,7 @@ const assembledCsv = nio.assembleDataset(
   },
 );
 assert.strictEqual(assembledCsv.blocks.train.x[0].n_rows, 2, "CSV NA rows preserved");
-assert.deepStrictEqual(assembledCsv.blocks.train.x[0].data, [1.0, 7.0, 2.0, 3.0], "CSV NA is replaced");
+assert.deepStrictEqual(Array.from(assembledCsv.blocks.train.x[0].data), [1.0, 7.0, 2.0, 3.0], "CSV NA is replaced");
 
 // proposeDataset is re-exported and returns the iterative result object.
 const proposed = nio.proposeDataset(

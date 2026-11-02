@@ -472,9 +472,7 @@ pub fn apply_na_policy(frame: &Frame, na: &NaConfig) -> Result<Frame, SpecError>
     };
 
     match policy {
-        NaPolicy::Abort => Err(SpecError::new(format!(
-            "NA values detected and na_policy is 'abort'. First NA in column '{col}' (row: {row})."
-        ))),
+        NaPolicy::Abort => Err(na_abort_error(row, &col)),
         NaPolicy::Ignore => Ok(frame.clone()),
         NaPolicy::RemoveSample => {
             let mask: Vec<bool> = (0..frame.n_rows)
@@ -498,6 +496,82 @@ pub fn apply_na_policy(frame: &Frame, na: &NaConfig) -> Result<Frame, SpecError>
         }
         NaPolicy::Auto => unreachable!("auto is normalized to abort"),
     }
+}
+
+fn na_abort_error(row: usize, col: &str) -> SpecError {
+    SpecError::new(format!(
+        "NA values detected and na_policy is 'abort'. First NA in column '{col}' (row: {row})."
+    ))
+}
+
+/// Apply the `abort`, `remove_feature` or `replace` NA policy to the rows of
+/// `frame` selected by `keep`. Rows outside `keep` are about to be excluded:
+/// they never abort the load, never drop a column, never feed a fill
+/// statistic, and pass through unchanged. `abort` reports the original row.
+pub(crate) fn apply_na_policy_to_rows(
+    frame: &Frame,
+    na: &NaConfig,
+    keep: &[bool],
+) -> Result<Frame, SpecError> {
+    let kept: Vec<usize> = (0..frame.n_rows).filter(|&row| keep[row]).collect();
+    let view = frame.mask_rows(keep);
+    let policy = if na.policy == NaPolicy::Auto {
+        NaPolicy::Abort
+    } else {
+        na.policy
+    };
+    let columns = match policy {
+        NaPolicy::Abort => {
+            return match first_na(&view) {
+                Some((row, col)) => Err(na_abort_error(kept[row], &col)),
+                None => Ok(frame.clone()),
+            };
+        }
+        NaPolicy::RemoveFeature => {
+            let treated = apply_na_policy(&view, na)?;
+            let retained: std::collections::HashSet<&str> = treated
+                .columns
+                .iter()
+                .map(|col| col.name.as_str())
+                .collect();
+            frame
+                .columns
+                .iter()
+                .filter(|col| retained.contains(col.name.as_str()))
+                .cloned()
+                .collect()
+        }
+        NaPolicy::Replace => {
+            let treated = apply_na_policy(&view, na)?;
+            frame
+                .columns
+                .iter()
+                .zip(&treated.columns)
+                .map(|(col, filled)| {
+                    let mut fills = filled.values.iter();
+                    let cells = col
+                        .values
+                        .iter()
+                        .zip(keep)
+                        .map(|(cell, &kept)| {
+                            if kept {
+                                fills.next().cloned().unwrap_or(Cell::Na)
+                            } else {
+                                cell.clone()
+                            }
+                        })
+                        .collect();
+                    Column::from_cells(&col.name, cells)
+                })
+                .collect()
+        }
+        NaPolicy::Ignore | NaPolicy::RemoveSample | NaPolicy::Auto => return Ok(frame.clone()),
+    };
+    Ok(Frame {
+        columns,
+        n_rows: frame.n_rows,
+        header_unit: frame.header_unit.clone(),
+    })
 }
 
 /// pandas `mangle_dupe_cols`: `a, a.1, a.2`; stringify + pad to `ncols`.

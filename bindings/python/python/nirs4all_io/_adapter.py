@@ -23,6 +23,8 @@ _WEIGHT_COL = "__sample_weight__"
 
 
 def _matrix(d: dict) -> np.ndarray:
+    """Rebuild a wire matrix. JSON has no NaN: a missing value is ``None``, which
+    the float conversion turns back into NaN."""
     return np.asarray(d["data"], dtype=np.float32).reshape(d["n_rows"], d["n_cols"])
 
 

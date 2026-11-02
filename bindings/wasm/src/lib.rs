@@ -86,8 +86,7 @@ fn record_sets_from_js(record_sets: &JsValue) -> Result<Vec<WasmRecordSet>, JsEr
 }
 
 /// A JSON value as a plain JS object: one `JSON.parse` of its text instead of
-/// one boundary call per value (the assembled matrices hold millions of them).
-/// The value is already JSON (no NaN or infinity), so the object is identical.
+/// one boundary call per value.
 fn to_js(value: &Value) -> Result<JsValue, JsError> {
     let text = serde_json::to_string(value).map_err(|e| JsError::new(&e.to_string()))?;
     js_sys::JSON::parse(&text).map_err(|_| JsError::new("JSON.parse of a serialized value failed"))
@@ -264,6 +263,11 @@ pub fn infer_records(record_sets: JsValue) -> Result<JsValue, JsError> {
 /// sources (exact, then file-stem, then glob). Returns `AssembledDataset` as a
 /// plain JS object (per-partition `blocks` with `x`/`y`/headers/metadata + `folds`).
 ///
+/// Every numeric matrix `data` (X, y, processings) and `weights` is a
+/// `Float64Array` in which a missing value is `NaN`. JSON has no NaN, so a
+/// plain array would carry it as `null`, which JS arithmetic reads as 0.
+/// Metadata cells stay JSON values; a missing metadata cell is `null`.
+///
 /// `index_file`/`folds.file` partitions are not browser-reachable here (no fs) and
 /// raise an error — column/inline partitions and folds work.
 #[wasm_bindgen(js_name = assembleDataset)]
@@ -273,7 +277,76 @@ pub fn assemble_dataset(
     spec: &str,
 ) -> Result<JsValue, JsError> {
     let assembled = assemble_from_js(files, record_sets, spec)?;
-    to_js(&assembled.to_full_value())
+    let mut full = assembled.to_full_value();
+    // The numbers cross as typed arrays below, not as JSON text.
+    for block in full["blocks"]
+        .as_object_mut()
+        .into_iter()
+        .flat_map(|b| b.values_mut())
+    {
+        for matrix in block["x"].as_array_mut().into_iter().flatten() {
+            matrix["data"] = Value::Null;
+        }
+        if block["y"].is_object() {
+            block["y"]["data"] = Value::Null;
+        }
+        for source in block["processings"].as_array_mut().into_iter().flatten() {
+            for processing in source.as_array_mut().into_iter().flatten() {
+                processing["matrix"]["data"] = Value::Null;
+            }
+        }
+        if block["weights"].is_array() {
+            block["weights"] = Value::Null;
+        }
+    }
+    let js = to_js(&full)?;
+    let js_blocks = get(&js, "blocks")?;
+    for (part, block) in &assembled.blocks {
+        let js_block = get(&js_blocks, part)?;
+        let js_x = get(&js_block, "x")?;
+        for (index, matrix) in block.x.iter().enumerate() {
+            set_data(
+                &js_sys::Reflect::get_u32(&js_x, index as u32).map_err(js_err)?,
+                &matrix.data,
+            )?;
+        }
+        if let Some(y) = &block.y {
+            set_data(&get(&js_block, "y")?, &y.data)?;
+        }
+        let js_processings = get(&js_block, "processings")?;
+        for (source, processings) in block.processings.iter().enumerate() {
+            let js_source =
+                js_sys::Reflect::get_u32(&js_processings, source as u32).map_err(js_err)?;
+            for (index, (_, matrix)) in processings.iter().enumerate() {
+                let js_processing =
+                    js_sys::Reflect::get_u32(&js_source, index as u32).map_err(js_err)?;
+                set_data(&get(&js_processing, "matrix")?, &matrix.data)?;
+            }
+        }
+        if let Some(weights) = &block.weights {
+            js_sys::Reflect::set(&js_block, &"weights".into(), &float64_array(weights))
+                .map_err(js_err)?;
+        }
+    }
+    Ok(js)
+}
+
+fn js_err(_: JsValue) -> JsError {
+    JsError::new("could not build the assembled dataset object")
+}
+
+fn get(object: &JsValue, key: &str) -> Result<JsValue, JsError> {
+    js_sys::Reflect::get(object, &key.into()).map_err(js_err)
+}
+
+fn float64_array(values: &[f32]) -> js_sys::Float64Array {
+    let widened: Vec<f64> = values.iter().map(|&v| f64::from(v)).collect();
+    js_sys::Float64Array::from(widened.as_slice())
+}
+
+fn set_data(matrix: &JsValue, data: &[f32]) -> Result<(), JsError> {
+    js_sys::Reflect::set(matrix, &"data".into(), &float64_array(data)).map_err(js_err)?;
+    Ok(())
 }
 
 /// Materialize the same fs-free inputs as [`assemble_dataset`] and return the
