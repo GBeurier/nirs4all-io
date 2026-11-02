@@ -1,4 +1,6 @@
 """Exercise public Rust-backed loading, including physical blank records."""
+from pathlib import Path
+
 import numpy as np
 import pytest
 from nirs4all_io._adapter import to_spectrodataset
@@ -52,9 +54,20 @@ def test_missing_target_is_none_on_the_wire_and_nan_in_the_dataset(tmp_path):
     np.testing.assert_array_equal(ds.targets[0][:, 0], [10.0, np.nan, 30.0])
 
 
-def test_missing_target_excludes_its_sample_by_default(tmp_path):
+def test_missing_target_keeps_its_sample_by_default(tmp_path):
+    # Loading is lossless; training and scoring exclude target-missing samples.
     full = nio.assembled_full(_xy_spec(tmp_path, "auto"))
     block = full["blocks"]["train"]
-    assert block["x"][0]["data"] == [1.0, 3.0]
-    assert block["y"]["data"] == [10.0, 30.0]
-    assert len(full["warnings"]) == 1
+    assert block["x"][0]["data"] == [1.0, 2.0, 3.0]
+    assert block["y"]["data"] == [10.0, None, 30.0]
+    assert full["warnings"] == []
+
+
+def test_x_only_spreadsheet_loads_like_its_csv(tmp_path):
+    # A numeric header row in an .xlsx names the wavelengths, as in a CSV.
+    fixture = Path(__file__).resolve().parents[3] / "crates/nirs4all-io/tests/fixtures/spectra_refs.xlsx"
+    (tmp_path / "x.csv").write_text("1000;1002;1004\n0.1;0.2;0.3\n0.4;0.5;0.6\n0.7;0.8;0.9\n")
+    from_xlsx = nio.assembled_full({"train_x": str(fixture)})["blocks"]["train"]
+    from_csv = nio.assembled_full({"train_x": str(tmp_path / "x.csv")})["blocks"]["train"]
+    assert from_xlsx["feature_headers"] == [["1000", "1002", "1004"]]
+    assert from_xlsx["x"] == from_csv["x"]

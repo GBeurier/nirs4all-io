@@ -472,7 +472,9 @@ pub fn apply_na_policy(frame: &Frame, na: &NaConfig) -> Result<Frame, SpecError>
     };
 
     match policy {
-        NaPolicy::Abort => Err(na_abort_error(row, &col)),
+        NaPolicy::Abort => Err(SpecError::new(format!(
+            "NA values detected and na_policy is 'abort'. First NA in column '{col}' (row: {row})."
+        ))),
         NaPolicy::Ignore => Ok(frame.clone()),
         NaPolicy::RemoveSample => {
             let mask: Vec<bool> = (0..frame.n_rows)
@@ -498,82 +500,6 @@ pub fn apply_na_policy(frame: &Frame, na: &NaConfig) -> Result<Frame, SpecError>
     }
 }
 
-fn na_abort_error(row: usize, col: &str) -> SpecError {
-    SpecError::new(format!(
-        "NA values detected and na_policy is 'abort'. First NA in column '{col}' (row: {row})."
-    ))
-}
-
-/// Apply the `abort`, `remove_feature` or `replace` NA policy to the rows of
-/// `frame` selected by `keep`. Rows outside `keep` are about to be excluded:
-/// they never abort the load, never drop a column, never feed a fill
-/// statistic, and pass through unchanged. `abort` reports the original row.
-pub(crate) fn apply_na_policy_to_rows(
-    frame: &Frame,
-    na: &NaConfig,
-    keep: &[bool],
-) -> Result<Frame, SpecError> {
-    let kept: Vec<usize> = (0..frame.n_rows).filter(|&row| keep[row]).collect();
-    let view = frame.mask_rows(keep);
-    let policy = if na.policy == NaPolicy::Auto {
-        NaPolicy::Abort
-    } else {
-        na.policy
-    };
-    let columns = match policy {
-        NaPolicy::Abort => {
-            return match first_na(&view) {
-                Some((row, col)) => Err(na_abort_error(kept[row], &col)),
-                None => Ok(frame.clone()),
-            };
-        }
-        NaPolicy::RemoveFeature => {
-            let treated = apply_na_policy(&view, na)?;
-            let retained: std::collections::HashSet<&str> = treated
-                .columns
-                .iter()
-                .map(|col| col.name.as_str())
-                .collect();
-            frame
-                .columns
-                .iter()
-                .filter(|col| retained.contains(col.name.as_str()))
-                .cloned()
-                .collect()
-        }
-        NaPolicy::Replace => {
-            let treated = apply_na_policy(&view, na)?;
-            frame
-                .columns
-                .iter()
-                .zip(&treated.columns)
-                .map(|(col, filled)| {
-                    let mut fills = filled.values.iter();
-                    let cells = col
-                        .values
-                        .iter()
-                        .zip(keep)
-                        .map(|(cell, &kept)| {
-                            if kept {
-                                fills.next().cloned().unwrap_or(Cell::Na)
-                            } else {
-                                cell.clone()
-                            }
-                        })
-                        .collect();
-                    Column::from_cells(&col.name, cells)
-                })
-                .collect()
-        }
-        NaPolicy::Ignore | NaPolicy::RemoveSample | NaPolicy::Auto => return Ok(frame.clone()),
-    };
-    Ok(Frame {
-        columns,
-        n_rows: frame.n_rows,
-        header_unit: frame.header_unit.clone(),
-    })
-}
-
 /// pandas `mangle_dupe_cols`: `a, a.1, a.2`; stringify + pad to `ncols`.
 fn mangle_dupes(header: &[String], ncols: usize) -> Vec<String> {
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -590,6 +516,162 @@ fn mangle_dupes(header: &[String], ncols: usize) -> Vec<String> {
         out.push(name);
     }
     out
+}
+
+/// One worksheet of a spreadsheet: its name and its rows of typed cells, with
+/// `Cell::Na` for an empty cell.
+pub type Sheet = (String, Vec<Vec<Cell>>);
+
+fn sheet_cell_text(cell: &Cell) -> String {
+    match cell {
+        Cell::Str(text) => text.clone(),
+        Cell::Int(value) => value.to_string(),
+        Cell::Float(value) => value.to_string(),
+        Cell::Bool(value) => if *value { "True" } else { "False" }.to_string(),
+        Cell::Na => String::new(),
+    }
+}
+
+/// pandas' default boolean words.
+fn sheet_bool_word(text: &str) -> Option<bool> {
+    match text {
+        "True" | "TRUE" | "true" => Some(true),
+        "False" | "FALSE" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// Bytes a cell counts against the record and field budgets: its text, or the
+/// width of an 8-byte value.
+fn sheet_cell_bytes(cell: &Cell) -> u64 {
+    match cell {
+        Cell::Str(text) => text.len() as u64,
+        Cell::Na => 0,
+        _ => 8,
+    }
+}
+
+/// Decode the worksheet named by `format.sheet_name` (a 0-based index or a
+/// sheet name; the first sheet by default) into a [`Frame`], as pandas reads
+/// it. A spreadsheet has a header row unless `has_header` is false; header
+/// cells name the columns as text (a numeric wavelength `1000` names column
+/// `"1000"`, a blank one `"Unnamed: <j>"`). Typed cells keep their type, a text
+/// cell holding an NA token is missing, and a column of boolean words is
+/// boolean.
+/// `usecols` and `skiprows` are refused rather than ignored: select columns
+/// with source column selectors instead.
+pub fn read_sheet(
+    sheets: &[Sheet],
+    params: &LoadingParams,
+    limits: Option<TabularReadLimits>,
+) -> Result<Frame, SpecError> {
+    for option in ["usecols", "skiprows"] {
+        if params
+            .format
+            .values
+            .get(option)
+            .is_some_and(|value| !value.is_null())
+        {
+            return Err(SpecError::new(format!(
+                "loading.format.{option} is not supported for spreadsheets; select columns with the source `columns` selectors"
+            )));
+        }
+    }
+    let sheet = match params.format.values.get("sheet_name") {
+        None | Some(Value::Null) => sheets.first(),
+        Some(Value::Number(index)) => index
+            .as_u64()
+            .and_then(|index| sheets.get(usize::try_from(index).ok()?)),
+        Some(Value::String(name)) => sheets.iter().find(|(sheet, _)| sheet == name),
+        Some(_) => {
+            return Err(SpecError::new(
+                "loading.format.sheet_name must be a sheet index or a sheet name",
+            ))
+        }
+    };
+    let Some((_, records)) = sheet else {
+        let names: Vec<&str> = sheets.iter().map(|(name, _)| name.as_str()).collect();
+        return Err(SpecError::new(format!(
+            "worksheet {} not found; available: {names:?}",
+            params
+                .format
+                .values
+                .get("sheet_name")
+                .unwrap_or(&Value::from(0))
+        )));
+    };
+    let has_header = params.has_header.unwrap_or(true) && !records.is_empty();
+    let ncols = records.iter().map(Vec::len).max().unwrap_or(0);
+    let data = &records[usize::from(has_header)..];
+    if let Some(limits) = limits {
+        limits.check_shape(data.len() as u64, ncols as u64)?;
+        for record in records {
+            if record.iter().map(sheet_cell_bytes).sum::<u64>() > limits.max_record_bytes {
+                return Err(SpecError::new(format!(
+                    "tabular record exceeds the {}-byte record budget",
+                    limits.max_record_bytes
+                )));
+            }
+            if record
+                .iter()
+                .any(|cell| sheet_cell_bytes(cell) > limits.max_field_bytes)
+            {
+                return Err(SpecError::new(format!(
+                    "tabular field exceeds the {}-byte field budget",
+                    limits.max_field_bytes
+                )));
+            }
+        }
+    }
+    let header: Vec<String> = if has_header {
+        records[0]
+            .iter()
+            .enumerate()
+            .map(|(j, cell)| match sheet_cell_text(cell) {
+                text if text.is_empty() => format!("Unnamed: {j}"),
+                text => text,
+            })
+            .collect()
+    } else {
+        (0..ncols).map(|j| j.to_string()).collect()
+    };
+    let columns = mangle_dupes(&header, ncols)
+        .iter()
+        .enumerate()
+        .map(|(j, name)| {
+            let mut cells: Vec<Cell> = data
+                .iter()
+                .map(|record| match record.get(j) {
+                    Some(Cell::Str(text)) if is_na(text) => Cell::Na,
+                    Some(cell) => cell.clone(),
+                    None => Cell::Na,
+                })
+                .collect();
+            // pandas reads a column of boolean words as booleans.
+            if cells.iter().any(|cell| matches!(cell, Cell::Str(_)))
+                && cells.iter().all(|cell| match cell {
+                    Cell::Str(text) => sheet_bool_word(text).is_some(),
+                    Cell::Bool(_) | Cell::Na => true,
+                    _ => false,
+                })
+            {
+                for cell in &mut cells {
+                    if let Cell::Str(text) = cell {
+                        *cell = Cell::Bool(sheet_bool_word(text) == Some(true));
+                    }
+                }
+            }
+            Column::from_cells(name, cells)
+        })
+        .collect();
+    apply_na_policy(
+        &Frame {
+            columns,
+            n_rows: data.len(),
+            header_unit: header_unit(params, has_header),
+        },
+        &params.na,
+    )
 }
 
 /// Decode already-read (and decompressed) tabular bytes into a [`Frame`].

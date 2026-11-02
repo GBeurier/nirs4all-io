@@ -30,6 +30,8 @@ parquet = { version = "60.1.0", default-features = false, features = ["arrow", "
 cap-std = "3"
 same-file = "1"
 bytes = "1"
+calamine = { version = "0.37.0", features = ["dates"] }
+quick-xml = "0.42"
 
 [dev-dependencies]
 serde_json.workspace = true

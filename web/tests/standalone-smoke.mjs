@@ -472,7 +472,7 @@ async function mixedRepeatedTableFlow() {
   assert(result.sampleKey === "sample_id", "mixed table sample key not inferred");
   assert(result.observationId === "sample_id", "mixed table observation id not inferred");
   assert(result.repetitionId === "replicate", "mixed table repetition id not inferred");
-  assert(result.repetition === "replicate", "mixed table top-level repetition not inferred");
+  assert(result.repetition === "sample_id", `mixed table repetition must group by the repeated sample id, got ${result.repetition}`);
   assert(result.target === "protein", "mixed table target not selected");
   assert(result.activeTab === "Y histogram", "mixed table did not show Y histogram");
   assert(result.legend.includes("protein"), "mixed table Y histogram legend missing protein");
