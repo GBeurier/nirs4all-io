@@ -17,15 +17,17 @@ use nirs4all_io_core::materialize::{
     assemble_in_memory, AssembledDataset, InMemorySource, SourcePayload,
 };
 use nirs4all_io_core::spec::{normalize_to_spec_dict, validate_spec, DatasetSpec};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
-use serde_wasm_bindgen::Serializer;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 #[derive(Deserialize)]
 struct WasmFile {
     name: String,
+    /// One copy of the `Uint8Array` (a generic sequence would cross the
+    /// JS/WASM boundary once per byte).
+    #[serde(with = "serde_bytes")]
     bytes: Vec<u8>,
 }
 
@@ -62,8 +64,33 @@ struct ProposeOptions {
     confirmed: Vec<WasmConfirmedLock>,
 }
 
-fn js_serializer() -> Serializer {
-    Serializer::new().serialize_maps_as_objects(true)
+/// Decoded record sets read through one `JSON.stringify` and a native parse,
+/// instead of one boundary call per value (thousands of spectra hold millions).
+/// The replacer keeps what the per-value conversion produced: an `undefined`
+/// field is `null`, and a `BigInt` (u64 fields such as `row_index`) is its
+/// exact integer (`JSON.rawJSON`, or `Number` where that is unavailable, exact
+/// below 2^53); non-finite numbers become `null` in both.
+fn record_sets_from_js(record_sets: &JsValue) -> Result<Vec<WasmRecordSet>, JsError> {
+    let replacer = js_sys::Function::new_with_args(
+        "key, value",
+        "if (value === undefined) return null; \
+         if (typeof value === 'bigint') return JSON.rawJSON ? JSON.rawJSON(value.toString()) : Number(value); \
+         return value;",
+    );
+    let text = js_sys::JSON::stringify_with_replacer(record_sets, &replacer)
+        .map_err(|_| JsError::new("recordSets must be an array: not serializable"))?
+        .as_string()
+        .ok_or_else(|| JsError::new("recordSets must be an array"))?;
+    serde_json::from_str(&text)
+        .map_err(|e| JsError::new(&format!("recordSets must be an array: {e}")))
+}
+
+/// A JSON value as a plain JS object: one `JSON.parse` of its text instead of
+/// one boundary call per value (the assembled matrices hold millions of them).
+/// The value is already JSON (no NaN or infinity), so the object is identical.
+fn to_js(value: &Value) -> Result<JsValue, JsError> {
+    let text = serde_json::to_string(value).map_err(|e| JsError::new(&e.to_string()))?;
+    js_sys::JSON::parse(&text).map_err(|_| JsError::new("JSON.parse of a serialized value failed"))
 }
 
 /// Normalize a spec/config JSON string into the canonical `DatasetSpec` JSON.
@@ -109,9 +136,7 @@ pub fn infer_files(files: JsValue, options: JsValue) -> Result<JsValue, JsError>
         Some(options.conventions.as_slice())
     };
     let plan = infer_named_bytes(&named, conventions).map_err(|e| JsError::new(&e.message))?;
-    plan.to_value()
-        .serialize(&js_serializer())
-        .map_err(|e| JsError::new(&e.to_string()))
+    to_js(&plan.to_value())
 }
 
 /// Infer a browser dataset plan from raw files and decoded spectral records.
@@ -126,8 +151,7 @@ pub fn infer_dataset(
 ) -> Result<JsValue, JsError> {
     let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
         .map_err(|e| JsError::new(&format!("files must be an array of {{name, bytes}}: {e}")))?;
-    let record_sets: Vec<WasmRecordSet> = serde_wasm_bindgen::from_value(record_sets)
-        .map_err(|e| JsError::new(&format!("recordSets must be an array: {e}")))?;
+    let record_sets = record_sets_from_js(&record_sets)?;
     let options = parse_options(options)?;
     let named = files
         .into_iter()
@@ -151,9 +175,7 @@ pub fn infer_dataset(
     };
     let plan =
         infer_browser_dataset(&named, &sets, conventions).map_err(|e| JsError::new(&e.message))?;
-    plan.to_value()
-        .serialize(&js_serializer())
-        .map_err(|e| JsError::new(&e.to_string()))
+    to_js(&plan.to_value())
 }
 
 /// Iterative, user-validatable dataset inference.
@@ -171,8 +193,7 @@ pub fn propose_dataset(
 ) -> Result<JsValue, JsError> {
     let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
         .map_err(|e| JsError::new(&format!("files must be an array of {{name, bytes}}: {e}")))?;
-    let record_sets: Vec<WasmRecordSet> = serde_wasm_bindgen::from_value(record_sets)
-        .map_err(|e| JsError::new(&format!("recordSets must be an array: {e}")))?;
+    let record_sets = record_sets_from_js(&record_sets)?;
     let opts: ProposeOptions = if options.is_null() || options.is_undefined() {
         ProposeOptions::default()
     } else {
@@ -211,10 +232,7 @@ pub fn propose_dataset(
     };
     let result = propose_browser_dataset(&named, &sets, &confirmed, conventions)
         .map_err(|e| JsError::new(&e.message))?;
-    result
-        .to_value()
-        .serialize(&js_serializer())
-        .map_err(|e| JsError::new(&e.to_string()))
+    to_js(&result.to_value())
 }
 
 /// Infer a dataset plan from decoded spectral records.
@@ -223,8 +241,7 @@ pub fn propose_dataset(
 /// `records` follows the JSON shape emitted by `nirs4all-formats`.
 #[wasm_bindgen(js_name = inferRecords)]
 pub fn infer_records(record_sets: JsValue) -> Result<JsValue, JsError> {
-    let record_sets: Vec<WasmRecordSet> = serde_wasm_bindgen::from_value(record_sets)
-        .map_err(|e| JsError::new(&format!("recordSets must be an array: {e}")))?;
+    let record_sets = record_sets_from_js(&record_sets)?;
     let sets = record_sets
         .into_iter()
         .map(|set| DecodedRecordSet {
@@ -234,9 +251,7 @@ pub fn infer_records(record_sets: JsValue) -> Result<JsValue, JsError> {
         })
         .collect::<Vec<_>>();
     let plan = infer_decoded_records(&sets).map_err(|e| JsError::new(&e.message))?;
-    plan.to_value()
-        .serialize(&js_serializer())
-        .map_err(|e| JsError::new(&e.to_string()))
+    to_js(&plan.to_value())
 }
 
 /// Assemble a `DatasetSpec` into a materialized, target-agnostic dataset, fs-free.
@@ -258,10 +273,7 @@ pub fn assemble_dataset(
     spec: &str,
 ) -> Result<JsValue, JsError> {
     let assembled = assemble_from_js(files, record_sets, spec)?;
-    assembled
-        .to_full_value()
-        .serialize(&js_serializer())
-        .map_err(|e| JsError::new(&e.to_string()))
+    to_js(&assembled.to_full_value())
 }
 
 /// Materialize the same fs-free inputs as [`assemble_dataset`] and return the
@@ -271,11 +283,7 @@ pub fn assemble_dataset(
 /// the cross-language qualification byte-exact and preserves source, sample,
 /// observation, repetition, group, and fold provenance without host-side logic.
 #[wasm_bindgen(js_name = loadSummary)]
-pub fn load_summary(
-    files: JsValue,
-    record_sets: JsValue,
-    spec: &str,
-) -> Result<String, JsError> {
+pub fn load_summary(files: JsValue, record_sets: JsValue, spec: &str) -> Result<String, JsError> {
     let assembled = assemble_from_js(files, record_sets, spec)?;
     canonical_json(&assembled.to_summary_value()).map_err(|e| JsError::new(&e.to_string()))
 }
@@ -287,8 +295,7 @@ fn assemble_from_js(
 ) -> Result<AssembledDataset, JsError> {
     let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
         .map_err(|e| JsError::new(&format!("files must be an array of {{name, bytes}}: {e}")))?;
-    let record_sets: Vec<WasmRecordSet> = serde_wasm_bindgen::from_value(record_sets)
-        .map_err(|e| JsError::new(&format!("recordSets must be an array: {e}")))?;
+    let record_sets = record_sets_from_js(&record_sets)?;
     let value: Value =
         serde_json::from_str(spec).map_err(|e| JsError::new(&format!("spec JSON: {e}")))?;
     let spec = DatasetSpec::from_value(&value).map_err(|e| JsError::new(&e.message))?;
@@ -307,8 +314,7 @@ fn assemble_from_js(
         });
     }
 
-    assemble_in_memory(&spec, &sources, &HashMap::new(), None)
-        .map_err(|e| JsError::new(&e.message))
+    assemble_in_memory(&spec, &sources, &HashMap::new(), None).map_err(|e| JsError::new(&e.message))
 }
 
 /// The wire-contract (crate) version string.

@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-capi"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nirs4all-io",
  "serde_json",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-core"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "csv",
  "indexmap",

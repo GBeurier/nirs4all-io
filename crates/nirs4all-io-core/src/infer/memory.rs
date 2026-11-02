@@ -14,7 +14,7 @@ use crate::conventions::{assignments_to_spec_dict, match_items, resolve_profiles
 use crate::infer::column_roles::{infer_column_roles, structure_kind};
 use crate::infer::describe::{describe_text, FileDescription};
 use crate::infer::detectors::{detect_signal_type, detect_task_type};
-use crate::infer::identity::{detect_sample_id, repetition_profile};
+use crate::infer::identity::{detect_sample_id, key_sources_by_id, repetition_profile};
 use crate::infer::plan::{DatasetPlan, Decision};
 use crate::infer::table::{ColDtype, ColumnProfile, NumericKind, TableProfile};
 use crate::pyfmt::{py_round, py_str_scalar};
@@ -1521,6 +1521,22 @@ fn infer_identity_and_alignment(
                 .insert("repetition".into(), params);
         }
     }
+    let feature_id = feature_src
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    key_sources_by_id(
+        spec_dict,
+        plan,
+        &id_guess.column,
+        &feature_id,
+        &profile,
+        |source| {
+            let file = by_name.get(&source_first_input(source)?)?;
+            tables.read(file, source).map(MemTable::to_table_profile)
+        },
+    );
 }
 
 fn infer_signal_and_task(
@@ -2038,6 +2054,71 @@ mod tests {
             name: name.into(),
             bytes: text.as_bytes().to_vec(),
         }
+    }
+
+    fn source<'a>(spec: &'a Value, id: &str) -> &'a Value {
+        spec["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == json!(id))
+            .unwrap()
+    }
+
+    #[test]
+    fn browser_dataset_joins_shuffled_targets_by_the_sample_id() {
+        // y rows in another order than X: a positional join would pair s1 with 12.
+        let files = vec![
+            named(
+                "Xtrain.csv",
+                "sample_id;1000;1100;1200\ns1;0.1;0.2;0.3\ns2;0.4;0.5;0.6\ns3;0.7;0.8;0.95\n",
+            ),
+            named("Ytrain.csv", "sample_id;protein\ns2;12\ns1;11\ns3;13\n"),
+        ];
+        let plan = infer_browser_dataset(&files, &[], None).unwrap();
+        let spec = plan.resolved_spec.as_ref().unwrap().to_value();
+        assert_eq!(spec["sample_index"]["key"], json!("sample_id"));
+        assert_eq!(source(&spec, "train_x")["key"], json!("sample_id"));
+        let y = source(&spec, "train_y");
+        assert_eq!(y["key"], json!("sample_id"));
+        assert_eq!(y["join"]["left_on"], json!("sample_id"));
+        assert_eq!(y["join"]["right_on"], json!("sample_id"));
+        assert_eq!(y["join"]["cardinality"], json!("1:1"));
+        assert_eq!(plan.alignment.len(), 1);
+        assert_eq!(plan.alignment[0]["n_missing"], json!(0));
+        assert!(plan.warnings.iter().all(|w| !w.contains("NO target")));
+    }
+
+    #[test]
+    fn browser_dataset_joins_one_reference_to_every_repeated_spectrum() {
+        let files = vec![
+            named(
+                "Xtrain.csv",
+                "sample_id;1000;1100;1200\ns1;0.1;0.2;0.3\ns1;0.15;0.25;0.35\ns2;0.4;0.5;0.6\n",
+            ),
+            named("Ytrain.csv", "sample_id;protein\ns2;12\ns1;11\n"),
+        ];
+        let plan = infer_browser_dataset(&files, &[], None).unwrap();
+        let spec = plan.resolved_spec.as_ref().unwrap().to_value();
+        let y = source(&spec, "train_y");
+        assert_eq!(y["join"]["left_on"], json!("sample_id"));
+        assert_eq!(y["join"]["cardinality"], json!("m:1"));
+    }
+
+    #[test]
+    fn browser_dataset_keys_shared_metadata_as_a_lookup() {
+        let files = vec![
+            named("Xtrain.csv", "sample_id;site;1000;1100\ns1;north;0.1;0.2\ns2;south;0.4;0.5\ns3;north;0.7;0.8\ns4;south;0.6;0.9\n"),
+            named("Ytrain.csv", "sample_id;protein\ns4;14\ns2;12\ns1;11\ns3;13\n"),
+            named("Mtrain.csv", "site;altitude\nsouth;20\nnorth;300\n"),
+        ];
+        let plan = infer_browser_dataset(&files, &[], None).unwrap();
+        let spec = plan.resolved_spec.as_ref().unwrap().to_value();
+        let m = source(&spec, "train_m");
+        assert_eq!(m["key"], json!("site"));
+        assert_eq!(m["kind"], json!("lookup"));
+        assert_eq!(m["join"]["left_on"], json!("site"));
+        assert_eq!(m["join"]["cardinality"], json!("m:1"));
     }
 
     #[test]

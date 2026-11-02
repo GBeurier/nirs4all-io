@@ -21,7 +21,7 @@ const legalMirrors = [
   "crates/nirs4all-io-capi",
   "crates/nirs4all-io-cli",
 ];
-const wasmLicenseClosureChecksum = "3539317375053cb2b12ab95c71fd189ed95780b27de07dd7bc620d0f8c5d1954";
+const wasmLicenseClosureChecksum = "be32bcacdabee86fa21258d9605afaf452181bfec042caab9ef2ffb6f1a9a0d3";
 const lockedLicenseSources = [
   {
     packageName: "ryu",
@@ -216,9 +216,9 @@ function validateWasmSbom(sbom) {
   if (subject?.name !== "nirs4all-io-wasm" || subject.purl !== subject["bom-ref"]) {
     throw new Error("invalid WASM SBOM subject identity");
   }
-  if (sbom.components.length !== 55 || sbom.dependencies.length !== 55) {
+  if (sbom.components.length !== 56 || sbom.dependencies.length !== 56) {
     throw new Error(
-      `WASM SBOM must contain exactly 55 components/dependencies, got ${sbom.components.length}/${sbom.dependencies.length}`,
+      `WASM SBOM must contain exactly 56 components/dependencies, got ${sbom.components.length}/${sbom.dependencies.length}`,
     );
   }
   const refs = new Set(sbom.components.map((component) => component["bom-ref"]));

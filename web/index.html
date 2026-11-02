@@ -114,10 +114,6 @@
           <div class="dataset-map" id="datasetMap"></div>
           <div class="dataset-alerts" id="datasetAlerts"></div>
           <div class="status-line" id="status">Waiting for files.</div>
-          <div class="progress-toast" id="progress" role="status" aria-live="polite" hidden>
-            <span id="progressLabel"></span>
-            <div class="progress-track"><span id="progressBar"></span></div>
-          </div>
         </section>
       </div>
     </section>
@@ -372,5 +368,10 @@
   <script type="module" src="./builder.js"></script>
     <!-- GoatCounter privacy-friendly analytics (no cookies) -->
     <script data-goatcounter="https://nirs4all.goatcounter.com/count" data-goatcounter-settings='{"path": "/io"}' async src="//gc.zgo.at/count.js"></script>
+  <!-- Outside every section so no stacking context can cover it. -->
+  <div class="progress-toast" id="progress" role="status" aria-live="polite" hidden>
+    <span id="progressLabel"></span>
+    <div class="progress-track"><span id="progressBar"></span></div>
+  </div>
 </body>
 </html>

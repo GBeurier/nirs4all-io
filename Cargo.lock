@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-capi"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "cbindgen",
  "nirs4all-io",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-cli"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "clap",
@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-core"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "csv",
  "indexmap",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-dagml"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "clap",

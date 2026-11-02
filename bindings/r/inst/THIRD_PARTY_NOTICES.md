@@ -39,7 +39,7 @@ it deliberately contains no timestamp, UUID, or local build path.
 | Component | License expression | Upstream |
 |---|---|---|
 | `dag-ml-data` | `CeCILL-2.1 OR AGPL-3.0-or-later` | https://github.com/GBeurier/dag-ml-data |
-| `serde`, `serde_json` | `MIT OR Apache-2.0` | https://github.com/serde-rs |
+| `serde`, `serde_json`, `serde_bytes` | `MIT OR Apache-2.0` | https://github.com/serde-rs |
 | `thiserror`, `anyhow` | `MIT OR Apache-2.0` | https://github.com/dtolnay |
 | `sha2` | `MIT OR Apache-2.0` | https://github.com/RustCrypto/hashes |
 | `regex` | `MIT OR Apache-2.0` | https://github.com/rust-lang/regex |
