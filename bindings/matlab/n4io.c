@@ -2,7 +2,7 @@
  * MATLAB/Octave MEX glue for the nirs4all-io C ABI (EPIC 11.3).
  *
  *   n4io('to_spec',  input_json[, conventions_json]) -> char  (canonical spec)
- *   n4io('infer',    input_json[, conventions_json]) -> char  (DatasetPlan)
+ *   n4io('infer',    input_json[, options_json])     -> char  (DatasetPlan)
  *   n4io('validate', spec_json)                      -> [] (errors if invalid)
  *   n4io('abi_version')                              -> char
  *

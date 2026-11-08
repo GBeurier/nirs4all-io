@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,34 @@ from .public_content import canonical_source_schema, metadata_number
 
 U07_SOURCE_ORDER = ("nir", "image", "series", "metadata")
 _U07_TYPES = {"nir": "signal_1d", "image": "rgb_image", "series": "series_mv", "metadata": "tabular_mixed"}
+
+
+def _float_width(dtype: Any) -> int | None:
+    """Resolve only NumPy float dtype metadata, without converting any cells."""
+    try:
+        declared = np.dtype(dtype)
+    except (TypeError, ValueError):
+        return None
+    return declared.itemsize * 8 if declared.kind == "f" and declared.itemsize in (4, 8) else None
+
+
+def _declared_float_cells(record: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Copy nested lists, delegating declared finite numeric cells to the owner."""
+    width = _float_width(record.get("dtype"))
+    if width is None or not isinstance(record.get("values"), list):
+        return record
+    from . import _native
+
+    dtype = f"float{width}"
+
+    def walk(cell: Any) -> Any:
+        if isinstance(cell, list):
+            return [walk(item) for item in cell]
+        if type(cell) is int or (type(cell) is float and isfinite(cell)):
+            return _native.declared_float_cell(cell, dtype)
+        return cell
+
+    return {**record, "values": walk(record["values"])}
 
 
 def load_dataset_document(definition: Any) -> Any:

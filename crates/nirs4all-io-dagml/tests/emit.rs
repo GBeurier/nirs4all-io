@@ -23,7 +23,7 @@ fn corpus(case: &str) -> PathBuf {
 
 fn assembled(case: &str) -> nirs4all_io::materialize::AssembledDataset {
     let dir = corpus(case);
-    let plan = infer_path(&dir.to_string_lossy(), None).expect("infer");
+    let plan = infer_path(&dir.to_string_lossy(), &Default::default()).expect("infer");
     let spec = plan.resolved_spec.expect("resolved_spec");
     let assembled = assemble(&spec, Path::new(".")).expect("assemble");
     assembled

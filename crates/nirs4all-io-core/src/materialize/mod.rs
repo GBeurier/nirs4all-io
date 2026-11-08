@@ -13,11 +13,17 @@ pub mod folds;
 pub mod frame;
 pub mod join;
 pub mod loaders;
+pub mod numeric;
 pub mod package;
+pub mod projection;
+pub use numeric::{NumericStorage, NumericStorageOptions, PrecisionOrigin, PrecisionRecord};
+pub use projection::{ExecutedProjectionIdentityV1, EXECUTED_PROJECTION_PROFILE};
 
 pub use assemble::{
-    assemble_in_memory, assemble_in_memory_with_tabular_limits, AssembledDataset, FoldProvenance,
-    IdentityProvenance, InMemorySource, PartitionBlock, SourcePayload, ASSEMBLED_DATASET_VERSION,
+    assemble_in_memory, assemble_in_memory_with_storage,
+    assemble_in_memory_with_storage_and_tabular_limits, assemble_in_memory_with_tabular_limits,
+    AssembledDataset, FoldProvenance, IdentityProvenance, InMemorySource, PartitionBlock,
+    SourcePayload, ASSEMBLED_DATASET_VERSION,
 };
 pub use folds::{parse_fold_str, Fold};
 pub use frame::{Cell, Column, Frame, Matrix};
@@ -27,8 +33,8 @@ pub use loaders::{
     TabularReadLimits,
 };
 pub use package::{
-    repr_ids, DatasetPackage, FeatureMatrix, GenotypeMatrix, MaskBlock, MetadataTable, NdTensor,
-    PackagePartition, PayloadBlock, PayloadManifest, PayloadManifestEntry, PayloadStorageKind,
-    RowPositionFallback, SequenceBlock, SpectralRecordSet, TargetTable, UriRef, WeightsVector,
-    DATASET_PACKAGE_VERSION,
+    package_in_memory_with_storage_and_tabular_limits, repr_ids, DatasetPackage, FeatureMatrix,
+    GenotypeMatrix, MaskBlock, MetadataTable, NdTensor, PackagePartition, PayloadBlock,
+    PayloadManifest, PayloadManifestEntry, PayloadStorageKind, RowPositionFallback, SequenceBlock,
+    SpectralRecordSet, TargetTable, UriRef, WeightsVector, DATASET_PACKAGE_VERSION,
 };

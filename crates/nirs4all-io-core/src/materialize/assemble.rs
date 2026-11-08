@@ -29,17 +29,21 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
 use super::folds::Fold;
-use super::frame::{Cell, Column, Frame, Matrix};
+use super::frame::{Cell, Column, Frame, JoinKey, Matrix};
 use super::join::{
     concat_features_with_limits, concat_samples_with_limits, join_tables_with_limits,
     merge_by_key_with_limits,
 };
 use super::loaders::{
-    apply_na_policy, effective_params, read_sheet, read_table_bytes, read_table_bytes_with_limits,
-    Sheet, TabularReadLimits,
+    apply_na_policy, effective_params, is_comma_pair, read_sheet, read_table_bytes,
+    read_table_bytes_with_limits, refuse_undeclared_delimiter, Sheet, TabularReadLimits,
 };
+use super::numeric::{NumericStorageOptions, PrecisionRecord};
 
 /// A source payload supplied in-memory instead of a file path.
+///
+/// Adding `Rows` is a breaking Rust source API change for external exhaustive
+/// matches. It changes no C ABI, JSON transport or artifact schema.
 pub enum SourcePayload {
     /// Raw CSV/tabular bytes the formats layer won't decode (y/metadata tables).
     Bytes(Vec<u8>),
@@ -48,12 +52,18 @@ pub enum SourcePayload {
     Frame(Frame),
     /// A facade-decoded spreadsheet; each source selects its worksheet.
     Sheets(Vec<Sheet>),
+    /// Explicit scalar row objects, distinct from decoded Formats records.
+    /// Columns follow first-seen key order; under `preserve_order`, different
+    /// input key orders can produce different tables and fingerprints. Declare
+    /// `format.columns` to fix column order. `tabular_limits=None` is uncapped.
+    Rows(Vec<Value>),
     /// Pre-decoded nirs4all-formats records (signals[].values=X, targets{}, metadata{}).
+    /// Plain row objects and malformed sections are refused, never reinterpreted.
     Records(Vec<Value>),
 }
 
 /// A named in-memory source. `name` matches a `source.input` string / list /
-/// glob-expansion entry (by exact, then file-stem, then glob match).
+/// glob-expansion entry (exact name first; otherwise a pattern, or a non-pattern file-stem fallback).
 pub struct InMemorySource {
     pub name: String,
     pub payload: SourcePayload,
@@ -63,15 +73,98 @@ fn row_idx_col(source_id: &str) -> String {
     format!("__src_row_idx__{source_id}__")
 }
 
-/// `(frame, header_unit, signal_type, origins)` from a source's load.
-type LoadedSource = (Frame, String, Option<String>, Option<Vec<String>>);
+#[derive(Clone)]
+enum NumericScope {
+    Uniform(char),
+    Rows(Vec<char>),
+    Columns(IndexMap<String, char>),
+}
+
+impl NumericScope {
+    fn decimal(&self, column: &str, row: usize) -> char {
+        match self {
+            Self::Uniform(decimal) => *decimal,
+            Self::Rows(rows) => rows.get(row).copied().unwrap_or('.'),
+            Self::Columns(columns) => columns.get(column).copied().unwrap_or('.'),
+        }
+    }
+
+    fn inputs(
+        frames: &[Frame],
+        decimals: &[char],
+        merge: MergeMode,
+        names: &[String],
+        keys: &[String],
+    ) -> Self {
+        let first = decimals.first().copied().unwrap_or('.');
+        if decimals.iter().all(|decimal| *decimal == first) {
+            return Self::Uniform(first);
+        }
+        if merge == MergeMode::ConcatSamples {
+            return Self::Rows(
+                frames
+                    .iter()
+                    .zip(decimals)
+                    .flat_map(|(frame, decimal)| std::iter::repeat_n(*decimal, frame.n_rows))
+                    .collect(),
+            );
+        }
+        let mut columns = IndexMap::new();
+        for (index, (frame, decimal)) in frames.iter().zip(decimals).enumerate() {
+            for column in &frame.columns {
+                if index > 0 && keys.contains(&column.name) {
+                    continue;
+                }
+                let name = if columns.contains_key(&column.name) {
+                    if merge == MergeMode::ConcatFeatures && keys.is_empty() {
+                        format!("{}__{}", names[index], column.name)
+                    } else {
+                        format!("{}__{}", column.name, names[index])
+                    }
+                } else {
+                    column.name.clone()
+                };
+                columns.insert(name, *decimal);
+            }
+        }
+        Self::Columns(columns)
+    }
+}
+
+fn input_decimal(source: &InMemorySource, params: &LoadingParams) -> char {
+    if matches!(
+        &source.payload,
+        SourcePayload::Bytes(_) | SourcePayload::Rows(_)
+    ) {
+        params
+            .decimal_separator
+            .as_deref()
+            .unwrap_or(".")
+            .chars()
+            .next()
+            .unwrap_or('.')
+    } else {
+        '.'
+    }
+}
+
+/// Actual loaded geometry stays internal until selected feature columns are known.
+struct LoadedSource {
+    frame: Frame,
+    numeric_scope: NumericScope,
+    header_unit: String,
+    signal_type: Option<String>,
+    origins: Option<Vec<String>>,
+    raw_unit: Option<String>,
+    raw_coordinates: Option<IndexMap<String, Value>>,
+}
 
 /// Version of the JSON-compatible `AssembledDataset` summary/full wire.
 ///
 /// Version 1 was unversioned and did not preserve source ids, scientific
 /// identity, or stable fold provenance. Consumers must reject it rather than
 /// silently interpreting it as this version.
-pub const ASSEMBLED_DATASET_VERSION: u32 = 2;
+pub const ASSEMBLED_DATASET_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Default)]
 pub struct PartitionBlock {
@@ -80,6 +173,9 @@ pub struct PartitionBlock {
     pub source_ids: Vec<String>,
     pub x: Vec<Matrix>,
     pub feature_headers: Vec<Vec<String>>,
+    pub feature_names: Vec<Option<Vec<String>>>,
+    pub feature_axes: Vec<Vec<Value>>,
+    pub representation_ids: Vec<String>,
     pub header_units: Vec<String>,
     pub signal_types: Vec<Option<String>>,
     pub processings: Vec<Vec<(String, Matrix)>>,
@@ -87,7 +183,9 @@ pub struct PartitionBlock {
     pub y_headers: Vec<String>,
     pub y_categorical: IndexMap<String, Value>,
     pub metadata: Option<Frame>,
-    pub weights: Option<Vec<f32>>,
+    pub weights: Option<Vec<f64>>,
+    pub weights_validity: Option<Vec<bool>>,
+    pub weights_precision: super::numeric::PrecisionRecord,
     pub weights_header: Option<String>,
 }
 
@@ -150,7 +248,7 @@ impl AssembledDataset {
                         Value::Array(
                             m.data[r * m.n_cols..(r + 1) * m.n_cols]
                                 .iter()
-                                .map(|&v| Value::from(py_round(v as f64, 4)))
+                                .map(|&v| Value::from(py_round(v, 4)))
                                 .collect(),
                         )
                     })
@@ -210,9 +308,25 @@ impl AssembledDataset {
     /// complete X/y/processing matrices (flat f64 + shape), metadata column
     /// values, weights, and folds — everything `to_spectrodataset` needs to
     /// rebuild a `SpectroDataset` from the materialized data.
-    pub fn to_full_value(&self) -> Value {
+    pub fn to_full_value(&self) -> Result<Value, String> {
+        let package = super::package::DatasetPackage::from_assembled(self)?;
+        let normalized = package.to_assembled();
         let mut blocks = Map::new();
-        for (part, b) in &self.blocks {
+        for (part, b) in &normalized.blocks {
+            let target = package.partitions[part]
+                .payloads
+                .iter()
+                .find_map(|(_, p)| match p {
+                    super::package::PayloadBlock::TargetTable(t) => Some(t),
+                    _ => None,
+                });
+            let weight = package.partitions[part]
+                .payloads
+                .iter()
+                .find_map(|(_, p)| match p {
+                    super::package::PayloadBlock::Weights(w) => Some(w),
+                    _ => None,
+                });
             blocks.insert(
                 part.clone(),
                 serde_json::json!({
@@ -220,13 +334,16 @@ impl AssembledDataset {
                     "source_ids": b.source_ids,
                     "x": b.x.iter().map(matrix_full).collect::<Vec<_>>(),
                     "feature_headers": b.feature_headers,
+                    "feature_names": b.feature_names,
+                    "feature_axes": b.feature_axes.iter().map(|axes|super::projection::axes_full(axes)).collect::<Result<Vec<_>,_>>()?,
+                    "representation_ids": b.representation_ids,
                     "header_units": b.header_units,
                     "signal_types": b.signal_types,
-                    "y": b.y.as_ref().map(matrix_full),
+                    "y": target.map(|t| serde_json::json!({"columns":super::projection::target_columns(t)})),
                     "y_headers": b.y_headers,
                     "y_categorical": b.y_categorical,
                     "metadata": b.metadata.as_ref().map(frame_full),
-                    "weights": b.weights,
+                    "weights": weight.map(|w| { let mut matrix=Matrix::new(w.values.clone(),w.values.len(),1);matrix.validity=w.validity.clone();matrix.precision=w.precision.clone();matrix.full_value() }),
                     "weights_header": b.weights_header,
                     "processings": b.processings.iter().map(|src| {
                         src.iter()
@@ -244,7 +361,8 @@ impl AssembledDataset {
                 "outlier_threshold": a.outlier_threshold,
             })
         });
-        serde_json::json!({
+        Ok(serde_json::json!({
+            "partition_order":self.blocks.keys().collect::<Vec<_>>(),
             "assembled_schema_version": ASSEMBLED_DATASET_VERSION,
             "name": self.name,
             "task_type": self.task_type,
@@ -260,16 +378,13 @@ impl AssembledDataset {
             "repetition": self.repetition,
             "aggregate": aggregate,
             "warnings": self.warnings,
-        })
+            "audits": self.audits,
+        }))
     }
 }
 
 fn matrix_full(m: &Matrix) -> Value {
-    serde_json::json!({
-        "data": m.data.iter().map(|&v| v as f64).collect::<Vec<f64>>(),
-        "n_rows": m.n_rows,
-        "n_cols": m.n_cols,
-    })
+    m.full_value()
 }
 
 pub fn identity_provenance_value(identity: &IdentityProvenance) -> Value {
@@ -282,21 +397,11 @@ pub fn identity_provenance_value(identity: &IdentityProvenance) -> Value {
     })
 }
 
-fn cell_value(c: &Cell) -> Value {
-    match c {
-        Cell::Bool(b) => Value::from(*b),
-        Cell::Int(i) => Value::from(*i),
-        Cell::Float(f) => Value::from(*f),
-        Cell::Str(s) => Value::from(s.clone()),
-        Cell::Na => Value::Null,
-    }
-}
-
 fn frame_full(f: &Frame) -> Value {
     let columns: Vec<Value> = f
         .columns
         .iter()
-        .map(|c| serde_json::json!({"name": c.name, "values": c.values.iter().map(cell_value).collect::<Vec<_>>()}))
+        .map(|c| serde_json::json!({"name": c.name, "values": c.values.iter().enumerate().map(|(row, v)| super::frame::metadata_cell_value(c, row, v)).collect::<Vec<_>>()}))
         .collect();
     serde_json::json!({ "n_rows": f.n_rows, "columns": columns })
 }
@@ -304,6 +409,7 @@ fn frame_full(f: &Frame) -> Value {
 struct SourceTable {
     source_id: String,
     df: Frame,
+    numeric_scope: NumericScope,
     /// column -> role, in `_split_roles` order.
     roles: Vec<(String, String)>,
     key: Option<Vec<String>>,
@@ -312,6 +418,8 @@ struct SourceTable {
     join: Option<JoinSpec>,
     signal_type: Option<String>,
     header_unit: String,
+    raw_unit: Option<String>,
+    raw_coordinates: Option<IndexMap<String, Value>>,
     variations: Vec<(String, Matrix)>,
     /// Original source positions to remove, applied only after all sources align.
     remove_rows: Option<Vec<bool>>,
@@ -513,8 +621,8 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 /// Resolve `input` against the named in-memory sources (replaces `resolve_inputs`).
 ///
-/// Match each `source.input` entry by exact name, then file-stem, then — for a
-/// glob entry — by glob match (Codex #2 / #4):
+/// Match exact names first. Without an exact name, patterns use glob matching
+/// and non-patterns use the existing unique file-stem fallback:
 /// - A glob whose pattern contains a path separator matches against the full
 ///   source name; a separator-free glob matches against the source basename. This
 ///   mirrors the native `glob(base_dir.join(text))` path-scoping, so a feature
@@ -534,7 +642,11 @@ fn resolve_inputs_mem<'a>(
     let mut seen: HashSet<&str> = HashSet::new();
     for item in items {
         let Some(text) = item.as_str() else { continue };
-        if is_glob(text) {
+        if let Some(s) = unique_match(text, sources, |s| s.name == text, "exact name")? {
+            if seen.insert(s.name.as_str()) {
+                out.push(s);
+            }
+        } else if is_glob(text) {
             let path_scoped = text.contains(['/', '\\']);
             let mut matched: Vec<&InMemorySource> = sources
                 .iter()
@@ -551,10 +663,6 @@ fn resolve_inputs_mem<'a>(
                 if seen.insert(s.name.as_str()) {
                     out.push(s);
                 }
-            }
-        } else if let Some(s) = unique_match(text, sources, |s| s.name == text, "exact name")? {
-            if seen.insert(s.name.as_str()) {
-                out.push(s);
             }
         } else if let Some(s) = unique_match(
             text,
@@ -596,14 +704,18 @@ fn unique_match<'a>(
 /// Decode one in-memory source into a [`Frame`].
 fn frame_from_source(
     src: &InMemorySource,
+    source_id: &str,
     params: &LoadingParams,
     tabular_limits: Option<TabularReadLimits>,
 ) -> Result<Frame, SpecError> {
     match &src.payload {
-        SourcePayload::Bytes(bytes) => match tabular_limits {
-            Some(limits) => read_table_bytes_with_limits(bytes, params, limits),
-            None => read_table_bytes(bytes, params),
-        },
+        SourcePayload::Bytes(bytes) => {
+            refuse_undeclared_delimiter(bytes, params, source_id, &src.name)?;
+            match tabular_limits {
+                Some(limits) => read_table_bytes_with_limits(bytes, params, limits),
+                None => read_table_bytes(bytes, params),
+            }
+        }
         SourcePayload::Frame(frame) => {
             if let Some(limits) = tabular_limits {
                 limits.check_shape(frame.n_rows as u64, frame.columns.len() as u64)?;
@@ -611,6 +723,7 @@ fn frame_from_source(
             frame_with_params(frame, params)
         }
         SourcePayload::Sheets(sheets) => read_sheet(sheets, params, tabular_limits),
+        SourcePayload::Rows(rows) => rows_to_frame(rows, params, tabular_limits),
         SourcePayload::Records(records) => records_to_frame(records, params, tabular_limits),
     }
 }
@@ -675,58 +788,323 @@ fn load_source_frame_mem(
     }
     let frames: Vec<Frame> = matched
         .iter()
-        .map(|s| frame_from_source(s, &params, tabular_limits))
+        .map(|s| frame_from_source(s, &source.id, &params, tabular_limits))
         .collect::<Result<_, _>>()?;
+    for frame in &frames {
+        if let Some(report) = super::loaders::ignored_input_na_report(frame) {
+            audits.push(serde_json::json!({"source": source.id, "na": report}));
+        }
+    }
+    let mut raw_axes: Option<Value> = None;
+    for input in &matched {
+        if let SourcePayload::Records(records) = &input.payload {
+            for record in records {
+                if let Some((_, signal)) = record
+                    .get("signals")
+                    .and_then(Value::as_object)
+                    .and_then(|signals| {
+                        pick_signal(
+                            signals,
+                            params
+                                .format
+                                .values
+                                .get("signal")
+                                .and_then(Value::as_str)
+                                .unwrap_or(""),
+                        )
+                    })
+                {
+                    let axis = serde_json::json!({"unit":signal["axis"]["unit"],"coordinates":signal["axis"]["values"]});
+                    for coordinate in axis["coordinates"].as_array().into_iter().flatten() {
+                        if coordinate.is_number() {
+                            super::numeric::exact_json_number_f64(coordinate)
+                                .map_err(SpecError::new)?;
+                        }
+                    }
+                    if raw_axes.as_ref().is_some_and(|known| {
+                        known["unit"] != axis["unit"]
+                            || match (
+                                known["coordinates"].as_array(),
+                                axis["coordinates"].as_array(),
+                            ) {
+                                (Some(left), Some(right)) => {
+                                    left.len() != right.len()
+                                        || left.iter().zip(right).any(|(a, b)| {
+                                            match (a.as_f64(), b.as_f64()) {
+                                                (Some(a), Some(b)) => a.to_bits() != b.to_bits(),
+                                                _ => a != b,
+                                            }
+                                        })
+                                }
+                                _ => known["coordinates"] != axis["coordinates"],
+                            }
+                    }) {
+                        return Err(SpecError::new("Decoded feature axes differ across records"));
+                    }
+                    raw_axes = Some(axis);
+                }
+            }
+        }
+    }
+    let raw_unit = params
+        .header_unit
+        .map(|unit| unit.value().to_owned())
+        .or_else(|| {
+            raw_axes.as_ref().and_then(|axis| {
+                axis["unit"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+            })
+        });
+    let raw_coordinates = raw_axes.as_ref().map(|axis| {
+        axis["coordinates"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    });
     let header_unit = frames[0].header_unit.clone();
     let signal = params.signal_type.map(|s| s.value().to_string());
-    if frames.len() == 1 {
-        return Ok((frames[0].clone(), header_unit, signal, None));
-    }
     let names: Vec<String> = matched
         .iter()
         .map(|s| get_stem(basename(&s.name)))
         .collect();
-    let (df, origins): (Frame, Option<Vec<String>>) = match source.merge {
-        MergeMode::ConcatSamples => {
-            let (df, origins, a) = concat_samples_with_limits(&frames, &names, tabular_limits)?;
-            audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
-            (df, Some(origins))
-        }
-        MergeMode::ConcatFeatures => {
-            let (df, a) = concat_features_with_limits(
-                &frames,
-                &names,
-                key_list(&source.key).as_deref(),
-                tabular_limits,
-            )?;
-            audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
-            (df, None)
-        }
-        MergeMode::ByKey => {
-            let key = key_list(&source.key).ok_or_else(|| {
-                SpecError::new(format!(
-                    "source '{}': merge='by_key' requires a 'key'",
+    let numeric_scope = NumericScope::inputs(
+        &frames,
+        &matched
+            .iter()
+            .map(|input| input_decimal(input, &params))
+            .collect::<Vec<_>>(),
+        source.merge,
+        &names,
+        &key_list(&source.key).unwrap_or_default(),
+    );
+    let (df, origins): (Frame, Option<Vec<String>>) = if frames.len() == 1 {
+        (frames[0].clone(), None)
+    } else {
+        match source.merge {
+            MergeMode::ConcatSamples => {
+                let (df, origins, a) = concat_samples_with_limits(&frames, &names, tabular_limits)?;
+                audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
+                (df, Some(origins))
+            }
+            MergeMode::ConcatFeatures => {
+                let (df, a) = concat_features_with_limits(
+                    &frames,
+                    &names,
+                    key_list(&source.key).as_deref(),
+                    tabular_limits,
+                )?;
+                audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
+                (df, None)
+            }
+            MergeMode::ByKey => {
+                let key = key_list(&source.key).ok_or_else(|| {
+                    SpecError::new(format!(
+                        "source '{}': merge='by_key' requires a 'key'",
+                        source.id
+                    ))
+                })?;
+                let (df, a) = merge_by_key_with_limits(
+                    &frames,
+                    &names,
+                    &key,
+                    Coverage::Complete,
+                    tabular_limits,
+                )?;
+                audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
+                (df, None)
+            }
+            MergeMode::None => {
+                return Err(SpecError::new(format!(
+                    "source '{}': multi-file input requires a merge mode",
                     source.id
-                ))
-            })?;
-            let (df, a) = merge_by_key_with_limits(
-                &frames,
-                &names,
-                &key,
-                Coverage::Complete,
-                tabular_limits,
-            )?;
-            audits.push(serde_json::json!({"source": source.id, "merge": a.operation, "warnings": a.warnings}));
-            (df, None)
-        }
-        MergeMode::None => {
-            return Err(SpecError::new(format!(
-                "source '{}': multi-file input requires a merge mode",
-                source.id
-            )))
+                )))
+            }
         }
     };
-    Ok((df, header_unit, signal, origins))
+    // Merge results preserve column order: horizontal merges append right
+    // non-key columns, while sample concatenation takes a schema union. Pair
+    // geometry with that actual output order rather than rebuilding its names.
+    let raw_coordinates = raw_coordinates
+        .map(|coordinates| {
+            let selected: Vec<Option<Value>> = if frames.len() > 1
+                && matches!(source.merge, MergeMode::ConcatFeatures | MergeMode::ByKey)
+            {
+                let key = key_list(&source.key).unwrap_or_default();
+                frames
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(index, frame)| {
+                        let key = &key;
+                        frame
+                            .columns
+                            .iter()
+                            .enumerate()
+                            .filter_map(move |(column, c)| {
+                                if index > 0 && key.contains(&c.name) {
+                                    None
+                                } else {
+                                    Some(coordinates.get(column).cloned())
+                                }
+                            })
+                    })
+                    .collect()
+            } else {
+                df.columns
+                    .iter()
+                    .map(|column| {
+                        frames[0]
+                            .columns
+                            .iter()
+                            .position(|original| original.name == column.name)
+                            .and_then(|index| coordinates.get(index))
+                            .cloned()
+                    })
+                    .collect()
+            };
+            if selected.len() != df.columns.len() {
+                return Err(SpecError::new(
+                    "Raw feature geometry lost column alignment during merge",
+                ));
+            }
+            let mut mapped = IndexMap::new();
+            for (column, coordinate) in df.columns.iter().zip(selected) {
+                if let Some(coordinate) = coordinate {
+                    if mapped.contains_key(&column.name) {
+                        return Err(SpecError::new(
+                            "Decoded feature column names collide before geometry insertion",
+                        ));
+                    }
+                    mapped.insert(column.name.clone(), coordinate);
+                }
+            }
+            Ok(mapped)
+        })
+        .transpose()?;
+    Ok(LoadedSource {
+        frame: df,
+        numeric_scope,
+        header_unit,
+        signal_type: signal,
+        origins,
+        raw_unit,
+        raw_coordinates,
+    })
+}
+
+/// Admit the entire rectangular row shape before allocating cells or columns.
+fn rows_to_frame(
+    rows: &[Value],
+    params: &LoadingParams,
+    limits: Option<TabularReadLimits>,
+) -> Result<Frame, SpecError> {
+    if let Some(limits) = limits {
+        limits.check_shape(rows.len() as u64, 0)?;
+    }
+    if rows.is_empty() {
+        return Err(SpecError::new("Rows requires at least one row"));
+    }
+    let mut columns: IndexMap<String, (bool, bool)> = IndexMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        let row = row
+            .as_object()
+            .ok_or_else(|| SpecError::new(format!("Rows row {index} must be an object")))?;
+        let mut record_bytes = 0_u64;
+        for (name, value) in row {
+            let context = || format!("Rows row {index}, column '{name}'");
+            if name.is_empty() {
+                return Err(SpecError::new(format!(
+                    "{}: empty column names are not supported",
+                    context()
+                )));
+            }
+            let field_bytes = match value {
+                Value::String(text) => text.len() as u64,
+                Value::Null | Value::Bool(_) => 8,
+                Value::Number(number) => {
+                    if number.as_i64().is_none()
+                        && (number.is_u64()
+                            || number.as_f64().is_none_or(|number| !number.is_finite()))
+                    {
+                        return Err(SpecError::new(format!(
+                            "{}: expected an i64 integer or finite float",
+                            context()
+                        )));
+                    }
+                    8
+                }
+                Value::Array(_) | Value::Object(_) => {
+                    return Err(SpecError::new(format!(
+                        "{}: nested cells are not supported",
+                        context()
+                    )));
+                }
+            };
+            if let Some(limits) = limits {
+                if name.len() as u64 > limits.max_field_bytes
+                    || matches!(value, Value::String(_)) && field_bytes > limits.max_field_bytes
+                {
+                    return Err(SpecError::new(format!(
+                        "{}: load limit exceeded: field bytes",
+                        context()
+                    )));
+                }
+                record_bytes = record_bytes
+                    .checked_add(name.len() as u64)
+                    .and_then(|bytes| bytes.checked_add(field_bytes))
+                    .filter(|&bytes| bytes <= limits.max_record_bytes)
+                    .ok_or_else(|| {
+                        SpecError::new(format!("{}: load limit exceeded: record bytes", context()))
+                    })?;
+            }
+            if !columns.contains_key(name) {
+                if let Some(limits) = limits {
+                    limits.check_shape(rows.len() as u64, columns.len() as u64 + 1)?;
+                }
+                columns.insert(name.clone(), (false, false));
+            }
+            let (boolean, numeric) = columns.get_mut(name).unwrap();
+            *boolean |= value.is_boolean();
+            *numeric |= value.is_number();
+            if *boolean && *numeric {
+                return Err(SpecError::new(format!(
+                    "{}: bool and number cells cannot share a column",
+                    context()
+                )));
+            }
+        }
+    }
+    if columns.is_empty() {
+        return Err(SpecError::new("Rows requires at least one column"));
+    }
+    let columns = columns
+        .into_keys()
+        .map(|name| {
+            let cells = rows
+                .iter()
+                .map(|row| match row.get(&name) {
+                    None | Some(Value::Null) => Cell::Na,
+                    Some(Value::Bool(value)) => Cell::Bool(*value),
+                    Some(Value::String(value)) => Cell::Str(value.clone()),
+                    Some(Value::Number(value)) => match value.as_i64() {
+                        Some(value) => Cell::Int(value),
+                        None => Cell::Float(value.as_f64().unwrap()),
+                    },
+                    _ => unreachable!("Rows cells were admitted before allocation"),
+                })
+                .collect();
+            Column::from_cells(&name, cells)
+        })
+        .collect();
+    frame_with_params(
+        &Frame {
+            columns,
+            n_rows: rows.len(),
+            header_unit: "text".into(),
+        },
+        params,
+    )
 }
 
 /// Build a typed [`Frame`] from pre-decoded nirs4all-formats records.
@@ -762,6 +1140,45 @@ fn records_to_frame(
         .unwrap_or("")
         .to_string();
 
+    for (index, record) in records.iter().enumerate() {
+        let record = record
+            .as_object()
+            .ok_or_else(|| SpecError::new(format!("decoded record {index} must be an object")))?;
+        if !["signals", "targets", "metadata"]
+            .iter()
+            .any(|section| record.contains_key(*section))
+        {
+            return Err(SpecError::new(format!(
+                "decoded record {index} has no Formats sections; use SourcePayload::Rows for plain row objects"
+            )));
+        }
+        for section in ["signals", "targets", "metadata"] {
+            if record
+                .get(section)
+                .is_some_and(|value| !value.is_null() && !value.is_object())
+            {
+                return Err(SpecError::new(format!(
+                    "decoded record {index}: section '{section}' must be an object or null"
+                )));
+            }
+        }
+        if let Some(signals) = record.get("signals").and_then(Value::as_object) {
+            let selected = pick_signal(signals, &signal_name).or_else(|| {
+                signals
+                    .iter()
+                    .next()
+                    .map(|(key, value)| (key.as_str(), value))
+            });
+            if let Some((name, signal)) = selected {
+                if signal.get("values").is_some_and(|value| !value.is_array()) {
+                    return Err(SpecError::new(format!(
+                        "decoded record {index}: selected signal '{name}' values must be an array"
+                    )));
+                }
+            }
+        }
+    }
+
     // Determine the feature axis from the first record that carries a signal.
     let mut feature_headers: Vec<String> = Vec::new();
     let mut axis_unit = String::new();
@@ -776,7 +1193,7 @@ fn records_to_frame(
         if values.is_empty() {
             continue;
         }
-        feature_headers = axis_labels_from_values(&signal_axis_values(signal), values.len());
+        feature_headers = axis_labels_from_values(&signal_axis_values(signal)?, values.len());
         axis_unit = signal
             .get("axis")
             .and_then(|axis| axis.get("unit"))
@@ -785,6 +1202,24 @@ fn records_to_frame(
             .to_string();
         break;
     }
+    let source_dtypes = records
+        .iter()
+        .filter_map(|record| {
+            record
+                .get("signals")
+                .and_then(Value::as_object)
+                .and_then(|signals| {
+                    pick_signal(signals, &signal_name)
+                        .map(|(_, signal)| signal["dtype"].as_str().map(str::to_owned))
+                })
+        })
+        .collect::<HashSet<_>>();
+    if source_dtypes.len() > 1 {
+        return Err(SpecError::new(
+            "Decoded records have inconsistent source dtypes",
+        ));
+    }
+    let source_dtype = source_dtypes.into_iter().next().flatten();
     let n_features = feature_headers.len();
     if let Some(limits) = limits {
         let extra_columns: HashSet<_> = records
@@ -812,23 +1247,20 @@ fn records_to_frame(
 
     for (row_idx, record) in records.iter().enumerate() {
         // features
-        let row: Vec<f64> = record
+        let row = record
             .get("signals")
             .and_then(Value::as_object)
-            .and_then(|signals| pick_signal(signals, &signal_name).map(|(_, s)| signal_values(s)))
-            .unwrap_or_default();
-        // A record that carries a signal must match the established feature axis
-        // exactly; silently truncating/padding a variable-length signal would corrupt
-        // X (Codex #5). An absent signal (empty row) is left as a NaN feature row.
-        if !row.is_empty() && row.len() != n_features {
-            return Err(SpecError::new(format!(
-                "decoded record {row_idx}: signal has {} value(s) but the feature axis is {n_features} wide",
-                row.len()
-            )));
+            .and_then(|signals| pick_signal(signals, &signal_name))
+            .and_then(|(_, signal)| signal["values"].as_array());
+        let width = row.map_or(0, Vec::len);
+        if width != 0 && width != n_features {
+            return Err(SpecError::new(format!("decoded record {row_idx}: signal width {width} differs from axis width {n_features}")));
         }
-        for (j, cell) in feature_cells.iter_mut().enumerate() {
-            let v = row.get(j).copied().unwrap_or(f64::NAN);
-            cell.push(Cell::Float(v));
+        for (column, cells) in feature_cells.iter_mut().enumerate() {
+            let value = row.and_then(|values| values.get(column));
+            // Keep a retained integer scalar even when its declared destination
+            // is F64; actual host-F64 scalars already become Cell::Float.
+            cells.push(target_cell(value.cloned()));
         }
         // targets
         if let Some(targets) = record.get("targets").and_then(Value::as_object) {
@@ -872,7 +1304,7 @@ fn records_to_frame(
 
     let mut columns: Vec<Column> = Vec::new();
     for (header, cells) in feature_headers.into_iter().zip(feature_cells) {
-        columns.push(Column::from_cells(&header, cells));
+        columns.push(Column::from_cells(&header, cells).with_source_dtype(source_dtype.clone()));
     }
     for key in target_order {
         let raw = target_cells.remove(&key).unwrap();
@@ -918,6 +1350,11 @@ fn target_cell(v: Option<Value>) -> Cell {
         Some(Value::Number(n)) => {
             if let Some(i) = n.as_i64() {
                 Cell::Int(i)
+            } else if n
+                .as_u64()
+                .is_some_and(|i| !super::numeric::integer_exact_f64(i128::from(i)))
+            {
+                Cell::Str(n.to_string())
             } else {
                 Cell::Float(n.as_f64().unwrap_or(f64::NAN))
             }
@@ -947,7 +1384,7 @@ fn pick_signal<'a>(
     }
     signals
         .iter()
-        .find(|(_, signal)| !signal_values(signal).is_empty())
+        .find(|(_, signal)| signal["values"].as_array().is_some_and(|v| !v.is_empty()))
         .map(|(key, signal)| (key.as_str(), signal))
 }
 
@@ -964,13 +1401,16 @@ fn signal_values(signal: &Value) -> Vec<f64> {
         .unwrap_or_default()
 }
 
-fn signal_axis_values(signal: &Value) -> Vec<f64> {
+fn signal_axis_values(signal: &Value) -> Result<Vec<f64>, SpecError> {
     signal
         .get("axis")
         .and_then(|axis| axis.get("values"))
         .and_then(Value::as_array)
-        .map(|values| values.iter().filter_map(Value::as_f64).collect())
-        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .filter(|value| value.is_number())
+        .map(|value| super::numeric::exact_json_number_f64(value).map_err(SpecError::new))
+        .collect()
 }
 
 /// Axis labels: one per signal value. If the axis has fewer/zero entries, fall
@@ -1136,9 +1576,17 @@ fn build_source_table(
     sources: &[InMemorySource],
     audits: &mut Vec<Value>,
     tabular_limits: Option<TabularReadLimits>,
+    options: &NumericStorageOptions,
 ) -> Result<SourceTable, SpecError> {
-    let (mut df, header_unit, signal, origins) =
-        load_source_frame_mem(source, spec, sources, audits, tabular_limits)?;
+    let LoadedSource {
+        frame: mut df,
+        numeric_scope,
+        header_unit,
+        signal_type: signal,
+        origins,
+        raw_unit,
+        raw_coordinates,
+    } = load_source_frame_mem(source, spec, sources, audits, tabular_limits)?;
     if let Some(column) = df
         .columns
         .iter()
@@ -1216,6 +1664,7 @@ fn build_source_table(
         &roles,
         tabular_limits,
         &mut remove_rows,
+        options,
     )?;
     let spec_signal = if spec.signal_type.value() != "auto" {
         Some(spec.signal_type.value().to_string())
@@ -1225,6 +1674,7 @@ fn build_source_table(
     Ok(SourceTable {
         source_id: source.id.clone(),
         df,
+        numeric_scope,
         roles,
         key,
         partition: source.partition.map(|p| p.value().to_string()),
@@ -1232,6 +1682,8 @@ fn build_source_table(
         join: source.join.clone(),
         signal_type: signal.or(spec_signal),
         header_unit,
+        raw_unit,
+        raw_coordinates,
         variations,
         remove_rows,
     })
@@ -1243,7 +1695,7 @@ fn read_variation_frame_mem(
     source: &SourceSpec,
     sources: &[InMemorySource],
     tabular_limits: Option<TabularReadLimits>,
-) -> Result<Frame, SpecError> {
+) -> Result<(Frame, NumericScope), SpecError> {
     let mut params = effective_params(&spec.params, &source.params);
     if !variation.params.is_empty_value() {
         params = effective_params(&params, &variation.params);
@@ -1258,16 +1710,30 @@ fn read_variation_frame_mem(
     }
     let frames: Vec<Frame> = matched
         .iter()
-        .map(|s| frame_from_source(s, &params, tabular_limits))
+        .map(|s| frame_from_source(s, &source.id, &params, tabular_limits))
         .collect::<Result<_, _>>()?;
+    let names: Vec<String> = (0..frames.len()).map(|i| i.to_string()).collect();
+    let scope = NumericScope::inputs(
+        &frames,
+        &matched
+            .iter()
+            .map(|input| input_decimal(input, &params))
+            .collect::<Vec<_>>(),
+        MergeMode::ConcatSamples,
+        &names,
+        &[],
+    );
     if frames.len() > 1 {
-        let names: Vec<String> = (0..frames.len()).map(|i| i.to_string()).collect();
-        Ok(concat_samples_with_limits(&frames, &names, tabular_limits)?.0)
+        Ok((
+            concat_samples_with_limits(&frames, &names, tabular_limits)?.0,
+            scope,
+        ))
     } else {
-        Ok(frames.into_iter().next().unwrap())
+        Ok((frames.into_iter().next().unwrap(), scope))
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn load_variations(
     source: &SourceSpec,
     spec: &DatasetSpec,
@@ -1276,6 +1742,7 @@ fn load_variations(
     roles: &[(String, String)],
     tabular_limits: Option<TabularReadLimits>,
     remove_rows: &mut Option<Vec<bool>>,
+    options: &NumericStorageOptions,
 ) -> Result<Vec<(String, Matrix)>, SpecError> {
     if source.variations.is_empty() {
         return Ok(vec![]);
@@ -1307,7 +1774,8 @@ fn load_variations(
                 source.id, variation.name
             )));
         }
-        let vdf = read_variation_frame_mem(variation, spec, source, sources, tabular_limits)?;
+        let (vdf, scope) =
+            read_variation_frame_mem(variation, spec, source, sources, tabular_limits)?;
         if vdf.n_rows != parent_n {
             return Err(SpecError::new(format!(
                 "source '{}': variation '{}' has {} rows, expected {parent_n} (must row-align with the parent source)",
@@ -1326,9 +1794,21 @@ fn load_variations(
         }
         let named = feature_cols.iter().filter(|c| vdf.has_column(c)).count();
         let arr = if named == feature_cols.len() {
-            vdf.coerce_numeric(&feature_cols)
+            vdf.coerce_numeric_with_decimal(
+                &feature_cols,
+                options.features,
+                options.consumer.as_deref(),
+                |column, row| scope.decimal(column, row),
+            )
+            .map_err(SpecError::new)?
         } else if named == 0 && vdf.columns.len() == feature_cols.len() {
-            vdf.coerce_numeric(&vdf.column_names())
+            vdf.coerce_numeric_with_decimal(
+                &vdf.column_names(),
+                options.features,
+                options.consumer.as_deref(),
+                |column, row| scope.decimal(column, row),
+            )
+            .map_err(SpecError::new)?
         } else {
             return Err(SpecError::new(format!(
                 "source '{}': variation '{}' is ambiguous: {named}/{} parent feature columns matched by name and the frame has {} columns",
@@ -1367,12 +1847,47 @@ pub fn assemble_in_memory_with_tabular_limits(
     fold_inline: Option<&[Fold]>,
     tabular_limits: Option<TabularReadLimits>,
 ) -> Result<AssembledDataset, SpecError> {
+    assemble_in_memory_with_storage_and_tabular_limits(
+        spec,
+        sources,
+        index_lists,
+        fold_inline,
+        tabular_limits,
+        &NumericStorageOptions::default(),
+    )
+}
+
+pub fn assemble_in_memory_with_storage(
+    spec: &DatasetSpec,
+    sources: &[InMemorySource],
+    index_lists: &HashMap<String, Vec<i64>>,
+    fold_inline: Option<&[Fold]>,
+    options: &NumericStorageOptions,
+) -> Result<AssembledDataset, SpecError> {
+    assemble_in_memory_with_storage_and_tabular_limits(
+        spec,
+        sources,
+        index_lists,
+        fold_inline,
+        None,
+        options,
+    )
+}
+
+pub fn assemble_in_memory_with_storage_and_tabular_limits(
+    spec: &DatasetSpec,
+    sources: &[InMemorySource],
+    index_lists: &HashMap<String, Vec<i64>>,
+    fold_inline: Option<&[Fold]>,
+    tabular_limits: Option<TabularReadLimits>,
+    options: &NumericStorageOptions,
+) -> Result<AssembledDataset, SpecError> {
     let mut audits: Vec<Value> = Vec::new();
     let mut tables: IndexMap<String, SourceTable> = IndexMap::new();
     for s in &spec.sources {
         tables.insert(
             s.id.clone(),
-            build_source_table(s, spec, sources, &mut audits, tabular_limits)?,
+            build_source_table(s, spec, sources, &mut audits, tabular_limits, options)?,
         );
     }
 
@@ -1420,6 +1935,7 @@ pub fn assemble_in_memory_with_tabular_limits(
     };
 
     let mut combined_df: Option<Frame> = None;
+    let mut train_rows: Option<Vec<usize>> = None;
     if !partitions.is_empty() {
         for part in &partitions {
             let part_tables: IndexMap<&String, &SourceTable> = tables
@@ -1434,6 +1950,7 @@ pub fn assemble_in_memory_with_tabular_limits(
                 &mut audits,
                 &mut assembled.warnings,
                 tabular_limits,
+                options,
             )?;
             assembled.blocks.insert(part.clone(), block);
         }
@@ -1445,11 +1962,21 @@ pub fn assemble_in_memory_with_tabular_limits(
             &mut audits,
             &mut assembled.warnings,
             tabular_limits,
+            options,
         )?;
         if spec.partitions.is_none() {
+            train_rows = Some((0..combined.n_rows).collect());
             assembled.blocks.insert("train".into(), block);
         } else {
             for (part, mask) in split_partition_mask(&combined, spec, index_lists)? {
+                if part == "train" {
+                    train_rows = Some(
+                        mask.iter()
+                            .enumerate()
+                            .filter_map(|(i, keep)| keep.then_some(i))
+                            .collect(),
+                    );
+                }
                 assembled.blocks.insert(part, slice_block(&block, &mask));
             }
         }
@@ -1457,7 +1984,13 @@ pub fn assemble_in_memory_with_tabular_limits(
     }
 
     assembled.audits = audits;
-    attach_folds(spec, fold_inline, &mut assembled, combined_df.as_ref())?;
+    attach_folds(
+        spec,
+        fold_inline,
+        &mut assembled,
+        combined_df.as_ref(),
+        train_rows.as_deref(),
+    )?;
     Ok(assembled)
 }
 
@@ -1489,7 +2022,7 @@ fn join_onto(
     audits: &mut Vec<Value>,
     warnings: &mut Vec<String>,
     limits: Option<TabularReadLimits>,
-) -> Result<Frame, SpecError> {
+) -> Result<(Frame, Option<Vec<String>>), SpecError> {
     if let Some(j) = &t.join {
         let left_on = key_list(&j.left_on);
         let right_on = key_list(&j.right_on).or_else(|| t.key.clone());
@@ -1517,10 +2050,10 @@ fn join_onto(
             )?;
             audits.push(serde_json::json!({"join": audit.operation, "dropped": audit.dropped_rows.len(), "warnings": audit.warnings}));
             warnings.extend(audit.warnings);
-            return Ok(out);
+            return Ok((out, Some(right_on.clone())));
         }
         if j.cardinality == Cardinality::OneToOne {
-            return row_align(combined, t, &primary.source_id, limits);
+            return row_align(combined, t, &primary.source_id, limits).map(|frame| (frame, None));
         }
         return Err(SpecError::new(format!(
             "source '{}': {} join needs explicit left_on/right_on",
@@ -1544,66 +2077,52 @@ fn join_onto(
                 limits,
             )?;
             warnings.extend(audit.warnings);
-            return Ok(out);
+            return Ok((out, Some(rkeys.clone())));
         }
     }
-    row_align(combined, t, &primary.source_id, limits)
+    row_align(combined, t, &primary.source_id, limits).map(|frame| (frame, None))
 }
 
-/// column -> (role, owning_source_id), mirroring `_collect_roles` verbatim.
-///
-/// Joins namespace duplicate right-hand columns as `name__source`, while
-/// row-order feature concatenation namespaces them as `source__name`. Both forms
-/// must be recognized so secondary feature sources are not silently dropped.
+type RoleColumns = IndexMap<String, (String, String)>;
+
+/// Collect roles and native names in frame merge order, including unassigned
+/// keys and internal columns in name ownership. Dropped right keys claim nothing.
 fn collect_roles(
     combined: &Frame,
-    tables: &IndexMap<&String, &SourceTable>,
-) -> IndexMap<String, (String, String)> {
-    let mut role_cols: IndexMap<String, (String, String)> = IndexMap::new();
-    for t in tables.values() {
-        for (col, role) in &t.roles {
-            if combined.has_column(col) && !role_cols.contains_key(col) {
-                role_cols.insert(col.clone(), (role.clone(), t.source_id.clone()));
-            } else {
-                for ns in [
-                    format!("{col}__{}", t.source_id),
-                    format!("{}__{col}", t.source_id),
-                ] {
-                    if combined.has_column(&ns) {
-                        role_cols.insert(ns, (role.clone(), t.source_id.clone()));
-                        break;
-                    }
+    merge_steps: &[(&SourceTable, Option<Vec<String>>)],
+) -> (RoleColumns, IndexMap<String, String>) {
+    let mut role_cols = RoleColumns::new();
+    let mut native_cols = IndexMap::new();
+    let mut seen = HashSet::new();
+    for (table, dropped_keys) in merge_steps {
+        let left_names = seen.clone();
+        for column in &table.df.columns {
+            let col = &column.name;
+            if dropped_keys.as_ref().is_some_and(|keys| keys.contains(col)) {
+                continue;
+            }
+            let name = if dropped_keys.is_some() {
+                if left_names.contains(col) {
+                    format!("{col}__{}", table.source_id)
+                } else {
+                    col.clone()
                 }
+            } else if seen.contains(col) {
+                format!("{}__{col}", table.source_id)
+            } else {
+                col.clone()
+            };
+            seen.insert(name.clone());
+            if !combined.has_column(&name) {
+                continue;
+            }
+            native_cols.insert(name.clone(), col.clone());
+            if let Some((_, role)) = table.roles.iter().find(|(name, _)| name == col) {
+                role_cols.insert(name, (role.clone(), table.source_id.clone()));
             }
         }
     }
-    role_cols
-}
-
-fn source_has_feature_role(source: &SourceTable, col: &str) -> bool {
-    source
-        .roles
-        .iter()
-        .any(|(name, role)| name == col && role == "features")
-}
-
-fn source_feature_header(combined_col: &str, source: &SourceTable) -> String {
-    if source_has_feature_role(source, combined_col) {
-        return combined_col.to_string();
-    }
-    let suffix = format!("__{}", source.source_id);
-    if let Some(bare) = combined_col.strip_suffix(&suffix) {
-        if source_has_feature_role(source, bare) {
-            return bare.to_string();
-        }
-    }
-    let prefix = format!("{}__", source.source_id);
-    if let Some(bare) = combined_col.strip_prefix(&prefix) {
-        if source_has_feature_role(source, bare) {
-            return bare.to_string();
-        }
-    }
-    combined_col.to_string()
+    (role_cols, native_cols)
 }
 
 fn assemble_block(
@@ -1612,6 +2131,7 @@ fn assemble_block(
     audits: &mut Vec<Value>,
     warnings: &mut Vec<String>,
     limits: Option<TabularReadLimits>,
+    options: &NumericStorageOptions,
 ) -> Result<(PartitionBlock, Frame), SpecError> {
     let feature_tables: Vec<&SourceTable> = tables
         .values()
@@ -1623,11 +2143,25 @@ fn assemble_block(
     }
     let primary = feature_tables[0];
     let mut combined = primary.df.clone();
+    let mut merge_steps = vec![(primary, None)];
     for t in tables.values() {
         if t.source_id == primary.source_id {
             continue;
         }
-        combined = join_onto(&combined, primary, t, audits, warnings, limits)?;
+        let (frame, dropped_keys) = join_onto(&combined, primary, t, audits, warnings, limits)?;
+        combined = frame;
+        merge_steps.push((t, dropped_keys));
+    }
+
+    if spec.sample_index.by.value() == "id" {
+        if let Some(key) = spec.sample_index.key.as_str() {
+            if !combined.has_column(key) {
+                return Err(SpecError::new(format!(
+                    "source '{}': declared sample identity '{key}' missing in this partition",
+                    primary.source_id
+                )));
+            }
+        }
     }
 
     let mut keep = vec![true; combined.n_rows];
@@ -1652,7 +2186,62 @@ fn assemble_block(
         audits.push(serde_json::json!({"operation": "remove_na_samples", "removed": removed}));
     }
 
-    let role_cols = collect_roles(&combined, tables);
+    let (role_cols, native_cols) = collect_roles(&combined, &merge_steps);
+    let decimal = |name: &str, row: usize| {
+        let Some((_, owner)) = role_cols.get(name) else {
+            return '.';
+        };
+        let Some(table) = tables.values().find(|table| &table.source_id == owner) else {
+            return '.';
+        };
+        let original = &native_cols[name];
+        let position = combined
+            .column(&row_idx_col(&table.source_id))
+            .and_then(|column| column.values.get(row))
+            .map(Cell::to_numeric)
+            .unwrap_or(f64::NAN);
+        if position.is_finite() && position >= 0.0 {
+            table.numeric_scope.decimal(original, position as usize)
+        } else {
+            '.'
+        }
+    };
+    for column in &combined.columns {
+        let selected = role_cols
+            .get(&column.name)
+            .is_some_and(|(role, _)| role != "ignore")
+            || key_list(&spec.sample_index.key).is_some_and(|keys| keys.contains(&column.name))
+            || [
+                spec.sample_index.observation_id.as_deref(),
+                spec.sample_index.repetition_id.as_deref(),
+                spec.sample_index.group_id.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|key| key == column.name);
+        if selected {
+            for (row, cell) in column.values.iter().enumerate() {
+                if matches!(cell, Cell::Float(value) if value.is_infinite()) {
+                    return Err(SpecError::new("Observed numeric values must be finite"));
+                }
+                if !column.numeric_text_at(row) {
+                    continue;
+                }
+                if let Cell::Str(text) = cell {
+                    let body = text.trim().trim_start_matches(['+', '-']);
+                    if !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit()) {
+                        if !super::numeric::integer_in_domain(text) {
+                            return Err(SpecError::new(
+                                "Integer numeric text is outside the supported i64/u64 domain",
+                            ));
+                        }
+                    } else {
+                        super::numeric::checked_decimal_f64(text.trim()).map_err(SpecError::new)?;
+                    }
+                }
+            }
+        }
+    }
     let combined_names = combined.column_names();
     let mut block = PartitionBlock {
         n_samples: combined.n_rows,
@@ -1674,8 +2263,33 @@ fn assemble_block(
             continue;
         }
         block.source_ids.push(ft.source_id.clone());
-        let headers: Vec<String> = cols.iter().map(|c| source_feature_header(c, ft)).collect();
-        block.x.push(combined.coerce_numeric(&cols));
+        let headers: Vec<String> = cols.iter().map(|c| native_cols[c].clone()).collect();
+        block.x.push(
+            combined
+                .coerce_numeric_with_decimal(
+                    &cols,
+                    options.features,
+                    options.consumer.as_deref(),
+                    decimal,
+                )
+                .map_err(SpecError::new)?,
+        );
+        let coordinates = if let Some(raw) = &ft.raw_coordinates {
+            headers
+                .iter()
+                .map(|name| raw.get(name).cloned())
+                .collect::<Option<Vec<_>>>()
+        } else {
+            super::package::header_coordinates(&headers).map_err(SpecError::new)?
+        };
+        block.feature_names.push(Some(headers.clone()));
+        block.feature_axes.push(vec![serde_json::json!({
+            "name":super::package::feature_axis_name(&ft.header_unit),
+            "unit":ft.raw_unit,"coordinates":coordinates
+        })]);
+        block
+            .representation_ids
+            .push(super::package::repr_ids::SIGNAL_1D.into());
         block.feature_headers.push(headers);
         block.header_units.push(ft.header_unit.clone());
         block.signal_types.push(ft.signal_type.clone());
@@ -1688,7 +2302,7 @@ fn assemble_block(
                 .map(|&v| v as usize)
                 .collect();
             for (name, arr) in &ft.variations {
-                let data: Vec<f32> = row_idx
+                let data: Vec<f64> = row_idx
                     .iter()
                     .flat_map(|&r| {
                         arr.data[r * arr.n_cols..(r + 1) * arr.n_cols]
@@ -1699,6 +2313,15 @@ fn assemble_block(
                 src_proc.push((
                     name.clone(),
                     Matrix {
+                        validity: row_idx
+                            .iter()
+                            .flat_map(|&r| {
+                                arr.validity[r * arr.n_cols..(r + 1) * arr.n_cols]
+                                    .iter()
+                                    .copied()
+                            })
+                            .collect(),
+                        precision: arr.precision.clone(),
                         data,
                         n_rows: row_idx.len(),
                         n_cols: arr.n_cols,
@@ -1720,22 +2343,105 @@ fn assemble_block(
         .cloned()
         .collect();
     if !target_cols.is_empty() {
+        let mut counts = HashMap::new();
+        for col in &target_cols {
+            *counts.entry(&native_cols[col]).or_insert(0usize) += 1;
+        }
+        let target_headers: Vec<String> = target_cols
+            .iter()
+            .map(|col| {
+                if counts[&native_cols[col]] == 1 {
+                    native_cols[col].clone()
+                } else {
+                    col.clone()
+                }
+            })
+            .collect();
+        let mut seen = HashSet::new();
+        if target_headers.iter().any(|name| !seen.insert(name)) {
+            return Err(SpecError::new(format!(
+                "target export labels must be unique, got {target_headers:?}"
+            )));
+        }
         let mode = spec
             .params
             .categorical
             .map(|c| c.value().to_string())
             .unwrap_or_else(|| "auto".into());
+        let numeric_columns = target_cols
+            .iter()
+            .filter(|name| combined.column(name).unwrap().is_numeric_dtype())
+            .cloned()
+            .collect::<Vec<_>>();
+        let numeric_source = combined.numeric_source_dtype(&numeric_columns);
+        let precision = PrecisionRecord::select(
+            numeric_source.as_deref(),
+            options.targets,
+            options.consumer.as_deref(),
+            false,
+        )
+        .map_err(SpecError::new)?;
+        if options.consumer.as_deref() == Some("SpectroDataset")
+            && options.targets == Some(super::numeric::NumericStorage::Float64)
+        {
+            return Err(SpecError::new("SpectroDataset cannot guarantee an explicitly requested float64 numerical target view"));
+        }
         let mut y_cols: Vec<Vec<f64>> = Vec::new();
         let mut cats: IndexMap<String, Value> = IndexMap::new();
-        for c in &target_cols {
-            let (enc, mapping) = encode_categorical(combined.column(c).unwrap(), &mode);
+        for (c, header) in target_cols.iter().zip(&target_headers) {
+            let owner_id = &role_cols[c].1;
+            let source = spec
+                .sources
+                .iter()
+                .find(|source| source.id.as_str() == owner_id.as_str())
+                .expect("target source exists");
+            let params = effective_params(&spec.params, &source.params);
+            let target_mode = params.categorical.map(|mode| mode.value()).unwrap_or(&mode);
+            let cells: Vec<String> = combined
+                .column(c)
+                .unwrap()
+                .values
+                .iter()
+                .filter(|cell| {
+                    !matches!(cell, Cell::Na) && !matches!(cell, Cell::Float(v) if v.is_nan())
+                })
+                .map(Cell::to_str_scalar)
+                .collect();
+            static DOT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+                regex::Regex::new(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
+                    .unwrap()
+            });
+            if target_mode == "auto"
+                && params
+                    .decimal_separator
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+                && cells.iter().any(|cell| is_comma_pair(cell))
+                && cells
+                    .iter()
+                    .all(|cell| is_comma_pair(cell) || DOT.is_match(cell.trim()))
+            {
+                return Err(SpecError::new(format!("source '{}': file {} target column '{}' contains numeric comma data; declare params.decimal_separator",source.id,source.input,c)));
+            }
+            let (enc, mapping) = encode_categorical_with_storage(
+                combined.column(c).unwrap(),
+                target_mode,
+                &precision,
+                matches!(
+                    spec.task_type.value(),
+                    "classification" | "binary" | "multiclass"
+                ),
+                |row| decimal(c, row),
+            )?;
             y_cols.push(enc);
             if let Some(m) = mapping {
-                cats.insert(c.clone(), m);
+                cats.insert(header.clone(), m);
             }
         }
-        block.y = Some(column_stack(&y_cols));
-        block.y_headers = target_cols;
+        let mut matrix = column_stack(&y_cols);
+        matrix.precision = precision;
+        block.y = Some(matrix);
+        block.y_headers = target_headers;
         block.y_categorical = cats;
     }
 
@@ -1755,13 +2461,34 @@ fn assemble_block(
                 "only one 'weights' column is supported, got {weight_cols:?}"
             )));
         }
+        let precision = PrecisionRecord::select(
+            combined.numeric_source_dtype(&weight_cols).as_deref(),
+            options.weights,
+            options.consumer.as_deref(),
+            false,
+        )
+        .map_err(SpecError::new)?;
+        let column = combined.column(&weight_cols[0]).unwrap();
         block.weights = Some(
-            combined
-                .numeric_column_f64(&weight_cols[0])
+            column
+                .values
                 .iter()
-                .map(|&v| v as f32)
-                .collect(),
+                .enumerate()
+                .map(|(row, cell)| {
+                    cell.to_numeric_with_decimal(
+                        precision.dtype,
+                        column.source_dtype.as_deref(),
+                        decimal(&weight_cols[0], row),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(SpecError::new)?,
         );
+        block.weights_validity = block
+            .weights
+            .as_ref()
+            .map(|values| values.iter().map(|value| !value.is_nan()).collect());
+        block.weights_precision = precision;
         block.weights_header = Some(weight_cols[0].clone());
     }
 
@@ -1802,8 +2529,23 @@ fn assemble_block(
 /// `encode_categorical`: factorize an object target when `auto` + more NaNs under
 /// numeric coercion; else numeric coercion (f64). The mapping (when categorical)
 /// is `{"categories": [...]}`, matching the Python IR.
-fn encode_categorical(col: &Column, mode: &str) -> (Vec<f64>, Option<Value>) {
-    let numeric: Vec<f64> = col.values.iter().map(Cell::to_numeric).collect();
+#[cfg(test)]
+fn encode_categorical(col: &Column, mode: &str) -> Result<(Vec<f64>, Option<Value>), SpecError> {
+    encode_categorical_with_storage(col, mode, &PrecisionRecord::default(), false, |_| '.')
+}
+fn encode_categorical_with_storage(
+    col: &Column,
+    mode: &str,
+    precision: &PrecisionRecord,
+    classification: bool,
+    decimal: impl Fn(usize) -> char,
+) -> Result<(Vec<f64>, Option<Value>), SpecError> {
+    let numeric: Vec<f64> = col
+        .values
+        .iter()
+        .enumerate()
+        .map(|(row, cell)| cell.to_numeric_view(decimal(row)))
+        .collect();
     let is_objectish = !col.is_numeric_dtype();
     let numeric_na = numeric.iter().filter(|v| v.is_nan()).count();
     let series_na = col
@@ -1813,6 +2555,11 @@ fn encode_categorical(col: &Column, mode: &str) -> (Vec<f64>, Option<Value>) {
         .count();
     let treat_categorical = mode == "auto" && is_objectish && numeric_na > series_na;
     if treat_categorical {
+        if precision.requested_dtype.is_some() {
+            return Err(SpecError::new(
+                "Numeric precision request for string targets is unsupported",
+            ));
+        }
         // pandas factorize over str(values): codes in first-appearance order.
         let mut categories: Vec<String> = Vec::new();
         let mut codes = Vec::with_capacity(col.values.len());
@@ -1831,9 +2578,44 @@ fn encode_categorical(col: &Column, mode: &str) -> (Vec<f64>, Option<Value>) {
             };
             codes.push(code as f64);
         }
-        (codes, Some(serde_json::json!({ "categories": categories })))
+        Ok((
+            codes,
+            Some(if let Some(dtype) = &col.source_dtype {
+                serde_json::json!({ "categories": categories, "source_dtype": dtype })
+            } else {
+                serde_json::json!({ "categories": categories })
+            }),
+        ))
     } else {
-        (numeric, None)
+        Ok((
+            col.values
+                .iter()
+                .enumerate()
+                .map(|(row, cell)| {
+                    if classification {
+                        let value = cell.to_numeric_with_decimal(
+                            super::numeric::NumericStorage::Float64,
+                            None,
+                            decimal(row),
+                        )?;
+                        if value.is_nan() {
+                            return Ok(value);
+                        }
+                        if value.fract() != 0.0 || value.abs() > 9_007_199_254_740_991.0 {
+                            return Err("Classification requires portable integer labels".into());
+                        }
+                        super::numeric::validate_label(value as i64, precision.dtype)?;
+                    }
+                    cell.to_numeric_with_decimal(
+                        precision.dtype,
+                        col.source_dtype.as_deref(),
+                        decimal(row),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(SpecError::new)?,
+            None,
+        ))
     }
 }
 
@@ -1843,23 +2625,24 @@ fn column_stack(cols: &[Vec<f64>]) -> Matrix {
     let mut data = Vec::with_capacity(n_rows * n_cols);
     for row in 0..n_rows {
         for c in cols {
-            data.push(c[row] as f32);
+            data.push(c[row]);
         }
     }
-    Matrix {
-        data,
-        n_rows,
-        n_cols,
-    }
+    Matrix::new(data, n_rows, n_cols)
 }
 
 fn slice_block(block: &PartitionBlock, mask: &[bool]) -> PartitionBlock {
     let take = |m: &Matrix| -> Matrix {
-        let data: Vec<f32> = (0..m.n_rows)
+        let data: Vec<f64> = (0..m.n_rows)
             .filter(|&r| mask[r])
             .flat_map(|r| m.data[r * m.n_cols..(r + 1) * m.n_cols].iter().copied())
             .collect();
         Matrix {
+            validity: (0..m.n_rows)
+                .filter(|&r| mask[r])
+                .flat_map(|r| m.validity[r * m.n_cols..(r + 1) * m.n_cols].iter().copied())
+                .collect(),
+            precision: m.precision.clone(),
             data,
             n_rows: mask.iter().filter(|&&b| b).count(),
             n_cols: m.n_cols,
@@ -1870,6 +2653,9 @@ fn slice_block(block: &PartitionBlock, mask: &[bool]) -> PartitionBlock {
         source_ids: block.source_ids.clone(),
         x: block.x.iter().map(take).collect(),
         feature_headers: block.feature_headers.clone(),
+        feature_names: block.feature_names.clone(),
+        feature_axes: block.feature_axes.clone(),
+        representation_ids: block.representation_ids.clone(),
         header_units: block.header_units.clone(),
         signal_types: block.signal_types.clone(),
         processings: block
@@ -1889,7 +2675,76 @@ fn slice_block(block: &PartitionBlock, mask: &[bool]) -> PartitionBlock {
                 .collect()
         }),
         weights_header: block.weights_header.clone(),
+        weights_validity: block.weights_validity.as_ref().map(|v| {
+            v.iter()
+                .zip(mask)
+                .filter_map(|(v, m)| m.then_some(*v))
+                .collect()
+        }),
+        weights_precision: block.weights_precision.clone(),
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+enum PartitionLabelKey {
+    Text(String),
+    Numeric(JoinKey),
+}
+
+fn partition_numeric_key(cell: &Cell) -> Option<JoinKey> {
+    match cell {
+        Cell::Float(value) if *value == 0.0 && value.is_sign_negative() => {
+            Some(JoinKey::Num(value.to_bits()))
+        }
+        _ => cell.join_key(),
+    }
+}
+
+fn partition_json_numeric_key(value: &Value, float32: bool) -> Option<JoinKey> {
+    if float32 {
+        let rounded = super::numeric::NumericStorage::Float32
+            .json_number(value, None)
+            .ok()?;
+        return partition_numeric_key(&Cell::Float(rounded));
+    }
+    if let Some(integer) = value.as_i64() {
+        return Cell::Int(integer).join_key();
+    }
+    if let Some(integer) = value.as_u64() {
+        // The existing identity domain has an exact unsigned key; never widen it.
+        return Some(JoinKey::Uint(integer));
+    }
+    let number = value.as_f64()?;
+    if !number.is_finite() {
+        return None;
+    }
+    partition_numeric_key(&Cell::Float(number))
+}
+
+fn partition_declared_keys(values: &[Value], float32: bool) -> HashSet<PartitionLabelKey> {
+    static TOKEN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\A-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?\z").unwrap()
+    });
+    let mut keys = HashSet::new();
+    for value in values {
+        keys.insert(PartitionLabelKey::Text(
+            crate::pyfmt::py_str_scalar(value).to_lowercase(),
+        ));
+        let number = match value {
+            Value::Number(_) => Some(value.clone()),
+            Value::String(text) if TOKEN.is_match(text) => {
+                crate::canonical_json::parse_json_value(text).ok()
+            }
+            _ => None,
+        };
+        if let Some(key) = number
+            .as_ref()
+            .and_then(|number| partition_json_numeric_key(number, float32))
+        {
+            keys.insert(PartitionLabelKey::Numeric(key));
+        }
+    }
+    keys
 }
 
 fn split_partition_mask(
@@ -1915,27 +2770,94 @@ fn split_partition_mask(
                     df.column_names()
                 )));
             }
-            let col: Vec<String> = df
-                .str_column(column)
+            p.validate_column_values()?;
+            let source_column = df.column(column).expect("partition column exists");
+            let float32 = source_column.source_dtype.as_deref() == Some("float32");
+            let values = [
+                ("train_values", &p.train_values),
+                ("test_values", &p.test_values),
+                ("val_values", &p.val_values),
+                ("predict_values", &p.predict_values),
+            ];
+            let declared: Vec<_> = values
                 .iter()
-                .map(|s| s.to_lowercase())
+                .map(|(_, list)| partition_declared_keys(list, float32))
                 .collect();
-            let lower_set = |vals: &[Value]| -> HashSet<String> {
-                vals.iter()
-                    .map(|v| crate::pyfmt::py_str_scalar(v).to_lowercase())
-                    .collect()
-            };
-            let train_vals = lower_set(&p.train_values);
-            let test_vals = lower_set(&p.test_values);
-            let predict_vals = lower_set(&p.predict_values);
-            let known: HashSet<&String> = train_vals
+            // Reuse the frame's identity projection for retained exact u64 carriers.
+            let numeric_keys = df.join_key_tuples(&[column.to_string()]);
+            let col: Vec<Option<PartitionLabelKey>> = source_column
+                .values
                 .iter()
-                .chain(&test_vals)
-                .chain(&predict_vals)
+                .enumerate()
+                .map(|(row, cell)| match cell {
+                    Cell::Na => None,
+                    Cell::Float(value) if value.is_nan() => None,
+                    Cell::Float(value) if value.is_infinite() => Some(PartitionLabelKey::Text(
+                        if value.is_sign_negative() {
+                            "-inf"
+                        } else {
+                            "inf"
+                        }
+                        .into(),
+                    )),
+                    Cell::Bool(_) => {
+                        Some(PartitionLabelKey::Text(cell.to_str_scalar().to_lowercase()))
+                    }
+                    Cell::Int(_) | Cell::Float(_) => {
+                        partition_numeric_key(cell).map(PartitionLabelKey::Numeric)
+                    }
+                    Cell::Str(text) if source_column.numeric_text_at(row) => {
+                        let negative_zero = text.trim().starts_with('-')
+                            && super::numeric::checked_decimal_f64(text.trim())
+                                .is_ok_and(|v| v == 0.0 && v.is_sign_negative());
+                        let key = if negative_zero {
+                            Some(JoinKey::Num((-0.0f64).to_bits()))
+                        } else {
+                            numeric_keys[row]
+                                .as_ref()
+                                .and_then(|keys| keys.first())
+                                .cloned()
+                        };
+                        key.map(|key| match key {
+                            // Retained refused numerics are local lexical labels
+                            // when ignored, never approximate numeric aliases.
+                            JoinKey::Lexeme(token) => PartitionLabelKey::Text(token.to_lowercase()),
+                            key => PartitionLabelKey::Numeric(key),
+                        })
+                    }
+                    Cell::Str(_) => {
+                        Some(PartitionLabelKey::Text(cell.to_str_scalar().to_lowercase()))
+                    }
+                })
                 .collect();
-            let mut train_mask: Vec<bool> = col.iter().map(|v| train_vals.contains(v)).collect();
-            let mut test_mask: Vec<bool> = col.iter().map(|v| test_vals.contains(v)).collect();
-            let unknown: Vec<bool> = col.iter().map(|v| !known.contains(v)).collect();
+            let mut matches: Vec<Vec<bool>> = declared
+                .iter()
+                .map(|keys| {
+                    col.iter()
+                        .map(|key| key.as_ref().is_some_and(|key| keys.contains(key)))
+                        .collect()
+                })
+                .collect();
+            for row in 0..n {
+                let owners: Vec<_> = values
+                    .iter()
+                    .zip(&matches)
+                    .filter_map(|((name, _), mask)| mask[row].then_some(*name))
+                    .collect();
+                if owners.len() > 1 {
+                    return Err(SpecError::new(format!(
+                        "partitions.column '{column}': row {row} matches both '{}' and '{}'",
+                        owners[0], owners[1]
+                    )));
+                }
+            }
+            let unknown: Vec<bool> = (0..n)
+                .map(|row| !matches.iter().any(|mask| mask[row]))
+                .collect();
+            let predict_mask = matches.pop().expect("four partition lists");
+            let val_mask = matches.pop().expect("four partition lists");
+            let mut test_mask = matches.pop().expect("four partition lists");
+            let mut train_mask = matches.pop().expect("four partition lists");
             if unknown.iter().any(|&u| u) {
                 match p.unknown_policy {
                     UnknownPolicy::Error => {
@@ -1959,11 +2881,11 @@ fn split_partition_mask(
             let mut masks: IndexMap<String, Vec<bool>> = IndexMap::new();
             masks.insert("train".into(), train_mask);
             masks.insert("test".into(), test_mask);
-            if !predict_vals.is_empty() {
-                masks.insert(
-                    "predict".into(),
-                    col.iter().map(|v| predict_vals.contains(v)).collect(),
-                );
+            if !p.val_values.is_empty() {
+                masks.insert("val".into(), val_mask);
+            }
+            if !p.predict_values.is_empty() {
+                masks.insert("predict".into(), predict_mask);
             }
             Ok(masks
                 .into_iter()
@@ -1974,6 +2896,7 @@ fn split_partition_mask(
             &[
                 ("train", &p.train),
                 ("test", &p.test),
+                ("val", &p.val),
                 ("predict", &p.predict),
             ],
             n,
@@ -1996,9 +2919,15 @@ fn split_partition_mask(
             };
             let train = load("train", &p.train_file)?;
             let test = load("test", &p.test_file)?;
+            let val = load("val", &p.val_file)?;
             let predict = load("predict", &p.predict_file)?;
             mask_from_index_lists(
-                &[("train", &train), ("test", &test), ("predict", &predict)],
+                &[
+                    ("train", &train),
+                    ("test", &test),
+                    ("val", &val),
+                    ("predict", &predict),
+                ],
                 n,
                 "index file",
             )
@@ -2077,44 +3006,44 @@ fn attach_folds(
     fold_inline: Option<&[Fold]>,
     assembled: &mut AssembledDataset,
     combined_df: Option<&Frame>,
+    train_rows: Option<&[usize]>,
 ) -> Result<(), SpecError> {
     let Some(folds) = &spec.folds else {
         return Ok(());
     };
-    if !folds.inline.is_empty() {
-        let int_list = |v: Option<&Value>| -> Vec<i64> {
-            v.and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
-                .unwrap_or_default()
-        };
-        assembled.folds = folds
-            .inline
-            .iter()
-            .map(|f| {
-                let m = f.as_object();
-                let train = int_list(m.and_then(|m| m.get("train")));
-                let val = int_list(m.and_then(|m| m.get("val").or_else(|| m.get("test"))));
-                (train, val)
-            })
-            .collect();
+    let block = assembled.blocks.get("train").ok_or_else(|| {
+        SpecError::new("folds require a train block; only training rows may declare folds")
+    })?;
+    let n_rows = combined_df.map(|f| f.n_rows).unwrap_or(block.n_samples);
+    let training: Vec<usize> = if combined_df.is_some() {
+        train_rows.unwrap_or_default().to_vec()
+    } else {
+        (0..n_rows).collect()
+    };
+    let positions: HashMap<usize, i64> = training
+        .iter()
+        .enumerate()
+        .map(|(pos, row)| (*row, pos as i64))
+        .collect();
+    let raw: Vec<Fold> = if !folds.inline.is_empty() {
+        super::folds::parse_json(&Value::Array(folds.inline.clone()))?
     } else if let Some(column) = folds.column.as_deref().filter(|s| !s.is_empty()) {
-        let combined = combined_df.ok_or_else(|| {
+        let combined = combined_df.ok_or_else(|| SpecError::new(format!("folds.column='{column}' requires a single combined frame (it does not apply with explicit per-source partitions)")))?;
+        let col = combined.column(column).ok_or_else(|| {
             SpecError::new(format!(
-                "folds.column='{column}' requires a single combined frame (it does not apply with explicit per-source partitions)"
-            ))
-        })?;
-        if !combined.has_column(column) {
-            return Err(SpecError::new(format!(
                 "folds.column='{column}' not found in the assembled data (columns: {:?})",
                 combined.column_names()
-            )));
-        }
-        let col = combined.column(column).unwrap();
-        // distinct non-NA values, sorted by str(value)
+            ))
+        })?;
         let mut distinct: Vec<(String, Vec<usize>)> = Vec::new();
         for (i, cell) in col.values.iter().enumerate() {
             if matches!(cell, Cell::Na) || matches!(cell, Cell::Float(f) if f.is_nan()) {
                 continue;
+            }
+            if !positions.contains_key(&i) {
+                return Err(SpecError::new(format!(
+                    "folds.column='{column}': only training rows may have fold labels"
+                )));
             }
             let key = cell.to_str_scalar();
             match distinct.iter_mut().find(|(k, _)| *k == key) {
@@ -2128,34 +3057,72 @@ fn attach_folds(
                 "folds.column='{column}' has no non-NaN values"
             )));
         }
-        let n = col.values.len();
-        assembled.folds = distinct
+        distinct
             .into_iter()
             .map(|(_, val_rows)| {
-                let vset: HashSet<usize> = val_rows.iter().copied().collect();
-                let train: Vec<i64> = (0..n)
-                    .filter(|i| !vset.contains(i))
-                    .map(|i| i as i64)
-                    .collect();
-                let val: Vec<i64> = val_rows.iter().map(|&i| i as i64).collect();
-                (train, val)
+                let set: HashSet<usize> = val_rows.iter().copied().collect();
+                (
+                    training
+                        .iter()
+                        .filter(|i| !set.contains(*i))
+                        .map(|i| *i as i64)
+                        .collect(),
+                    val_rows.iter().map(|i| *i as i64).collect(),
+                )
             })
-            .collect();
+            .collect()
     } else if folds.file.as_deref().filter(|s| !s.is_empty()).is_some() {
-        // The facade parses the fold file to `fold_inline` before delegating;
-        // it is unavailable in a pure browser context.
-        assembled.folds = fold_inline
+        fold_inline
             .ok_or_else(|| {
                 SpecError::new("folds.file content not supplied (not browser-reachable)")
             })?
-            .to_vec();
+            .to_vec()
+    } else {
+        vec![]
+    };
+    for (train, val) in &raw {
+        for (name, side) in [("train", train), ("val", val)] {
+            let mut seen = HashSet::new();
+            for &index in side {
+                let row = usize::try_from(index)
+                    .ok()
+                    .filter(|i| *i < n_rows)
+                    .ok_or_else(|| {
+                        SpecError::new(format!(
+                            "folds.{name}: index out of range for {n_rows} frame rows"
+                        ))
+                    })?;
+                if !positions.contains_key(&row) {
+                    return Err(SpecError::new(format!(
+                        "folds.{name}: only training rows may declare folds"
+                    )));
+                }
+                if !seen.insert(index) {
+                    return Err(SpecError::new(format!("folds.{name}: duplicate indices")));
+                }
+            }
+        }
+        if train.iter().any(|i| val.contains(i)) {
+            return Err(SpecError::new(
+                "fold train and validation sides must be disjoint",
+            ));
+        }
     }
-    // Fold indices refer to the unsplit combined frame. Capture stable IDs now:
-    // a subsequent partition split may reorder rows, so translating those raw
-    // indices in a downstream bridge would be scientifically wrong.
-    assembled.fold_provenance = combined_df
-        .and_then(|frame| fold_provenance_from_frame(spec, frame, &assembled.folds))
+    let provenance = combined_df
+        .or(block.metadata.as_ref())
+        .and_then(|frame| fold_provenance_from_frame(spec, frame, &raw))
         .unwrap_or_default();
+    let mapped = raw
+        .iter()
+        .map(|(train, val)| {
+            (
+                train.iter().map(|i| positions[&(*i as usize)]).collect(),
+                val.iter().map(|i| positions[&(*i as usize)]).collect(),
+            )
+        })
+        .collect();
+    assembled.fold_provenance = provenance;
+    assembled.folds = mapped;
     Ok(())
 }
 
@@ -2205,6 +3172,150 @@ mod tests {
     use super::*;
     use crate::materialize::frame::{Cell, Column};
     use serde_json::json;
+
+    #[test]
+    fn selected_typed_infinite_metadata_refuses_without_reclassifying_missing_or_text() {
+        for role in ["metadata", "ignore"] {
+            let spec = DatasetSpec::from_value(&json!({
+                "params": {"na": {"policy": "ignore"}},
+                "sources": [{"id": "t", "input": "d.parquet", "columns": [
+                    {"role": "features", "select": ["x"]},
+                    {"role": role, "select": ["m"]}
+                ]}]
+            }))
+            .unwrap();
+            for value in [f64::INFINITY, f64::NEG_INFINITY] {
+                let frame = Frame::from_columns(
+                    vec![
+                        Column::from_cells("x", vec![Cell::Float(1.5), Cell::Float(2.5)]),
+                        Column::from_cells("m", vec![Cell::Float(value), Cell::Float(2.5)]),
+                    ],
+                    "text",
+                );
+                let result = assemble_in_memory(
+                    &spec,
+                    &[InMemorySource {
+                        name: "d.parquet".into(),
+                        payload: SourcePayload::Frame(frame),
+                    }],
+                    &HashMap::new(),
+                    None,
+                );
+                if role == "metadata" {
+                    assert_eq!(
+                        result.unwrap_err().message,
+                        "Observed numeric values must be finite"
+                    );
+                } else {
+                    assert_eq!(result.unwrap().blocks["train"].n_samples, 2);
+                }
+            }
+        }
+        let spec = DatasetSpec::from_value(&json!({
+            "params": {"na": {"policy": "ignore"}},
+            "sources": [{"id": "t", "input": "d.parquet", "columns": [
+                {"role": "features", "select": ["x"]},
+                {"role": "metadata", "select": ["m"]}
+            ]}]
+        }))
+        .unwrap();
+        for (values, expected) in [
+            (vec![Cell::Float(f64::NAN), Cell::Float(2.5)], Value::Null),
+            (vec![Cell::Na, Cell::Float(2.5)], Value::Null),
+            (
+                vec![Cell::Str("inf".into()), Cell::Str("2.5".into())],
+                json!("inf"),
+            ),
+        ] {
+            let frame = Frame::from_columns(
+                vec![
+                    Column::from_cells("x", vec![Cell::Float(1.5), Cell::Float(2.5)]),
+                    Column::from_cells("m", values),
+                ],
+                "text",
+            );
+            let assembled = assemble_in_memory(
+                &spec,
+                &[InMemorySource {
+                    name: "d.parquet".into(),
+                    payload: SourcePayload::Frame(frame),
+                }],
+                &HashMap::new(),
+                None,
+            )
+            .unwrap();
+            let metadata = assembled.blocks["train"].metadata.as_ref().unwrap();
+            let column = metadata.column("m").unwrap();
+            assert_eq!(
+                super::super::frame::metadata_cell_value(column, 0, &column.values[0]),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn typed_infinite_metadata_is_checked_only_after_na_and_join_row_removal() {
+        for policy in ["na", "join"] {
+            let spec = if policy == "na" {
+                json!({
+                    "params": {"na": {"policy": "remove_sample"}},
+                    "sources": [{"id": "a", "input": "a.parquet", "columns": [
+                        {"role": "features", "select": ["x", "z"]},
+                        {"role": "metadata", "select": ["m"]},
+                        {"role": "ignore", "select": ["k"]}
+                    ]}]
+                })
+            } else {
+                json!({
+                    "params": {"delimiter": ",", "na": {"policy": "ignore"}},
+                    "sources": [
+                        {"id": "a", "input": "a.parquet", "columns": [
+                            {"role": "features", "select": ["x"]},
+                            {"role": "metadata", "select": ["m"]},
+                            {"role": "ignore", "select": ["k", "z"]}
+                        ]},
+                        {"id": "s", "kind": "lookup", "input": "s.csv", "columns": [
+                            {"role": "targets", "select": ["r"]}
+                        ], "join": {"to": "a", "left_on": "k", "right_on": "k", "how": "m:1", "coverage": "drop"}}
+                    ]
+                })
+            };
+            let spec = DatasetSpec::from_value(&spec).unwrap();
+            let frame = Frame::from_columns(
+                vec![
+                    Column::from_cells("k", vec![Cell::Str("Z".into()), Cell::Str("A".into())]),
+                    Column::from_cells("x", vec![Cell::Float(1.5), Cell::Float(2.5)]),
+                    Column::from_cells("z", vec![Cell::Na, Cell::Float(2.0)]),
+                    Column::from_cells("m", vec![Cell::Float(f64::INFINITY), Cell::Float(2.5)]),
+                ],
+                "text",
+            );
+            let assembled = assemble_in_memory(
+                &spec,
+                &[
+                    InMemorySource {
+                        name: "a.parquet".into(),
+                        payload: SourcePayload::Frame(frame),
+                    },
+                    InMemorySource {
+                        name: "s.csv".into(),
+                        payload: SourcePayload::Bytes(b"k,r\nA,0.5\n".to_vec()),
+                    },
+                ],
+                &HashMap::new(),
+                None,
+            )
+            .unwrap();
+            let block = &assembled.blocks["train"];
+            assert_eq!(block.n_samples, 1, "{policy}");
+            assert_eq!(
+                block.metadata.as_ref().unwrap().column("m").unwrap().values,
+                vec![Cell::Float(2.5)],
+                "{policy}"
+            );
+            assert_eq!(block.x[0].data[0], 2.5, "{policy}");
+        }
+    }
 
     #[test]
     fn sample_removal_aligns_all_sources_and_variations() {
@@ -2300,7 +3411,7 @@ mod tests {
         )
     }
 
-    fn assert_nan_eq(actual: &[f32], expected: &[f32]) {
+    fn assert_nan_eq(actual: &[f64], expected: &[f64]) {
         assert_eq!(actual.len(), expected.len(), "{actual:?}");
         for (a, e) in actual.iter().zip(expected) {
             assert!(
@@ -2331,7 +3442,7 @@ mod tests {
             );
             assert_nan_eq(
                 &block.y.as_ref().unwrap().data,
-                &[10.0, 0.0, f32::NAN, f32::NAN, 30.0, f32::NAN, 40.0, 1.0],
+                &[10.0, 0.0, f64::NAN, f64::NAN, 30.0, f64::NAN, 40.0, 1.0],
             );
             assert_eq!(block.y_categorical["c"], json!({"categories": ["a", "b"]}));
             assert!(assembled.warnings.is_empty(), "{policy}");
@@ -2388,11 +3499,11 @@ mod tests {
         let assembled = assemble("replace", blank_row).unwrap();
         let block = &assembled.blocks["train"];
         assert_eq!(block.x[0].data, vec![1.0, 5.0, 0.0, 0.0, 3.0, 7.0]);
-        assert_nan_eq(&block.y.as_ref().unwrap().data, &[10.0, f32::NAN, 30.0]);
+        assert_nan_eq(&block.y.as_ref().unwrap().data, &[10.0, f64::NAN, 30.0]);
         let assembled = assemble("remove_feature", "y;w;v\n10;1;5\n;2;\n30;3;7\n").unwrap();
         let block = &assembled.blocks["train"];
         assert_eq!(block.feature_headers, vec![vec!["w"]]);
-        assert_nan_eq(&block.y.as_ref().unwrap().data, &[10.0, f32::NAN, 30.0]);
+        assert_nan_eq(&block.y.as_ref().unwrap().data, &[10.0, f64::NAN, 30.0]);
         let err = assemble("auto", blank_row).unwrap_err();
         assert!(err.message.contains("First NA in column 'w' (row: 1)"));
     }
@@ -2463,7 +3574,7 @@ mod tests {
                 Cell::Str("a".into()),
             ],
         );
-        let (codes, mapping) = encode_categorical(&col, "auto");
+        let (codes, mapping) = encode_categorical(&col, "auto").unwrap();
         assert_eq!(codes, vec![0.0, 1.0, 0.0]);
         assert_eq!(mapping, Some(json!({"categories": ["a", "b"]})));
     }
@@ -2474,7 +3585,7 @@ mod tests {
             "class",
             vec![Cell::Str("a".into()), Cell::Na, Cell::Str("b".into())],
         );
-        let (codes, mapping) = encode_categorical(&col, "auto");
+        let (codes, mapping) = encode_categorical(&col, "auto").unwrap();
         assert_eq!(codes[0], 0.0);
         assert!(codes[1].is_nan());
         assert_eq!(codes[2], 1.0);
@@ -2484,7 +3595,7 @@ mod tests {
     #[test]
     fn float_target_has_no_mapping() {
         let col = Column::from_cells("y", vec![Cell::Float(12.5), Cell::Float(8.3)]);
-        let (vals, mapping) = encode_categorical(&col, "auto");
+        let (vals, mapping) = encode_categorical(&col, "auto").unwrap();
         assert_eq!(vals, vec![12.5, 8.3]);
         assert_eq!(mapping, None);
     }
@@ -2539,5 +3650,1238 @@ mod tests {
         assert!(glob_match("data?.csv", "data1.csv"));
         assert!(glob_match("f[0-9].csv", "f3.csv"));
         assert!(!glob_match("f[0-9].csv", "fa.csv"));
+    }
+}
+
+#[cfg(test)]
+mod path_reference_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn source(name: &str, value: &str) -> InMemorySource {
+        InMemorySource {
+            name: name.into(),
+            payload: SourcePayload::Bytes(format!("x; y\n{value};1.5\n").into_bytes()),
+        }
+    }
+
+    #[test]
+    fn exact_metacharacter_names_win_and_ambiguous_exact_names_refuse() {
+        let sources = vec![source("run[2]/x.csv", "0.1"), source("run2/x.csv", "7.1")];
+        let selected = resolve_inputs_mem(&json!("run[2]/x.csv"), &sources).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "run[2]/x.csv");
+        let duplicate = vec![source("*.csv", "0.1"), source("*.csv", "7.1")];
+        assert!(resolve_inputs_mem(&json!("*.csv"), &duplicate)
+            .err()
+            .unwrap()
+            .message
+            .contains("ambiguous"));
+    }
+
+    #[test]
+    fn genuine_patterns_keep_order_and_name_deduplication() {
+        let sources = vec![source("b.csv", "0.2"), source("a.csv", "0.1")];
+        let selected = resolve_inputs_mem(&json!(["b.csv", "*.csv", "a.csv"]), &sources).unwrap();
+        assert_eq!(
+            selected.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["b.csv", "a.csv"]
+        );
+        let literal = vec![source("*.csv", "0.1"), source("a.csv", "7.1")];
+        assert_eq!(
+            resolve_inputs_mem(&json!("*.csv"), &literal).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn public_memory_source_and_variation_select_literal_payloads() {
+        let spec = DatasetSpec::from_value(&json!({"params":{"delimiter":";"},"sources":[{
+            "id":"x","role":"features","input":"main.csv",
+            "variations":[{"name":"filtered","input":"run[2]/x.csv"}]
+        }]}))
+        .unwrap();
+        let sources = vec![
+            source("main.csv", "0.5"),
+            source("run[2]/x.csv", "0.1"),
+            source("run2/x.csv", "7.1"),
+        ];
+        let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap();
+        let block = &assembled.blocks["train"];
+        assert_eq!(block.x[0].data[0].to_bits(), 0.5_f64.to_bits());
+        assert_eq!(block.processings[0][0].0, "filtered");
+        assert_eq!(
+            block.processings[0][0].1.data[0].to_bits(),
+            0.1_f64.to_bits()
+        );
+        assert_eq!(block.x[0].n_rows, 1);
+    }
+}
+
+#[cfg(test)]
+mod delimiter_resolution_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn named_bytes_and_variation_refuse_before_numeric_coercion() {
+        for variation in [false, true] {
+            let mut value =
+                json!({"sources":[{"id":"train_x","role":"features","input":"Xcal.csv"}]});
+            let mut sources = vec![InMemorySource {
+                name: "Xcal.csv".into(),
+                payload: SourcePayload::Bytes(if variation {
+                    b"x;y\n1;2\n3;4\n".to_vec()
+                } else {
+                    b"x,y\n1,2\n3,4\n".to_vec()
+                }),
+            }];
+            if variation {
+                value["sources"][0]["variations"] =
+                    json!([{"name":"alternate","input":"alternate.csv"}]);
+                sources.push(InMemorySource {
+                    name: "alternate.csv".into(),
+                    payload: SourcePayload::Bytes(b"x,y\n1,2\n3,4\n".to_vec()),
+                });
+            }
+            let error = assemble_in_memory(
+                &DatasetSpec::from_value(&value).unwrap(),
+                &sources,
+                &HashMap::new(),
+                None,
+            )
+            .unwrap_err();
+            assert!(error.message.contains("train_x"));
+            assert!(error.message.contains(if variation {
+                "alternate.csv"
+            } else {
+                "Xcal.csv"
+            }));
+            assert!(error.message.contains("declare params.delimiter"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod validation_partition_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn spec(partitions: Value) -> DatasetSpec {
+        DatasetSpec::from_value(&json!({"task_type":"regression","sources":[{"id":"d","role":"mixed","input":"all.csv",
+            "columns":[{"role":"features","select":["x"]},{"role":"targets","select":["y"]},{"role":"metadata","select":["set","row"]}]}],
+            "partitions":partitions})).unwrap()
+    }
+
+    fn source(unknown: bool) -> InMemorySource {
+        let mut text = "x;y;set;row\n10.0;100.0;train;r0\n11.0;101.0;test;r1\n12.0;102.0;val;r2\n13.0;103.0;predict;r3\n14.0;104.0;train;r4\n15.0;105.0;test;r5\n16.0;106.0;val;r6\n17.0;107.0;predict;r7\n".to_string();
+        if unknown {
+            text.push_str("18.0;108.0;other;r8\n");
+        }
+        InMemorySource {
+            name: "all.csv".into(),
+            payload: SourcePayload::Bytes(text.into_bytes()),
+        }
+    }
+
+    fn column(policy: &str) -> Value {
+        json!({"by":"column","column":"set","train_values":["TRAIN"],"test_values":["test"],"val_values":["VaL"],"predict_values":["predict"],"unknown_policy":policy})
+    }
+
+    #[test]
+    fn all_three_modes_preserve_eight_rows_values_and_order() {
+        let lists: HashMap<String, Vec<i64>> = [
+            ("train", vec![0, 4]),
+            ("test", vec![1, 5]),
+            ("val", vec![2, 6]),
+            ("predict", vec![3, 7]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v))
+        .collect();
+        for partitions in [
+            column("error"),
+            json!({"by":"index","train":[0,4],"test":[1,5],"val":[2,6],"predict":[3,7]}),
+            json!({"by":"index_file","train_file":"train.json","test_file":"test.json","val_file":"val.json","predict_file":"predict.json"}),
+        ] {
+            let assembled =
+                assemble_in_memory(&spec(partitions), &[source(false)], &lists, None).unwrap();
+            assert_eq!(
+                assembled
+                    .blocks
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                vec!["train", "test", "val", "predict"]
+            );
+            assert_eq!(
+                assembled
+                    .blocks
+                    .values()
+                    .map(|b| b.n_samples)
+                    .sum::<usize>(),
+                8
+            );
+            for (part, x, y, rows) in [
+                (
+                    "train",
+                    vec![10.0, 14.0],
+                    vec![100.0, 104.0],
+                    vec!["r0", "r4"],
+                ),
+                (
+                    "test",
+                    vec![11.0, 15.0],
+                    vec![101.0, 105.0],
+                    vec!["r1", "r5"],
+                ),
+                (
+                    "val",
+                    vec![12.0, 16.0],
+                    vec![102.0, 106.0],
+                    vec!["r2", "r6"],
+                ),
+                (
+                    "predict",
+                    vec![13.0, 17.0],
+                    vec![103.0, 107.0],
+                    vec!["r3", "r7"],
+                ),
+            ] {
+                let block = &assembled.blocks[part];
+                assert_eq!(block.n_samples, 2);
+                assert_eq!(block.x[0].data, x);
+                assert_eq!(block.x[0].validity, vec![true, true]);
+                assert_eq!(block.y.as_ref().unwrap().data, y);
+                assert_eq!(block.y.as_ref().unwrap().validity, vec![true, true]);
+                assert_eq!(block.metadata.as_ref().unwrap().str_column("row"), rows);
+                assert_eq!(block.source_ids, vec!["d"]);
+            }
+        }
+    }
+
+    #[test]
+    fn validation_is_known_before_each_unknown_policy() {
+        for policy in ["train", "test", "drop", "error"] {
+            let value = spec(column(policy));
+            let exact =
+                assemble_in_memory(&value, &[source(false)], &HashMap::new(), None).unwrap();
+            assert_eq!(
+                exact
+                    .blocks
+                    .values()
+                    .map(|b| b.n_samples)
+                    .collect::<Vec<_>>(),
+                vec![2, 2, 2, 2]
+            );
+            let extra = assemble_in_memory(&value, &[source(true)], &HashMap::new(), None);
+            if policy == "error" {
+                assert!(extra.unwrap_err().message.contains("unknown values"));
+            } else {
+                let extra = extra.unwrap();
+                assert_eq!(
+                    extra.blocks["val"].y.as_ref().unwrap().data,
+                    vec![102.0, 106.0]
+                );
+                assert_eq!(
+                    extra.blocks.values().map(|b| b.n_samples).sum::<usize>(),
+                    if policy == "drop" { 8 } else { 9 }
+                );
+                if policy != "drop" {
+                    assert_eq!(extra.blocks[policy].n_samples, 3);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validation_only_and_missing_preloaded_file() {
+        let lists = HashMap::from([("val".into(), vec![2, 6])]);
+        for partitions in [
+            json!({"by":"index","val":[2,6]}),
+            json!({"by":"index_file","val_file":"val.json"}),
+        ] {
+            let assembled =
+                assemble_in_memory(&spec(partitions), &[source(false)], &lists, None).unwrap();
+            assert_eq!(
+                assembled
+                    .blocks
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                vec!["val"]
+            );
+            assert_eq!(
+                assembled.blocks["val"].y.as_ref().unwrap().data,
+                vec![102.0, 106.0]
+            );
+        }
+        let error = assemble_in_memory(
+            &spec(json!({"by":"index_file","val_file":"val.json"})),
+            &[source(false)],
+            &HashMap::new(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error
+            .message
+            .contains("'val' partition file content not supplied"));
+    }
+
+    #[test]
+    fn validation_refuses_only_its_new_overlap_and_uses_existing_index_checks() {
+        for overlap in ["TRAIN", "TEST", "PREDICT"] {
+            let mut partitions = column("error");
+            partitions["val_values"] = json!([overlap]);
+            let error =
+                assemble_in_memory(&spec(partitions), &[source(false)], &HashMap::new(), None)
+                    .unwrap_err();
+            assert!(error.message.contains("appears in both"));
+        }
+        for (bad, diagnostic) in [
+            (json!([2, 2]), "duplicate"),
+            (json!([8]), "out-of-range"),
+            (json!([-1]), "out-of-range"),
+            (json!(2), "must be a list"),
+            (json!([0]), "disjoint"),
+            (json!(["bad"]), "non-integer"),
+        ] {
+            let error = assemble_in_memory(
+                &spec(json!({"by":"index","train":[0],"val":bad})),
+                &[source(false)],
+                &HashMap::new(),
+                None,
+            )
+            .unwrap_err();
+            assert!(error.message.contains(diagnostic), "{error:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod strict_partition_fold_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn value(partitions: Value) -> Value {
+        json!({"task_type":"regression","sample_index":{"by":"id","key":"row","observation_id":"row"},
+            "sources":[{"id":"d","role":"mixed","input":"all.csv","columns":[{"role":"features","select":["x"]},
+                {"role":"targets","select":["y"]},{"role":"metadata","select":["set","row"]}]}],"partitions":partitions})
+    }
+
+    fn source() -> InMemorySource {
+        InMemorySource { name:"all.csv".into(), payload:SourcePayload::Bytes(b"x;y;set;row\n10.0;100.0;train;r0\n11.0;101.0;test;r1\n12.0;102.0;val;r2\n13.0;103.0;predict;r3\n14.0;104.0;train;r4\n15.0;105.0;test;r5\n16.0;106.0;val;r6\n17.0;107.0;predict;r7\n".to_vec()) }
+    }
+
+    fn fold_value(folds: Value) -> Value {
+        let mut v =
+            value(json!({"by":"index","train":[1,3,5],"test":[0,2],"val":[4,6],"predict":[7]}));
+        v["folds"] = folds;
+        v
+    }
+
+    #[test]
+    fn all_six_column_pairs_refuse_at_validate_and_wasm_shaped_assembly() {
+        let names = [
+            "train_values",
+            "test_values",
+            "val_values",
+            "predict_values",
+        ];
+        for i in 0..names.len() {
+            for j in i + 1..names.len() {
+                let mut p = json!({"by":"column","column":"set"});
+                p[names[i]] = json!(["Absent"]);
+                p[names[j]] = json!(["ABSENT"]);
+                let spec = DatasetSpec::from_value(&value(p)).unwrap();
+                for error in [
+                    crate::spec::validate_spec(&spec).unwrap_err(),
+                    assemble_in_memory(&spec, &[source()], &HashMap::new(), None).unwrap_err(),
+                ] {
+                    assert!(error.message.contains("'absent'"));
+                    assert!(error.message.contains(names[i]) && error.message.contains(names[j]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn column_matching_uses_original_scalar_normalization_without_trimming() {
+        for (a, b, refused) in [
+            (json!(1), json!("1"), true),
+            (json!(true), json!("true"), true),
+            (json!("TRAIN"), json!("train"), true),
+            (json!(1), json!(1.0), false),
+            (json!(" 1"), json!("1"), false),
+        ] {
+            let spec = DatasetSpec::from_value(&value(json!({"by":"column","column":"set","train_values":[a.clone(),a],"test_values":[b]}))).unwrap();
+            assert_eq!(
+                spec.partitions
+                    .as_ref()
+                    .unwrap()
+                    .validate_column_values()
+                    .is_err(),
+                refused
+            );
+        }
+    }
+
+    #[test]
+    fn closed_keys_arrays_and_modes_refuse_before_ir_loss() {
+        for key in ["validation", "valid", "cal", "tset", "unknown_polcy"] {
+            let mut p = json!({"by":"index","train":[0]});
+            p[key] = json!([1]);
+            assert!(DatasetSpec::from_value(&value(p))
+                .unwrap_err()
+                .message
+                .contains("unknown keys"));
+        }
+        for p in [
+            json!({"by":"column","column":"set","train":[0]}),
+            json!({"by":"index","column":"set"}),
+            json!({"by":"index","val_values":["val"]}),
+            json!({"by":"index_file","val":[0]}),
+            json!({"by":"files","val_file":"v.txt"}),
+            json!({"train":[0]}),
+            json!({"unknown_policy":"train"}),
+        ] {
+            assert!(DatasetSpec::from_value(&value(p))
+                .unwrap_err()
+                .message
+                .contains("not applicable"));
+        }
+        for key in [
+            "train_values",
+            "test_values",
+            "val_values",
+            "predict_values",
+        ] {
+            for bad in [Value::Null, json!("train"), json!(1), json!({})] {
+                let mut p = json!({"by":"column","column":"set"});
+                p[key] = bad;
+                assert!(DatasetSpec::from_value(&value(p))
+                    .unwrap_err()
+                    .message
+                    .contains("must be an array"));
+            }
+        }
+        for p in [
+            json!({}),
+            json!({"by":"index","train":[]}),
+            json!({"by":"index","train":[],"test":[]}),
+        ] {
+            crate::spec::validate_spec(&DatasetSpec::from_value(&value(p)).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn nonprefix_folds_map_to_training_positions_after_identity_capture() {
+        let spec =
+            DatasetSpec::from_value(&fold_value(json!({"inline":[{"train":[3,1],"val":[5]}]})))
+                .unwrap();
+        let data = assemble_in_memory(&spec, &[source()], &HashMap::new(), None).unwrap();
+        assert_eq!(data.folds, vec![(vec![1, 0], vec![2])]);
+        assert_eq!(
+            data.fold_provenance[0].train_observation_ids,
+            vec!["r3", "r1"]
+        );
+        assert_eq!(
+            data.fold_provenance[0].validation_observation_ids,
+            vec!["r5"]
+        );
+        assert_eq!(data.blocks["train"].x[0].data, vec![11.0, 13.0, 15.0]);
+        assert_eq!(
+            data.blocks["train"].y.as_ref().unwrap().data,
+            vec![101.0, 103.0, 105.0]
+        );
+    }
+
+    #[test]
+    fn strict_inline_fold_domain_and_sides_refuse() {
+        for bad in [
+            json!(7),
+            json!(0),
+            json!(2),
+            json!(99),
+            json!(-1),
+            json!(true),
+            json!(1.0),
+            json!("1"),
+        ] {
+            let spec =
+                DatasetSpec::from_value(&fold_value(json!({"inline":[{"train":[1],"val":[bad]}]})))
+                    .unwrap();
+            assert!(assemble_in_memory(&spec, &[source()], &HashMap::new(), None).is_err());
+        }
+        for fold in [
+            json!({"train":[0,1],"val":[2]}),
+            json!({"train":[1,1],"val":[5]}),
+            json!({"train":[1],"val":[5,5]}),
+            json!({"train":[1],"val":[1]}),
+            json!({"train":1,"val":[5]}),
+        ] {
+            let spec = DatasetSpec::from_value(&fold_value(json!({"inline":[fold]}))).unwrap();
+            assert!(assemble_in_memory(&spec, &[source()], &HashMap::new(), None).is_err());
+        }
+    }
+
+    #[test]
+    fn all_file_forms_admit_training_rows_only_and_keep_declared_order() {
+        for (fmt, text, expected) in [
+            (
+                "json",
+                r#"[{"train":[3,1],"val":[5]}]"#,
+                vec![(vec![1_i64, 0], vec![2])],
+            ),
+            ("txt", "3,1\n5\n", vec![(vec![1, 0], vec![2])]),
+            (
+                "csv",
+                "fold_0,fold_1\n3,5\n1,\n",
+                vec![(vec![1, 0], vec![2]), (vec![2], vec![0, 1])],
+            ),
+            (
+                "csv",
+                "sample_id,fold\n3,0\n1,0\n5,1\n",
+                vec![(vec![2], vec![1, 0]), (vec![0, 1], vec![2])],
+            ),
+        ] {
+            let folds = super::super::folds::parse_fold_str(text, fmt).unwrap();
+            let spec =
+                DatasetSpec::from_value(&fold_value(json!({"file":"f","format":fmt}))).unwrap();
+            let data =
+                assemble_in_memory(&spec, &[source()], &HashMap::new(), Some(&folds)).unwrap();
+            assert_eq!(data.folds, expected);
+        }
+        for (fmt, text) in [
+            ("json", r#"[{"train":[1],"val":[7]}]"#),
+            ("txt", "1\n7\n"),
+            ("csv", "fold_0,fold_1\n1,7\n"),
+            ("csv", "sample_id,fold\n1,0\n7,1\n"),
+        ] {
+            let folds = super::super::folds::parse_fold_str(text, fmt).unwrap();
+            let spec =
+                DatasetSpec::from_value(&fold_value(json!({"file":"f","format":fmt}))).unwrap();
+            assert!(
+                assemble_in_memory(&spec, &[source()], &HashMap::new(), Some(&folds))
+                    .unwrap_err()
+                    .message
+                    .contains("training rows")
+            );
+        }
+    }
+
+    #[test]
+    fn column_folds_exclude_null_test_rows_and_keep_null_train_fitting() {
+        let mut v = fold_value(json!({"column":"cv"}));
+        v["sources"][0]["columns"][2]["select"] = json!(["set", "row", "cv"]);
+        let spec = DatasetSpec::from_value(&v).unwrap();
+        let text = "x;y;set;row;cv\n10.0;100.0;train;r0;\n11.0;101.0;test;r1;a\n12.0;102.0;val;r2;\n13.0;103.0;predict;r3;\n14.0;104.0;train;r4;\n15.0;105.0;test;r5;b\n16.0;106.0;val;r6;\n17.0;107.0;predict;r7;\n";
+        let input = |text: &str| InMemorySource {
+            name: "all.csv".into(),
+            payload: SourcePayload::Bytes(text.as_bytes().to_vec()),
+        };
+        let data = assemble_in_memory(&spec, &[input(text)], &HashMap::new(), None).unwrap();
+        assert_eq!(
+            data.folds,
+            vec![(vec![1, 2], vec![0]), (vec![0, 1], vec![2])]
+        );
+        assert_eq!(
+            data.fold_provenance[0].train_observation_ids,
+            vec!["r3", "r5"]
+        );
+        let leak = text.replace("12.0;102.0;val;r2;", "12.0;102.0;val;r2;leak");
+        assert!(
+            assemble_in_memory(&spec, &[input(&leak)], &HashMap::new(), None)
+                .unwrap_err()
+                .message
+                .contains("only training rows")
+        );
+    }
+
+    #[test]
+    fn per_source_namespace_empty_sides_and_missing_train_are_checked() {
+        let mut v = fold_value(json!({"inline":[{"train":[0],"val":[2]}]}));
+        v.as_object_mut().unwrap().remove("partitions");
+        v["sources"][0]["partition"] = json!("train");
+        let input = InMemorySource {
+            name: "all.csv".into(),
+            payload: SourcePayload::Bytes(
+                b"x;y;set;row\n10.0;100.0;train;r0\n11.0;101.0;train;r1\n12.0;102.0;train;r2\n"
+                    .to_vec(),
+            ),
+        };
+        let spec = DatasetSpec::from_value(&v).unwrap();
+        let data =
+            assemble_in_memory(&spec, std::slice::from_ref(&input), &HashMap::new(), None).unwrap();
+        assert_eq!(data.folds, vec![(vec![0], vec![2])]);
+        assert_eq!(
+            data.fold_provenance[0].validation_observation_ids,
+            vec!["r2"]
+        );
+        v["folds"]["inline"][0]["val"] = json!([4]);
+        assert!(assemble_in_memory(
+            &DatasetSpec::from_value(&v).unwrap(),
+            std::slice::from_ref(&input),
+            &HashMap::new(),
+            None
+        )
+        .is_err());
+        v["sources"][0]["partition"] = json!("test");
+        v["folds"] = json!({"inline":[{"train":[],"val":[]}]});
+        assert!(assemble_in_memory(
+            &DatasetSpec::from_value(&v).unwrap(),
+            &[input],
+            &HashMap::new(),
+            None
+        )
+        .unwrap_err()
+        .message
+        .contains("require a train block"));
+        let spec = DatasetSpec::from_value(&fold_value(json!({"inline":[{"train":[],"val":[5]}]})))
+            .unwrap();
+        assert_eq!(
+            assemble_in_memory(&spec, &[source()], &HashMap::new(), None)
+                .unwrap()
+                .folds,
+            vec![(vec![], vec![2])]
+        );
+    }
+}
+
+#[cfg(test)]
+mod native_column_ownership_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn collected_native_columns_drive_decimal_and_explicit_axis_coordinates() {
+        let table = |id: &str, mut columns: Vec<Column>, roles: Vec<(String, String)>| {
+            columns.push(Column::from_cells(
+                &row_idx_col(id),
+                vec![Cell::Int(0), Cell::Int(1)],
+            ));
+            SourceTable {
+                source_id: id.into(),
+                df: Frame::from_columns(columns, "text"),
+                numeric_scope: NumericScope::Uniform('.'),
+                roles,
+                key: None,
+                partition: None,
+                kind: "table".into(),
+                join: None,
+                signal_type: None,
+                header_unit: "text".into(),
+                raw_unit: None,
+                raw_coordinates: None,
+                variations: vec![],
+                remove_rows: None,
+            }
+        };
+        let anchor = table(
+            "anchor",
+            vec![Column::from_cells(
+                "0",
+                vec![Cell::Int(100), Cell::Int(200)],
+            )],
+            vec![("0".into(), "features".into())],
+        );
+        let bare = Column::from_cells(
+            "0",
+            vec![Cell::Str("10,5".into()), Cell::Str("20,5".into())],
+        );
+        let literal = Column::from_cells(
+            "train_x__0",
+            vec![Cell::Str("11.5".into()), Cell::Str("21.5".into())],
+        );
+        let mut mixed = table(
+            "train_x",
+            vec![bare, literal],
+            vec![
+                ("train_x__0".into(), "features".into()),
+                ("0".into(), "features".into()),
+            ],
+        );
+        mixed.numeric_scope = NumericScope::Columns(IndexMap::from([
+            ("0".into(), ','),
+            ("train_x__0".into(), '.'),
+        ]));
+        mixed.raw_coordinates = Some(IndexMap::from([
+            ("0".into(), json!(900.25)),
+            ("train_x__0".into(), json!(1000.5)),
+        ]));
+        mixed.raw_unit = Some("nm".into());
+        let tables = IndexMap::from([(&anchor.source_id, &anchor), (&mixed.source_id, &mixed)]);
+        let spec=DatasetSpec::from_value(&json!({"sources":[{"id":"anchor","input":"a.csv","role":"features"},{"id":"train_x","input":"b.csv","role":"features"}]})).unwrap();
+        let (block, _) = assemble_block(
+            &tables,
+            &spec,
+            &mut vec![],
+            &mut vec![],
+            None,
+            &NumericStorageOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(block.feature_headers[1], vec!["0", "train_x__0"]);
+        assert_eq!(block.x[1].data, vec![10.5, 11.5, 20.5, 21.5]);
+        assert_eq!(block.x[1].validity, vec![true, true, true, true]);
+        assert_eq!(
+            block.feature_axes[1][0]["coordinates"],
+            json!([900.25, 1000.5])
+        );
+        assert_eq!(block.feature_axes[1][0]["unit"], "nm");
+    }
+}
+
+#[cfg(test)]
+mod partition_label_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn spec(part: &str, values: Value, policy: &str) -> DatasetSpec {
+        let mut partitions = json!({"by":"column","column":"set"});
+        partitions[format!("{part}_values")] = values;
+        if policy != "default" {
+            partitions["unknown_policy"] = json!(policy);
+        }
+        DatasetSpec::from_value(&json!({"sources":[{"id":"d","input":"d.csv","role":"features"}],"partitions":partitions})).unwrap()
+    }
+
+    #[test]
+    fn missing_variants_never_match_any_list_and_follow_all_policies() {
+        let frame = Frame::from_columns(
+            vec![Column::from_cells(
+                "set",
+                vec![
+                    Cell::Str("NAN".into()),
+                    Cell::Na,
+                    Cell::Float(f64::NAN),
+                    Cell::Str("other".into()),
+                ],
+            )],
+            "text",
+        );
+        // Keep both real missing variants, rather than testing their global spelling.
+        assert!(matches!(frame.columns[0].values[1], Cell::Na));
+        assert!(matches!(frame.columns[0].values[2], Cell::Float(v) if v.is_nan()));
+        for part in ["train", "test", "val", "predict"] {
+            for policy in ["default", "train", "test", "drop", "error"] {
+                let spec = spec(part, json!(["nan"]), policy);
+                let result = split_partition_mask(&frame, &spec, &HashMap::new());
+                if policy == "error" {
+                    assert!(result.unwrap_err().message.contains("'set'"));
+                    continue;
+                }
+                let masks = result.unwrap();
+                for output in ["train", "test", "val", "predict"] {
+                    let destination = if policy == "default" { "train" } else { policy };
+                    let mut expected = Vec::new();
+                    if output == part {
+                        expected.push(0);
+                    }
+                    if output == destination {
+                        expected.extend([1, 2, 3]);
+                    }
+                    let actual: Vec<usize> = masks
+                        .get(output)
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                        .filter_map(|(row, keep)| keep.then_some(row))
+                        .collect();
+                    assert_eq!(actual, expected, "{part}/{policy}/{output}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn literal_none_empty_and_unicode_keys_are_observed_not_missing() {
+        let frame = Frame::from_columns(
+            vec![Column::from_cells(
+                "set",
+                vec![
+                    Cell::Str("None".into()),
+                    Cell::Str("".into()),
+                    Cell::Na,
+                    Cell::Float(f64::NAN),
+                    Cell::Str("ΣΑΣ".into()),
+                    Cell::Str("İ".into()),
+                    Cell::Str("ß".into()),
+                    Cell::Str("SS".into()),
+                ],
+            )],
+            "text",
+        );
+        let masks = split_partition_mask(
+            &frame,
+            &spec(
+                "test",
+                json!(["none", "", "σας", "i\u{0307}", "ss"]),
+                "default",
+            ),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            masks["test"],
+            vec![true, true, false, false, true, true, false, true]
+        );
+        assert_eq!(
+            masks["train"],
+            vec![false, false, true, true, false, false, true, false]
+        );
+        for cells in [
+            vec![Cell::Float(1.0), Cell::Float(f64::NAN)],
+            vec![Cell::Int(1), Cell::Na],
+        ] {
+            let frame = Frame::from_columns(vec![Column::from_cells("set", cells)], "text");
+            assert!(split_partition_mask(
+                &frame,
+                &spec("test", json!(["none"]), "drop"),
+                &HashMap::new()
+            )
+            .unwrap()
+            .is_empty());
+        }
+    }
+
+    #[test]
+    fn invalid_label_declarations_refuse_at_direct_mask_boundary() {
+        let frame = Frame::from_columns(
+            vec![Column::from_cells(
+                "set",
+                vec![Cell::Str("anything".into())],
+            )],
+            "text",
+        );
+        for part in ["train", "test", "val", "predict"] {
+            for bad in [Value::Null, json!([]), json!({})] {
+                let error = split_partition_mask(
+                    &frame,
+                    &spec(part, json!([bad]), "drop"),
+                    &HashMap::new(),
+                )
+                .unwrap_err();
+                assert!(error.message.contains(&format!("{part}_values")));
+            }
+        }
+    }
+
+    #[test]
+    fn public_csv_nan_literal_matches_but_decoded_missing_obeys_policy() {
+        let text = b"x;y;set;row\n1;101;cal;r0\n2;102;NAN;r1\n3;103;;r2\n4;104;NA;r3\n5;105;none;r4\n6;106;val;r5\n7;107;\"nan\";r6\n";
+        for policy in ["default", "train", "test", "drop", "error"] {
+            let mut value = json!({
+                "task_type":"regression",
+                "sources":[{"id":"d","input":"d.csv","role":"mixed","params":{"delimiter":";","has_header":true},"columns":[{"role":"features","select":["x"]},{"role":"targets","select":["y"]},{"role":"metadata","select":["set","row"]}]}],
+                "partitions":{"by":"column","column":"set","train_values":["cal"],"test_values":["nan"]}
+            });
+            if policy != "default" {
+                value["partitions"]["unknown_policy"] = json!(policy);
+            }
+            let spec = DatasetSpec::from_value(&value).unwrap();
+            let result = assemble_in_memory(
+                &spec,
+                &[InMemorySource {
+                    name: "d.csv".into(),
+                    payload: SourcePayload::Bytes(text.to_vec()),
+                }],
+                &HashMap::new(),
+                None,
+            );
+            if policy == "error" {
+                assert!(result.unwrap_err().message.contains("'set'"));
+                continue;
+            }
+            let data = result.unwrap();
+            let expected_train = if matches!(policy, "default" | "train") {
+                vec!["r0", "r2", "r3", "r4", "r5", "r6"]
+            } else {
+                vec!["r0"]
+            };
+            let expected_test = if policy == "test" {
+                vec!["r1", "r2", "r3", "r4", "r5", "r6"]
+            } else {
+                vec!["r1"]
+            };
+            for (part, expected) in [("train", expected_train), ("test", expected_test)] {
+                let block = &data.blocks[part];
+                let rows = &block
+                    .metadata
+                    .as_ref()
+                    .unwrap()
+                    .column("row")
+                    .unwrap()
+                    .values;
+                assert_eq!(
+                    rows.iter().map(Cell::to_str_scalar).collect::<Vec<_>>(),
+                    expected
+                );
+                let expected_y: Vec<f64> = expected
+                    .iter()
+                    .map(|row| 101.0 + row[1..].parse::<f64>().unwrap())
+                    .collect();
+                assert_eq!(block.y.as_ref().unwrap().data, expected_y);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod partition_numeric_identity_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn matching_rows(column: Column, values: Value) -> Vec<usize> {
+        let frame = Frame::from_columns(vec![column], "text");
+        let spec = DatasetSpec::from_value(&json!({"sources":[{"id":"d","input":"d.csv","role":"features"}],"partitions":{"by":"column","column":"set","test_values":values,"unknown_policy":"drop"}})).unwrap();
+        split_partition_mask(&frame, &spec, &HashMap::new())
+            .unwrap()
+            .get("test")
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(row, keep)| keep.then_some(row))
+            .collect()
+    }
+
+    fn floats(values: &[f64]) -> Column {
+        Column::from_cells("set", values.iter().copied().map(Cell::Float).collect())
+    }
+
+    #[test]
+    fn numeric_aliases_missing_default_policy_and_no_missing_integers() {
+        for value in [json!(1), json!("1"), json!(1.0), json!("1.0"), json!("1e0")] {
+            assert_eq!(
+                matching_rows(floats(&[1., 2., f64::NAN, 1., 2.]), json!([value])),
+                vec![0, 3]
+            );
+        }
+        let integers = Column::from_cells(
+            "set",
+            vec![Cell::Int(1), Cell::Int(2), Cell::Int(3), Cell::Int(1)],
+        );
+        assert_eq!(matching_rows(integers, json!([1.0])), vec![0, 3]);
+        let frame = Frame::from_columns(vec![floats(&[1., 2., f64::NAN, 1., 2.])], "text");
+        let spec = DatasetSpec::from_value(&json!({"sources":[{"id":"d","input":"d.csv","role":"features"}],"partitions":{"by":"column","column":"set","test_values":[2]}})).unwrap();
+        let masks = split_partition_mask(&frame, &spec, &HashMap::new()).unwrap();
+        assert_eq!(masks["train"], vec![true, false, true, true, false]);
+        assert_eq!(masks["test"], vec![false, true, false, false, true]);
+        assert_eq!(
+            matching_rows(floats(&[1., 1.5, 2., 1.]), json!(["1.50"])),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn signed_zero_exact_integers_unsigned_carriers_and_bool_are_distinct() {
+        for (value, expected) in [
+            (json!(0), vec![0, 2]),
+            (json!(0.0), vec![0, 2]),
+            (json!("0"), vec![0, 2]),
+            (json!(-0.0), vec![1, 3]),
+            (json!("-0"), vec![1, 3]),
+            (json!("-0.0"), vec![1, 3]),
+        ] {
+            assert_eq!(
+                matching_rows(floats(&[0., -0., 0., -0., 1.5]), json!([value])),
+                expected
+            );
+        }
+        let big = Column::from_cells(
+            "set",
+            vec![
+                Cell::Int((1_i64 << 53) + 1),
+                Cell::Int(1_i64 << 53),
+                Cell::Int(5),
+            ],
+        );
+        assert_eq!(matching_rows(big, json!([9007199254740992.0])), vec![1]);
+        let mut unsigned = Column::from_cells(
+            "set",
+            vec![
+                Cell::Str(u64::MAX.to_string()),
+                Cell::Str("9007199254740993".into()),
+                Cell::Na,
+                Cell::Str("5".into()),
+            ],
+        );
+        unsigned.numeric_text = vec![true, true, false, true];
+        unsigned.source_dtype = Some("uint64".into());
+        assert_eq!(matching_rows(unsigned, json!([u64::MAX])), vec![0]);
+        let mut nullable = Column::from_cells(
+            "set",
+            vec![
+                Cell::Str("9007199254740993".into()),
+                Cell::Na,
+                Cell::Str("7".into()),
+                Cell::Str("7".into()),
+            ],
+        );
+        nullable.numeric_text = vec![true, false, true, true];
+        nullable.source_dtype = Some("int64".into());
+        assert_eq!(matching_rows(nullable, json!([7.0])), vec![2, 3]);
+        let boolean =
+            Column::from_cells("set", vec![Cell::Bool(true), Cell::Bool(false), Cell::Na]);
+        assert!(matching_rows(boolean, json!([1])).is_empty());
+    }
+
+    #[test]
+    fn text_tokens_and_per_cell_frame_authority_do_not_become_numeric() {
+        let cells = ["1", "1.0", "001", "a", "1e999", " 1", "+1", "1,5"];
+        for (value, expected) in [
+            (json!(1), vec![0]),
+            (json!(1.0), vec![1]),
+            (json!("001"), vec![2]),
+            (json!("1e999"), vec![4]),
+            (json!(" 1"), vec![5]),
+            (json!("+1"), vec![6]),
+            (json!("1,5"), vec![7]),
+        ] {
+            let col = Column::from_cells(
+                "set",
+                cells
+                    .iter()
+                    .map(|value| Cell::Str((*value).into()))
+                    .collect(),
+            );
+            assert_eq!(matching_rows(col, json!([value])), expected);
+        }
+        let mixed = Column::from_cells(
+            "set",
+            vec![
+                Cell::Int(1),
+                Cell::Str("1".into()),
+                Cell::Na,
+                Cell::Float(1.),
+                Cell::Str("1.0".into()),
+            ],
+        );
+        assert_eq!(matching_rows(mixed, json!(["1e0"])), vec![0, 3]);
+        for value in [
+            json!("01"),
+            json!("+1"),
+            json!(".5"),
+            json!(" 1"),
+            json!("1 "),
+            json!("1,5"),
+            json!("1e999"),
+            json!("1e-999"),
+            json!(true),
+        ] {
+            assert!(matching_rows(floats(&[1., 2., f64::NAN, 1.]), json!([value])).is_empty());
+        }
+        assert_eq!(
+            matching_rows(
+                floats(&[1.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN]),
+                json!(["inf"])
+            ),
+            vec![1]
+        );
+        assert_eq!(
+            matching_rows(
+                floats(&[1.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN]),
+                json!(["-inf"])
+            ),
+            vec![2]
+        );
+        assert!(matching_rows(
+            floats(&[1.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN]),
+            json!(["none"])
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn float32_declaration_rounding_uses_owner_integer_and_float_storage() {
+        for value in [
+            json!(0.1),
+            json!("0.1"),
+            json!(0.10000000149011612),
+            json!(0.10000000000001),
+        ] {
+            let mut col = floats(&[
+                f64::from(0.1f32),
+                f64::from(0.2f32),
+                f64::NAN,
+                f64::from(0.1f32),
+            ]);
+            col.source_dtype = Some("float32".into());
+            assert_eq!(matching_rows(col, json!([value])), vec![0, 3]);
+        }
+        for value in [json!(1e100), json!(1e-100)] {
+            let mut col = floats(&[0., f64::from(0.1f32)]);
+            col.source_dtype = Some("float32".into());
+            assert!(matching_rows(col, json!([value])).is_empty());
+        }
+        let mut col = floats(&[9_223_372_036_854_775_808., 9_223_373_136_366_403_584.]);
+        col.source_dtype = Some("float32".into());
+        assert_eq!(
+            matching_rows(col, json!([9_223_372_586_610_589_697u64])),
+            vec![1]
+        );
+        let mut col = floats(&[16_777_216., 16_777_218.]);
+        col.source_dtype = Some("float32".into());
+        assert_eq!(matching_rows(col, json!([16_777_217])), vec![0]);
+    }
+
+    #[test]
+    fn runtime_numeric_overlap_refuses_all_six_pairs_but_text_and_absence_pass() {
+        for (left, right) in [
+            ("train_values", "test_values"),
+            ("train_values", "val_values"),
+            ("train_values", "predict_values"),
+            ("test_values", "val_values"),
+            ("test_values", "predict_values"),
+            ("val_values", "predict_values"),
+        ] {
+            let mut value = json!({"sources":[{"id":"d","input":"d.csv","role":"features"}],"partitions":{"by":"column","column":"set","unknown_policy":"drop"}});
+            value["partitions"][left] = json!([1]);
+            value["partitions"][right] = json!(["1.0"]);
+            let spec = DatasetSpec::from_value(&value).unwrap();
+            spec.partitions
+                .as_ref()
+                .unwrap()
+                .validate_column_values()
+                .unwrap();
+            let numeric = Frame::from_columns(vec![floats(&[1., 2., f64::NAN])], "text");
+            let error = split_partition_mask(&numeric, &spec, &HashMap::new()).unwrap_err();
+            assert!(
+                error.message.contains("set")
+                    && error.message.contains(left)
+                    && error.message.contains(right)
+            );
+            let text = Frame::from_columns(
+                vec![Column::from_cells(
+                    "set",
+                    vec![Cell::Str("1".into()), Cell::Str("1.0".into())],
+                )],
+                "text",
+            );
+            let masks = split_partition_mask(&text, &spec, &HashMap::new()).unwrap();
+            assert_eq!(masks.len(), 2);
+            let absent = Frame::from_columns(vec![floats(&[2., 3., f64::NAN])], "text");
+            assert!(split_partition_mask(&absent, &spec, &HashMap::new())
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn float32_secondary_source_keyed_join_retains_owner_dtype() {
+        for (keyed, role) in [
+            (false, "ignore"),
+            (true, "ignore"),
+            (false, "metadata"),
+            (true, "metadata"),
+        ] {
+            let left = Frame::from_columns(
+                vec![
+                    Column::from_cells(
+                        "x",
+                        vec![
+                            Cell::Float(1.),
+                            Cell::Float(2.),
+                            Cell::Float(3.),
+                            Cell::Float(4.),
+                        ],
+                    ),
+                    Column::from_cells(
+                        "y",
+                        vec![
+                            Cell::Float(101.),
+                            Cell::Float(102.),
+                            Cell::Float(103.),
+                            Cell::Float(104.),
+                        ],
+                    ),
+                    Column::from_cells(
+                        "sid",
+                        ["s0", "s1", "s2", "s3"]
+                            .iter()
+                            .map(|s| Cell::Str((*s).into()))
+                            .collect(),
+                    ),
+                    Column::from_cells(
+                        "row",
+                        ["r0", "r1", "r2", "r3"]
+                            .iter()
+                            .map(|s| Cell::Str((*s).into()))
+                            .collect(),
+                    ),
+                ],
+                "text",
+            );
+            let mut col = floats(&[
+                f64::from(0.1f32),
+                f64::from(0.2f32),
+                f64::NAN,
+                f64::from(0.1f32),
+            ]);
+            col.source_dtype = Some("float32".into());
+            let mut columns = vec![col];
+            if keyed {
+                columns.push(Column::from_cells(
+                    "sid",
+                    ["s0", "s1", "s2", "s3"]
+                        .iter()
+                        .map(|s| Cell::Str((*s).into()))
+                        .collect(),
+                ));
+            }
+            let mut right = Frame::from_columns(columns, "text");
+            if keyed {
+                for column in &mut right.columns {
+                    column.values.reverse();
+                    column.numeric_text.reverse();
+                }
+            }
+            for value in [
+                json!(0.1),
+                json!("0.1"),
+                json!(0.10000000149011612),
+                json!(0.10000000000001),
+            ] {
+                let mut spec = json!({"task_type":"regression","sources":[{"id":"left","input":"left.parquet","role":"mixed","columns":[{"role":"features","select":["x"]},{"role":"targets","select":["y"]},{"role":"metadata","select":["sid","row"]}]},{"id":"labels","input":"labels.parquet","role":"mixed","params":{"na":{"policy":"ignore"}},"columns":[{"role":role,"select":["set"]}]}],"partitions":{"by":"column","column":"set","test_values":[value],"unknown_policy":"drop"}});
+                if keyed {
+                    spec["sources"][0]["key"] = json!("sid");
+                    spec["sources"][1]["key"] = json!("sid");
+                    spec["sources"][1]["join"] = json!({"to":"left","on":"sid","how":"1:1"});
+                }
+                let data = assemble_in_memory(
+                    &DatasetSpec::from_value(&spec).unwrap(),
+                    &[
+                        InMemorySource {
+                            name: "left.parquet".into(),
+                            payload: SourcePayload::Frame(left.clone()),
+                        },
+                        InMemorySource {
+                            name: "labels.parquet".into(),
+                            payload: SourcePayload::Frame(right.clone()),
+                        },
+                    ],
+                    &HashMap::new(),
+                    None,
+                )
+                .unwrap();
+                assert_eq!(
+                    data.blocks["test"].y.as_ref().unwrap().data,
+                    vec![101., 104.]
+                );
+                assert_eq!(
+                    data.blocks["test"]
+                        .metadata
+                        .as_ref()
+                        .unwrap()
+                        .column("row")
+                        .unwrap()
+                        .values
+                        .iter()
+                        .map(Cell::to_str_scalar)
+                        .collect::<Vec<_>>(),
+                    vec!["r0", "r3"]
+                );
+            }
+        }
     }
 }

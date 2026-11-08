@@ -1,0 +1,200 @@
+{
+  "schema": "nirs4all.io.finite-float-vectors.v1",
+  "cases": [
+    {
+      "id": "positive-zero",
+      "bits_hex": "0000000000000000",
+      "repr": "0.0"
+    },
+    {
+      "id": "negative-zero",
+      "bits_hex": "8000000000000000",
+      "repr": "-0.0"
+    },
+    {
+      "id": "min-subnormal",
+      "bits_hex": "0000000000000001",
+      "repr": "5e-324"
+    },
+    {
+      "id": "negative-min-subnormal",
+      "bits_hex": "8000000000000001",
+      "repr": "-5e-324"
+    },
+    {
+      "id": "max-subnormal",
+      "bits_hex": "000fffffffffffff",
+      "repr": "2.225073858507201e-308"
+    },
+    {
+      "id": "min-normal",
+      "bits_hex": "0010000000000000",
+      "repr": "2.2250738585072014e-308"
+    },
+    {
+      "id": "max-finite",
+      "bits_hex": "7fefffffffffffff",
+      "repr": "1.7976931348623157e+308"
+    },
+    {
+      "id": "negative-max-finite",
+      "bits_hex": "ffefffffffffffff",
+      "repr": "-1.7976931348623157e+308"
+    },
+    {
+      "id": "one",
+      "bits_hex": "3ff0000000000000",
+      "repr": "1.0"
+    },
+    {
+      "id": "negative-one",
+      "bits_hex": "bff0000000000000",
+      "repr": "-1.0"
+    },
+    {
+      "id": "exp-minus4-below",
+      "bits_hex": "3f1a36e2eb1c432c",
+      "repr": "9.999999999999999e-05"
+    },
+    {
+      "id": "exp-minus4-at",
+      "bits_hex": "3f1a36e2eb1c432d",
+      "repr": "0.0001"
+    },
+    {
+      "id": "exp-minus4-above",
+      "bits_hex": "3f1a36e2eb1c432e",
+      "repr": "0.00010000000000000002"
+    },
+    {
+      "id": "exp-minus5-below",
+      "bits_hex": "3ee4f8b588e368f0",
+      "repr": "9.999999999999999e-06"
+    },
+    {
+      "id": "exp-minus5-at",
+      "bits_hex": "3ee4f8b588e368f1",
+      "repr": "1e-05"
+    },
+    {
+      "id": "exp-minus5-above",
+      "bits_hex": "3ee4f8b588e368f2",
+      "repr": "1.0000000000000003e-05"
+    },
+    {
+      "id": "exp-minus6-below",
+      "bits_hex": "3eb0c6f7a0b5ed8c",
+      "repr": "9.999999999999997e-07"
+    },
+    {
+      "id": "exp-minus6-at",
+      "bits_hex": "3eb0c6f7a0b5ed8d",
+      "repr": "1e-06"
+    },
+    {
+      "id": "exp-minus6-above",
+      "bits_hex": "3eb0c6f7a0b5ed8e",
+      "repr": "1.0000000000000002e-06"
+    },
+    {
+      "id": "exp-minus7-below",
+      "bits_hex": "3e7ad7f29abcaf47",
+      "repr": "9.999999999999998e-08"
+    },
+    {
+      "id": "exp-minus7-at",
+      "bits_hex": "3e7ad7f29abcaf48",
+      "repr": "1e-07"
+    },
+    {
+      "id": "exp-minus7-above",
+      "bits_hex": "3e7ad7f29abcaf49",
+      "repr": "1.0000000000000001e-07"
+    },
+    {
+      "id": "exp-minus8-below",
+      "bits_hex": "3e45798ee2308c39",
+      "repr": "9.999999999999999e-09"
+    },
+    {
+      "id": "exp-minus8-at",
+      "bits_hex": "3e45798ee2308c3a",
+      "repr": "1e-08"
+    },
+    {
+      "id": "exp-minus8-above",
+      "bits_hex": "3e45798ee2308c3b",
+      "repr": "1.0000000000000002e-08"
+    },
+    {
+      "id": "exp-minus9-below",
+      "bits_hex": "3e112e0be826d694",
+      "repr": "9.999999999999999e-10"
+    },
+    {
+      "id": "exp-minus9-at",
+      "bits_hex": "3e112e0be826d695",
+      "repr": "1e-09"
+    },
+    {
+      "id": "exp-minus9-above",
+      "bits_hex": "3e112e0be826d696",
+      "repr": "1.0000000000000003e-09"
+    },
+    {
+      "id": "exp15-below",
+      "bits_hex": "430c6bf52633ffff",
+      "repr": "999999999999999.9"
+    },
+    {
+      "id": "exp15-at",
+      "bits_hex": "430c6bf526340000",
+      "repr": "1000000000000000.0"
+    },
+    {
+      "id": "exp15-above",
+      "bits_hex": "430c6bf526340001",
+      "repr": "1000000000000000.1"
+    },
+    {
+      "id": "exp16-below",
+      "bits_hex": "4341c37937e07fff",
+      "repr": "9999999999999998.0"
+    },
+    {
+      "id": "exp16-at",
+      "bits_hex": "4341c37937e08000",
+      "repr": "1e+16"
+    },
+    {
+      "id": "exp16-above",
+      "bits_hex": "4341c37937e08001",
+      "repr": "1.0000000000000002e+16"
+    },
+    {
+      "id": "decimal-tie-even-0",
+      "bits_hex": "42625d3cf82b2500",
+      "repr": "630989504857.1562"
+    },
+    {
+      "id": "decimal-tie-even-1",
+      "bits_hex": "42708949efe72e80",
+      "repr": "1136364813938.9062"
+    },
+    {
+      "id": "decimal-tie-even-2",
+      "bits_hex": "42745aaaa5465b80",
+      "repr": "1398727660645.7188"
+    },
+    {
+      "id": "decimal-tie-even-3",
+      "bits_hex": "4289dc37530281c0",
+      "repr": "3554201460816.2188"
+    },
+    {
+      "id": "decimal-tie-even-4",
+      "bits_hex": "428d8b9a773228c0",
+      "repr": "4060678645317.0938"
+    }
+  ]
+}

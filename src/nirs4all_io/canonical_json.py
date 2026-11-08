@@ -15,22 +15,42 @@ Canonical form:
 - **Indent:** two spaces, ``": "`` after keys, one element per line — identical
   layout to ``serde_json::to_string_pretty``.
 - **Line endings:** ``\\n`` with a single trailing ``\\n``.
-- **Floats:** finite only (``allow_nan=False`` raises on NaN/Inf). The contract
-  domain is finite decimals in **normal range** — scores rounded to 3 decimals
-  and wavelengths (``|x|`` in roughly ``[1e-3, 25000]``). Values requiring
-  exponent notation (``|x| >= 1e16`` or ``0 < |x| < 1e-4``) are the only known
-  point where Python ``repr`` and Rust Ryū can disagree; the IR never emits
-  them. The ``contract_domain_floats`` parity case pins this range.
+- **Floats:** every finite binary64 value uses shortest round-trip digits, closest to
+  the exact value with ties choosing an even last digit. Scientific exponents -4
+  through 15 use fixed notation; others use lowercase ``e``, an explicit sign and at
+  least two exponent digits. Integral fixed floats keep ``.0`` and signed zero is
+  preserved. Nonfinite values refuse (``allow_nan=False``).
 """
 
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Mapping
 from typing import Any
+
+from .strict_json import check_integer
+
+# The writer relies on CPython's shortest round-trip float repr (David Gay / short repr style).
+assert sys.float_repr_style == "short", "canonical JSON needs the shortest round-trip float repr"
+
+
+def _check_domain(value: Any) -> None:
+    """The shared number domain: integers in [-2**63, 2**64 - 1] (``bool`` excluded); floats finite."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if type(item) is int:
+            check_integer(item)
+        elif isinstance(item, Mapping):
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
 
 
 def canonical_json(value: Any) -> str:
     """Serialize ``value`` to the canonical JSON form (see module docstring)."""
+    _check_domain(value)
     return (
         json.dumps(
             value,

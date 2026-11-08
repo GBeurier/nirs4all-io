@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 //! SYNC #1 (infer): the facade `infer()` reproduces the blessed Python contract
-//! goldens byte-for-byte. Mirrors `tests/test_contract_goldens.py`: directory
+//! goldens byte-for-byte except V1-RUST-MIXED-SPECTRAL-HEADER. Mirrors
+//! `tests/test_contract_goldens.py`: directory
 //! inputs, output path-normalized to `<CORPUS>` (prefix-only — never rewrites
 //! selector regex backslashes), canonicalized, diffed against the blessed files.
 
@@ -10,6 +11,9 @@ use nirs4all_io::api::{to_spec, Input};
 use nirs4all_io::canonical_json;
 use nirs4all_io::infer::infer_path;
 use serde_json::Value;
+
+#[path = "../../../tests/goldens/contract/rust_v1_exception.rs"]
+mod rust_v1_exception;
 
 fn contract_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -61,9 +65,22 @@ fn infer_cases_match_goldens() {
             continue;
         };
         let case_dir = dir.join(dir_rel);
-        let plan = infer_path(&case_dir.to_string_lossy(), None).expect("infer");
+        let plan = infer_path(&case_dir.to_string_lossy(), &Default::default()).expect("infer");
         let produced = canonical_json(&normalize_paths(&plan.to_value(), &base_abs)).unwrap();
         let golden = std::fs::read_to_string(dir.join(format!("{name}.infer.canonical"))).unwrap();
+        let golden = if name == "inf_single_combined" {
+            let corrected =
+                std::fs::read_to_string(dir.join(format!("{name}.infer.rust-v1.canonical")))
+                    .unwrap();
+            rust_v1_exception::assert_exception(
+                &serde_json::from_str(&golden).unwrap(),
+                &serde_json::from_str(&corrected).unwrap(),
+                "infer",
+            );
+            corrected
+        } else {
+            golden
+        };
         assert_eq!(produced, golden, "infer drift for {name}");
         checked += 1;
     }

@@ -32,10 +32,12 @@ mirrored in `nirs4all_io/canonical_json.py`:
 - `\n` line endings; exactly one trailing `\n`.
 - Finite numbers only (NaN/Inf rejected on the Python side, mapped to `null`
   by serde on the Rust side). The `DatasetSpec` IR never emits non-finite
-  numbers. Assembled data does: in its JSON exports (`load_summary`,
-  `assembled_full`) a missing value is `null`, which hosts must read back as
-  NaN/NA rather than drop or coerce to 0. The WASM `assembleDataset` avoids the
-  JSON form for numbers: matrices and weights are `Float64Array`s holding NaN.
+  numbers. Assembled data does: the rounded `load_summary` JSON writes a missing
+  value as `null`, which hosts must read back as NaN/NA rather than drop or coerce
+  to 0. The exact `assembled_full` wire instead carries numeric bytes and an
+  explicit `validity` mask: a false cell stores `+0`, and hosts restore NaN/NA
+  from the mask. The WASM `assembleDataset` keeps its typed-array view: matrices
+  and weights are `Float64Array`s holding NaN.
 
 The workspace enables serde_json's `preserve_order` so *input* object order
 mirrors Python dict insertion order (load-bearing for legacy-config
@@ -99,10 +101,11 @@ change package versions or authorize a release.
 - `crates/nirs4all-io-capi/abi/expected_symbols_{linux,macos,windows}.txt`
   snapshots the exported symbol set; the ABI-check CI
   (`.github/workflows/abi-check.yml`) diffs actual vs expected and **fails on
-  drift**. Every exported symbol MUST start with `n4io_`: enforced on Linux by a
-  GNU ld version script (`abi/version_script.map`, wired in `build.rs`) that makes
-  everything else `local`, on macOS/Windows by Rust's default `#[no_mangle]`-only
-  export, and on all three by a CI grep. A `cargo test` drift guard
+  drift**. Every exported symbol MUST start with `n4io_`. Rust supplies the cdylib
+  export list; the capi `build.rs` sets only the Linux SONAME and macOS install
+  name and wires no named GNU ld version script. A CI grep rejects other exported
+  names on Linux and macOS. The Windows leg diffs only the `n4io_` names it
+  extracts from `dumpbin`, so it does not detect a foreign export. A `cargo test` drift guard
   (`tests/abi_surface.rs`) cross-checks source ↔ snapshot ↔ header.
 - A **forbidden-runtime-dependency audit** (CI `ldd`) ensures the cdylib does not
   link Python/R/BLAS/etc.
@@ -121,6 +124,36 @@ change package versions or authorize a release.
   bindings. No array `load()` for these hosts in v0.
 - **WASM/JS = wasm-bindgen-native**: `infer`/`plan` over bytes/JSON, no fs.
 
+### WASM independent table inspection
+
+Raw `describeTables(files, options?) -> TableDescription[]` accepts the same
+`{name, bytes: Uint8Array}[]` as `inferFiles`. Options are
+`{params?: {[fileName: string]: LoadingParams}, distinct?: [fileName, columnName][]}`.
+Omitted/null options mean empty options. Malformed arguments throw `JsError`;
+each file's parameter/reader failure instead returns `readable: false`, a verbatim
+owner `refusal`, null `n_rows`/`n_cols`, empty `columns`/`distinct` and null `identity`.
+Unresolved delimiter evidence is `{delimiter_unresolved: {candidates: string[]}}`;
+no table read occurs until a nonempty delimiter is declared.
+
+The core `infer::memory::describe_tables(&[NamedBytes], &DescribeOptions)` uses
+`materialize::loaders::read_table_bytes` over the original bytes with NA forced to
+`Ignore`; it never requires joins or assembly and adds no row/column ceiling.
+Descriptions retain effective `params`, exact reader shape/column names,
+`columns[{name,dtype,numeric_kind,nunique_with_na,is_unique,preview,role}]`,
+`identity`, requested `distinct` strings in first-appearance order and `warnings`.
+`preview` is the first nonmissing owner string or null. Guesses are uncalibrated.
+`distinct` includes the owner's missing-value strings; it is not typed partition
+conversion. Missing requested columns warn without a fabricated value list.
+The optional `ignored_input_na_report` is copied verbatim from the existing helper
+and omitted when it returns `None`; it supplies input counts before roles/joins,
+never per-column NA counts or positions. Inspection performs no fill/removal or
+statistic and must not replace the user's chosen materialization NA policy.
+
+Results are plain JS objects, not canonical JSON text. Detailed DTO declarations
+live in `wasm/types/nirs4all-io.d.ts`; `wasm/idiomatic.d.ts` re-exports those DTO
+types only. This source addition does not claim an idiomatic runtime export,
+Python-oracle parity, a C ABI addition or executed binding qualification.
+
 ## 9. Conformance gates
 
 - Per-crate: `cargo fmt --check`, `cargo clippy --workspace --all-targets -D
@@ -128,9 +161,29 @@ change package versions or authorize a release.
 - Contract: Python ≡ Rust ≡ each binding, byte-identical `to_spec`/`infer` JSON.
 - IO-XLG-001 cross-binding qualification: Rust CLI, Python wheel, WASM module,
   R package, MATLAB/Octave MEX, and direct C ABI materialize one frozen
-  identity-rich fixture to byte-identical assembled-summary-v2 JSON. A runtime
+  identity-rich fixture to byte-identical assembled-summary-v3 JSON. A runtime
   absence is recorded as `unavailable`, a build/contract failure as `refused`,
-  and either disposition prevents closure.
-- ABI: symbol-snapshot diff + version script + forbidden-dep audit + the
+  and either disposition prevents closure. This bounded summary gate does not
+  qualify full v3 bytes, masks or precision, and C ABI 0.3 does not transport
+  materialized arrays.
+- ABI: symbol-snapshot diff + Linux/macOS export-prefix grep + forbidden-dep audit + the
   compatibility probe on load; an MSVC/Windows leg.
 - Import-boundary: importing the Python binding MUST NOT import `nirs4all`.
+
+## Explicit inference loading choices (native V1)
+
+Rust inference takes `InferOptions { conventions, params, file_params }`.
+WASM inferFiles/inferDataset consume that object; proposeDataset adds confirmed
+locks. Native Python exposes infer(input, conventions=None, params=None,
+file_params=None); CLI infer exposes --params / --file-params JSON objects.
+The existing C n4io_infer second JSON pointer is an options object or NULL,
+with unchanged symbol/calling convention and no separately versioned options
+schema. Loading choices apply before the first table read and owner inference.
+Exact file names override global parameters. Invalid/unknown/conflicting inputs
+refuse. Default ambiguous headers remain true and expose header_ambiguous through
+the plan's existing per-file params/warning carrier and TableDescription's
+additive boolean. Explicit declarations suppress ambiguity. The frozen Python
+oracle and R's vendored owner copy remain unchanged; no parity for these new
+oracle-absent keyword options is claimed. See COMPAT.md for the mixed-header V1
+exception and operation-specific qualification.
+

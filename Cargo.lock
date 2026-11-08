@@ -973,7 +973,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "nirs4all-io"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-capi"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "cbindgen",
  "nirs4all-io",
@@ -1008,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-cli"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-core"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "csv",
  "indexmap",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-dagml"
-version = "0.2.14"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",

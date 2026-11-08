@@ -14,6 +14,7 @@ directly, so it (and only it) can hand back native Python objects and a real
 |---|---|---|---|---|---|
 | `infer` | ✅ `infer` | ✅ `infer` | ✅ `n4io_infer` | ✅ `nirs4all_io.infer` | ✅ fs-free: `inferFiles` / `inferDataset` / `inferRecords` (from bytes/decoded records) |
 | `propose` (iterative) | ❌ | ❌ | ❌ | ❌ | ✅ `proposeDataset(files, records, {confirmed})` → `{plan, proposals, spec, valid, validation_errors}` |
+| independent table inspection | ❌ | ❌ | ❌ | ❌ | ✅ raw `describeTables(files, {params?, distinct?})` → `TableDescription[]` (source addition; qualification pending) |
 | `to_spec` | ✅ `to-spec` | ✅ `to_spec` | ✅ `n4io_to_spec` | ✅ `nirs4all_io.to_spec` | 🟡 `to_spec` (spec-dict only, fs-free) |
 | `validate` | ✅ `validate` | ✅ `validate` | ✅ `n4io_validate` | ✅ `nirs4all_io.validate` | ✅ `validate` |
 | `load` → assembled | ✅ `load` | ✅ `load(target="assembled")` / `load_summary` | ✅ `n4io_load_summary` / `nio_load` | ❌ | ✅ fs-free `assembleDataset(files, records, specJson)` |
@@ -84,7 +85,65 @@ Notes:
   `validate(spec_json)`, `inferFiles(files, options)`,
   `inferDataset(files, recordSets, options)`, `inferRecords(recordSets)`,
   `proposeDataset(files, recordSets, {conventions?, confirmed?})`,
+  `describeTables(files, {params?, distinct?})`,
   `assembleDataset(files, recordSets, specJson)`, `version()`.
+
+`describeTables` inspects original named byte buffers independently with the
+assembler's table reader and NA forced to `ignore`. It returns effective parsing
+parameters, exact reader column names/shape, existing uncalibrated column-role
+and identity guesses, and explicitly requested first-appearance distinct strings.
+An ambiguous undeclared delimiter refuses before decoding; individual loading
+errors remain verbatim per-file refusals. A successful join or assembly is not
+required. The optional `ignored_input_na_report` is the existing input-count
+report verbatim, omitted when absent; no zero counts or per-column NA positions
+are invented. Inspection does not change the assembly policy or exported spec.
+This addition is exposed by raw WASM only; the idiomatic declaration re-exports
+its DTO types without claiming runtime forwarding by `idiomatic.mjs`.
+
+## Named V1 native inference exception
+
+`V1-RUST-MIXED-SPECTRAL-HEADER` deliberately distinguishes the Rust owner (and
+its bindings) from the frozen Python development oracle. Wavelength recognition
+uses the ordered numeric subset of a mixed first row, with every existing gate
+and threshold unchanged. The shared oracle goldens and their manifest remain
+unchanged; only `single_combined` uses the separate `*.rust-v1.canonical`
+expectations in Rust and pyo3 tests, with exact bounded-delta assertions.
+
+For that fixture, the header decision changes from false/0.7 to true/0.85;
+the twelve feature-role scores/evidence become 0.9/spectral, the protein target
+score/evidence becomes 0.65/alongside-spectral, and source/assembled header units
+become `nm` rather than `text`. The overall score stays 0.833 and `axis` stays
+null. Six rows, column selections/names, exact X/y values, identities and folds
+are unchanged. `train_test` and `x_y_separate` retain the shared expectations.
+This is an enumerated inference/metadata exception, not universal oracle parity.
+
+For an undeclared, unrecognized header, native inference, provisional proposals
+and table inspection retain the prior `true` default. The existing warning
+carrier names `header_ambiguous` and asks for an explicit header choice;
+`plan.params[file].header_ambiguous` is present only when true, and independent
+`TableDescription.header_ambiguous` is a boolean. All-text identities/labels and
+short numeric headers retain their previous reading. Explicit false keeps every
+Corn observation including its first value; explicit true keeps header reading.
+Unresolved delimiters retain refusal. No schema or package version changes.
+
+Rust inference entrypoints now take `&infer::InferOptions` instead of a conventions
+slice. Its object has `conventions`, global `params`, and exact-name `file_params`.
+These apply before the first parse, role/identity inference and cache reads.
+File declarations override global defaults; unknown names, malformed declarations
+and conflicting parameters within a merged multi-input source refuse.
+WASM `inferFiles`/`inferDataset` accept that object; `proposeDataset` additionally
+accepts `confirmed`. `describeTables` retains its existing per-file `params` map.
+Native Python adds `infer(..., params=None, file_params=None)`; the frozen Python
+oracle is unchanged and does not implement those new keywords. CLI infer accepts
+`--params` and `--file-params` JSON objects. C `n4io_infer`'s second JSON argument
+is now the options object (or NULL), retaining its symbols/calling convention;
+the old conventions-only array is not an inference options object. The options
+shape has no independently versioned ABI schema, so no ABI version is bumped.
+R's vendored Rust copy is unchanged until the next authorized vendoring.
+
+Qualification of this source change remains pending the pooled native and
+binding gates; the exception expectations encode the reviewed source deltas,
+not a claim of executed conformance.
 
 ## Build & install
 

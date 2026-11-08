@@ -6,9 +6,9 @@
 //! half-tie or last-ULP disagreement with CPython/numpy flips a golden byte.
 //! Each kernel is golden-tested against recorded CPython/numpy oracle values.
 //!
-//! Float-domain note: the IR only emits finite values in normal range (scores in
-//! `[0, 1]`, wavelengths up to ~25000), so exponent-notation regimes never occur
-//! (see `canonical_json` docs).
+//! Finite scalar representations cover all binary64 values using the same
+//! shortest, closest, ties-even digit kernel as canonical JSON. Python scalar
+//! text also preserves its existing lowercase nonfinite spellings.
 
 /// CPython `round(x, ndigits)` (round-half-to-even on the true decimal value).
 ///
@@ -26,8 +26,8 @@ pub fn py_round(x: f64, ndigits: usize) -> f64 {
         .expect("formatted finite float parses")
 }
 
-/// Python `str(float)` / `repr(float)`: shortest round-trip, with a forced `.0`
-/// on integral values (Rust `Display` omits it). `nan`/`inf`/`-inf` lower-case.
+/// Python `str(float)` / `repr(float)`: shortest round-trip, closest digits,
+/// ties to even, Python exponent layout. `nan`/`inf`/`-inf` stay lower-case.
 pub fn py_float_repr(x: f64) -> String {
     if x.is_nan() {
         return "nan".to_string();
@@ -35,12 +35,7 @@ pub fn py_float_repr(x: f64) -> String {
     if x.is_infinite() {
         return if x < 0.0 { "-inf" } else { "inf" }.to_string();
     }
-    let s = format!("{x}");
-    if s.contains(['.', 'e', 'E']) {
-        s
-    } else {
-        format!("{s}.0")
-    }
+    crate::canonical_json::finite_float_repr(x)
 }
 
 /// Python `f"{x:.3f}"` (fixed 3 decimals, half-even), with CPython's `nan`/`inf`

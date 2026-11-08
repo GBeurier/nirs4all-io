@@ -105,5 +105,7 @@ jobs:
         run: |
           # SpectroDataset adapter behavior is covered with an injected test
           # double; downstream integration runs only when nirs4all is present.
-          python -m pip install pytest pyarrow dist/*.whl
+          N4IO_TEST_WHEEL=$(python -c 'from pathlib import Path; wheels = list(Path("dist").glob("nirs4all_io-*.whl")); assert len(wheels) == 1, wheels; print(wheels[0].resolve().as_posix())')
+          export N4IO_TEST_WHEEL
+          python -m pip install pytest pyarrow "$N4IO_TEST_WHEEL"
           python -m pytest bindings/python/tests -q

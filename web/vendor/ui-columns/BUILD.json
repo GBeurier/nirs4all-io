@@ -1,0 +1,16 @@
+{
+  "package_tgz_sha256": "2f9c7847886beefde05a661481b784b544dd36d1c003cea896c1a76659501b70",
+  "package_version": "0.2.2-local.20261107.1",
+  "bundle_sha256": "7193b01e836a7ead5ce51405c0d98534ac69fe32770a7f522159175ed0c24615",
+  "stylesheet_sha256": "11b7365d42a1ef4a5da962061959e70c39ff6d15485618a7ec08e69d6488e108",
+  "react": "19.2.7",
+  "react_dom": "19.2.7",
+  "scheduler": "0.27.0",
+  "esbuild": "0.28.1",
+  "components": [
+    "SourceSummaryCard",
+    "RoleSelectionCards",
+    "ColumnMappingTable"
+  ],
+  "licences": "React, React DOM and scheduler (MIT) texts are staged under ../ui/LICENSES/THIRD-PARTY/"
+}

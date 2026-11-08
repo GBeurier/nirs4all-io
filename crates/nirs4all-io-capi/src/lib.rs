@@ -171,7 +171,8 @@ unsafe fn parse_conventions(ptr: *const c_char) -> Result<Option<Vec<String>>, S
     if s.trim().is_empty() {
         return Ok(None);
     }
-    let v: Value = serde_json::from_str(s).map_err(|e| format!("conventions JSON: {e}"))?;
+    let v: Value = nirs4all_io::core::canonical_json::parse_json_value(s)
+        .map_err(|e| format!("conventions JSON: {e}"))?;
     match v {
         Value::Null => Ok(None),
         Value::Array(a) => Ok(Some(string_array(&a, "conventions")?)),
@@ -180,7 +181,8 @@ unsafe fn parse_conventions(ptr: *const c_char) -> Result<Option<Vec<String>>, S
 }
 
 fn input_from_json(input_json: &str) -> Result<Input, String> {
-    let v: Value = serde_json::from_str(input_json).map_err(|e| format!("input JSON: {e}"))?;
+    let v: Value = nirs4all_io::core::canonical_json::parse_json_value(input_json)
+        .map_err(|e| format!("input JSON: {e}"))?;
     match v {
         Value::String(s) => Ok(Input::Path(s)),
         Value::Array(a) => Ok(Input::Paths(string_array(&a, "input file list")?)),
@@ -257,7 +259,8 @@ pub unsafe extern "C" fn n4io_to_spec(
 }
 
 /// Inspect a data input (path string or file-list array) and write the scored
-/// `DatasetPlan` JSON to `*out` (owned).
+/// `DatasetPlan` JSON to `*out` (owned). options_json is NULL or an InferOptions
+/// object with conventions, params and exact-name file_params.
 ///
 /// # Safety
 /// All pointers must be valid for the call; `out` writable.
@@ -265,7 +268,7 @@ pub unsafe extern "C" fn n4io_to_spec(
 pub unsafe extern "C" fn n4io_infer(
     ctx: *mut n4io_context_t,
     input_json: *const c_char,
-    conventions_json: *const c_char,
+    options_json: *const c_char,
     out: *mut *mut c_char,
 ) -> n4io_status_t {
     clear_error(ctx);
@@ -278,16 +281,27 @@ pub unsafe extern "C" fn n4io_infer(
         set_error(ctx, "input_json is null or not UTF-8");
         return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
     };
-    let conv = match parse_conventions(conventions_json) {
-        Ok(c) => c,
-        Err(e) => {
-            set_error(ctx, &e);
-            return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
+    let options: nirs4all_io::core::infer::InferOptions = if options_json.is_null() {
+        Default::default()
+    } else {
+        let parsed = CStr::from_ptr(options_json)
+            .to_str()
+            .map_err(|e| e.to_string())
+            .and_then(|text| {
+                nirs4all_io::core::canonical_json::parse_json_value(text).map_err(|e| e.to_string())
+            })
+            .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+        match parsed {
+            Ok(options) => options,
+            Err(error) => {
+                set_error(ctx, &format!("invalid infer options: {error}"));
+                return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
+            }
         }
     };
     let plan = match input_from_json(input_json) {
-        Ok(Input::Path(p)) => nirs4all_io::infer::infer_path(&p, conv.as_deref()),
-        Ok(Input::Paths(ps)) => nirs4all_io::infer::infer_paths(&ps, conv.as_deref()),
+        Ok(Input::Path(p)) => nirs4all_io::infer::infer_path(&p, &options),
+        Ok(Input::Paths(ps)) => nirs4all_io::infer::infer_paths(&ps, &options),
         Ok(Input::Spec(_)) => {
             set_error(
                 ctx,
@@ -374,7 +388,8 @@ pub unsafe extern "C" fn n4io_load_summary_with_limits(
         let parsed = cstr_to_str(limits_json)
             .ok_or_else(|| "limits_json is not UTF-8".to_string())
             .and_then(|text| {
-                serde_json::from_str::<Value>(text).map_err(|e| format!("invalid limits JSON: {e}"))
+                nirs4all_io::core::canonical_json::parse_json_value(text)
+                    .map_err(|e| format!("invalid limits JSON: {e}"))
             })
             .and_then(|value| {
                 nirs4all_io::api::LoadLimits::from_value(&value).map_err(|e| e.message)
@@ -417,7 +432,7 @@ pub unsafe extern "C" fn n4io_validate(
         set_error(ctx, "spec_json is null or not UTF-8");
         return n4io_status_t::N4IO_ERR_INVALID_ARGUMENT;
     };
-    let value: Value = match serde_json::from_str(spec_json) {
+    let value: Value = match nirs4all_io::core::canonical_json::parse_json_value(spec_json) {
         Ok(v) => v,
         Err(e) => {
             set_error(ctx, &format!("spec JSON: {e}"));

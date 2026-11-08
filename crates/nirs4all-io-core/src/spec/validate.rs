@@ -176,21 +176,30 @@ fn validate_partitions(spec: &DatasetSpec, errors: &mut Vec<String>) {
     {
         errors.push("partitions.by='column' requires 'column'".into());
     }
+    if p.by == Some(PartitionBy::Column) {
+        if let Err(error) = p.validate_column_values() {
+            errors.push(error.message);
+        }
+    }
     if p.by == Some(PartitionBy::Index)
         && p.train.is_null()
         && p.test.is_null()
+        && p.val.is_null()
         && p.predict.is_null()
     {
         errors.push(
-            "partitions.by='index' requires at least one of 'train' / 'test' / 'predict' (list of row indices)"
+            "partitions.by='index' requires at least one of 'train' / 'test' / 'val' / 'predict' (list of row indices)"
                 .into(),
         );
     }
     if p.by == Some(PartitionBy::IndexFile)
-        && !(opt_truthy(&p.train_file) || opt_truthy(&p.test_file) || opt_truthy(&p.predict_file))
+        && !(opt_truthy(&p.train_file)
+            || opt_truthy(&p.test_file)
+            || opt_truthy(&p.val_file)
+            || opt_truthy(&p.predict_file))
     {
         errors.push(
-            "partitions.by='index_file' requires at least one of 'train_file' / 'test_file' / 'predict_file'"
+            "partitions.by='index_file' requires at least one of 'train_file' / 'test_file' / 'val_file' / 'predict_file'"
                 .into(),
         );
     }
@@ -262,5 +271,33 @@ mod tests {
         ]})))
         .unwrap_err();
         assert!(err.message.contains("multi-file input requires a 'merge'"));
+    }
+
+    #[test]
+    fn validation_only_indices_and_files_are_structurally_valid() {
+        for partitions in [
+            json!({"by":"index","val":[2,6]}),
+            json!({"by":"index_file","val_file":"val.json"}),
+        ] {
+            let value = spec(
+                json!({"sources":[{"id":"x","role":"features","input":"X.csv"}],"partitions":partitions}),
+            );
+            assert!(validate_spec(&value).is_ok());
+        }
+    }
+
+    #[test]
+    fn validation_values_cannot_overlap_other_column_partitions() {
+        for overlap in ["TRAIN", "TEST", "PREDICT"] {
+            let value = spec(
+                json!({"sources":[{"id":"x","role":"features","input":"X.csv"}],
+                "partitions":{"by":"column","column":"set","train_values":["train"],"test_values":["test"],
+                "val_values":[overlap],"predict_values":["predict"]}}),
+            );
+            assert!(validate_spec(&value)
+                .unwrap_err()
+                .message
+                .contains("appears in both"));
+        }
     }
 }

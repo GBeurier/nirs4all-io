@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+import json as _path_json
+import os
+from pathlib import Path as _Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -190,6 +194,7 @@ def test_infer_multifile_filename_stem_identity(tmp_path):
     """Multi-file X with no id column (one file per sample) -> identity = filename_stem + coverage audit."""
     from nirs4all_io.infer.engine import _infer_identity_and_alignment
     from nirs4all_io.infer.plan import DatasetPlan
+    from nirs4all_io.resolve.resolver import _file_reference_table, resolve
 
     wl = [str(1000 + i * 5) for i in range(6)]
     for s in ("a", "b", "c"):
@@ -197,7 +202,8 @@ def test_infer_multifile_filename_stem_identity(tmp_path):
     _csv(tmp_path / "ref.csv", pd.DataFrame({"filename_stem": ["a", "b", "c"], "y": [1.0, 2.0, 3.0]}))
     plan = DatasetPlan()
     spec = {"sources": [{"id": "spectra", "role": "features", "input": ["a.csv", "b.csv", "c.csv"], "merge": "concat_samples"}, {"id": "ref", "role": "targets", "input": "ref.csv"}]}
-    _infer_identity_and_alignment(spec, tmp_path, plan)
+    refs = _file_reference_table(resolve(tmp_path), spec)
+    _infer_identity_and_alignment(spec, plan, refs)
     assert plan.identity is not None and plan.identity.value == "filename_stem"
     assert spec["sample_index"] == {"by": "id", "key": "filename_stem"}
     tgt = next(a for a in plan.alignment if a["role"] == "targets")
@@ -216,6 +222,7 @@ def test_detect_replicate_grouping_unit():
 def test_infer_replicate_files_grouped_into_sample_id(tmp_path):
     from nirs4all_io.infer.engine import _infer_identity_and_alignment
     from nirs4all_io.infer.plan import DatasetPlan
+    from nirs4all_io.resolve.resolver import _file_reference_table, resolve
 
     wl = [str(1000 + i * 5) for i in range(6)]
     files = ["mango_001_a", "mango_001_b", "mango_001_c", "mango_002_a", "mango_002_b"]
@@ -223,7 +230,8 @@ def test_infer_replicate_files_grouped_into_sample_id(tmp_path):
         _csv(tmp_path / f"{f}.csv", pd.DataFrame(np.random.default_rng().random((1, 6)), columns=wl))
     plan = DatasetPlan()
     spec = {"sources": [{"id": "spectra", "role": "features", "input": [str(tmp_path / f"{f}.csv") for f in files], "merge": "concat_samples"}]}
-    _infer_identity_and_alignment(spec, tmp_path, plan)
+    refs = _file_reference_table(resolve(tmp_path), spec)
+    _infer_identity_and_alignment(spec, plan, refs)
     assert plan.identity.value == "sample_id"
     assert spec["sample_index"]["derive"]["from"] == "filename_stem"
     assert spec["repetition"] == "sample_id" and spec["aggregate"]["by"] == "sample_id"
@@ -267,3 +275,156 @@ def test_infer_plan_is_json_serializable(tmp_path):
     _csv(tmp_path / "x.csv", pd.DataFrame({"400": [0.1, 0.2], "401": [0.3, 0.4], "y": [1.0, 2.0]}))
     plan = nio.infer(tmp_path / "x.csv")
     json.dumps(plan.to_dict())  # must not raise
+
+
+# Additive physical-path owner regressions; the common literal bank is independent.
+_PATH_VECTORS = _path_json.loads((_Path(__file__).parent / "fixtures/path_reference_vectors.json").read_text())["rows"]
+
+
+def _path_reference_case(tmp_path, case):
+    if case.get("platform") == "unix" and os.name != "posix":
+        pytest.skip("literal wildcard filenames require Unix")
+    for name, text in case["files"].items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    for name, target in case.get("links", {}).items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.symlink_to(tmp_path / target, target_is_directory=(tmp_path / target).is_dir())
+        except OSError as error:
+            pytest.skip(f"symlink creation unavailable: {error}")
+    value = case["input"]
+    return [str(tmp_path / x) for x in value] if isinstance(value, list) else str(tmp_path / value)
+
+
+@pytest.mark.parametrize("case", [x for x in _PATH_VECTORS if x["operation"] == "infer"], ids=lambda x: x["id"])
+def test_path_reference_inference_vectors(tmp_path, monkeypatch, case):
+    import nirs4all_io as nio
+    from nirs4all_io.spec.enums import SpecError
+    inp = _path_reference_case(tmp_path, case)
+    elsewhere = tmp_path / "non_input_cwd"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    if "error" in case["expected"]:
+        with pytest.raises(SpecError, match=case["expected"]["error"]):
+            nio.infer(inp)
+        with pytest.raises(SpecError, match=case["expected"]["error"]):
+            nio.to_spec(inp)
+        return
+    plan = nio.infer(inp)
+    expected = case["expected"]
+    if expected.get("unknown"):
+        assert plan.structure.value == "unknown"
+        assert not plan.accept().sources
+        assert any("no convention matched" in warning for warning in plan.warnings)
+        return
+    if expected.get("bindings_only"):
+        inputs = [value for source in plan.accept().sources for value in (source.input if isinstance(source.input, list) else [source.input])]
+        assert inputs and all(_Path(value).is_absolute() for value in inputs)
+        assert len(set(inputs)) == 1
+        return  # Same-file multiplicity is an existing cross-owner difference.
+    if expected.get("load_error"):
+        with pytest.raises((ValueError, OSError), match="NumPy|numpy|pickle|vendor"):
+            nio.load(plan.accept(), target="assembled")
+        return
+    assembled = nio.load(plan.accept(), target="assembled")
+    block = assembled.blocks["train"]
+    expected = case["expected"]
+    assert block.n_samples == expected["n_samples"]
+    assert block.header_units == [expected["unit"]]
+    assert float(block.X[0][0, 0]) == expected["x00"]
+    assert plan.task_type.value == expected["task"]
+    assert block.y_headers == ["y"]
+    assert block.y[:, 0].tolist() == [1.5, 2.5]
+    if "folds" in expected:
+        assert len(assembled.folds) == expected["folds"]
+        assert _Path(plan.accept().folds.file).is_absolute()
+        assert plan.accept().folds.format == expected["fold_format"]
+        if case["id"].startswith("folds-store-"):
+            assert plan.accept().folds.file == str((tmp_path / "store/fb").resolve())
+            assert assembled.folds == [([1], [0]), ([0], [1])]
+            return
+        spec, base = nio.to_spec([str(tmp_path / x) for x in ("Xcal.csv", "Ycal.csv", "folds.csv")])
+        assert len(nio.load(spec, base_dir=base, target="assembled").folds) == expected["folds"]
+    if "warning" in expected:
+        assert any(expected["warning"] in warning for warning in plan.warnings)
+    # Preserve full selected role bytes/masks and the literal frame width.
+    wire = assembled.to_full_dict()["blocks"]["train"]
+    assert wire["x"][0]["n_cols"] == 12
+    assert all(wire["x"][0]["validity"])
+
+
+@pytest.mark.parametrize("base", ["al", "./al", "al/", "./al/", "dl", "./dl", "./phys/../al", "."])
+def test_path_reference_all_eight_lexical_bases_public(tmp_path, monkeypatch, base):
+    case = next(row for row in _PATH_VECTORS if row["id"] == "alias-store")
+    adapted = {**case, "files": {"phys/raw.csv": case["files"]["store/ab12"], "phys/target.csv": case["files"]["store/cd34"]},
+               "links": {"al/Xcal.csv": "phys/raw.csv", "al/Ycal.csv": "phys/target.csv", "dl": "al"}, "input": "al"}
+    _path_reference_case(tmp_path, adapted)
+    monkeypatch.chdir(tmp_path / "al" if base == "." else tmp_path)
+    plan = nio.infer(base)
+    block = nio.load(plan.accept(), target="assembled").blocks["train"]
+    assert block.header_units == ["nm"]
+    assert plan.task_type.value == "regression"
+    np.testing.assert_array_equal(block.X[0], np.array([[0.1] * 12, [0.2] * 12], dtype=np.float64))
+    np.testing.assert_array_equal(block.y[:, 0], [1.5, 2.5])
+    assert all(_Path(source.input).is_absolute() for source in plan.accept().sources)
+
+
+def test_decimal_inference_unresolved_decision_is_not_a_default(tmp_path):
+    import nirs4all_io as nio
+
+    (tmp_path / "Xcal.csv").write_text("1000;1005\n0.25;1.25\n1.25;2.25\n")
+    (tmp_path / "Ycal.csv").write_text("Protein, %\n12,5\n13,1\n")
+    plan = nio.infer(tmp_path)
+    assert plan.params["Ycal.csv"]["delimiter"] == {"value": None, "score": 0.0}
+    assert "decimal_separator" not in plan.params["Ycal.csv"]
+    assert any("train_y" in warning and "Ycal.csv" in warning and "candidates" in warning for warning in plan.warnings)
+    assert plan.task_type.value == "regression"
+    assert plan.task_type.score == 0.0
+
+
+def test_decimal_inference_multifile_and_effective_delimiter(tmp_path):
+    from nirs4all_io.infer.engine import _enrich_params
+    from nirs4all_io.infer.plan import DatasetPlan
+    from nirs4all_io.resolve import resolve
+    from nirs4all_io.resolve.resolver import _file_reference_table
+
+    for name in ["a.csv", "b.csv"]:
+        (tmp_path / name).write_text("a;b\n1,5;2,5\n3,5;4,5\n")
+    spec = {"sources": [{"id": "x", "input": ["a.csv", "b.csv"], "role": "features"}]}
+    refs = _file_reference_table(resolve(tmp_path), spec)
+    plan = DatasetPlan()
+    _enrich_params(spec, plan, refs)
+    assert spec["sources"][0]["params"]["delimiter"] == ";"
+    assert "decimal_separator" not in spec["sources"][0]["params"]
+    assert "decimal_separator" not in plan.params["a.csv"]
+    spec = {"sources": [{"id": "x", "input": "a.csv", "role": "features", "params": {"delimiter": ","}}]}
+    _enrich_params(spec, DatasetPlan(), refs)
+    assert spec["sources"][0]["params"]["delimiter"] == ","
+    assert "decimal_separator" not in spec["sources"][0]["params"]
+
+
+def test_decimal_inference_large_field_has_no_decimal_proposal(tmp_path):
+    import csv
+
+    from nirs4all_io.infer.describe import proposed_decimal
+    from nirs4all_io.spec.dataset_spec import LoadingParams
+
+    path = tmp_path / "data.csv"
+    path.write_text('"' + "axis," * 40000 + '",y\n1.0,2.0\n3.0,4.0\n')
+    limit = csv.field_size_limit()
+    assert proposed_decimal(path, LoadingParams(delimiter=",")) is None
+    assert csv.field_size_limit() == limit
+
+
+def test_decimal_inference_bom_and_structural_parameters(tmp_path):
+    from nirs4all_io.infer.describe import describe
+
+    path = tmp_path / "data.csv"
+    path.write_text('\ufeff"Protein, %"\n"1,25e1"\n"1,31e1"\n')
+    desc = describe(path)
+    assert desc.column_names == ["Protein, %"]
+    assert desc.decimal_separator == ","
+    assert not desc.delimiter_candidates

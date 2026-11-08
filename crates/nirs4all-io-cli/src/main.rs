@@ -33,6 +33,12 @@ enum Command {
         /// Convention profile to match (repeatable). Default: nirs4all-classic.
         #[arg(long = "convention", short = 'c')]
         conventions: Vec<String>,
+        /// Global loading parameters as a JSON object, before inference reads.
+        #[arg(long)]
+        params: Option<String>,
+        /// Exact input name -> loading parameters as a JSON object.
+        #[arg(long)]
+        file_params: Option<String>,
     },
     /// Normalize input(s) into a canonical DatasetSpec as JSON.
     ToSpec {
@@ -111,12 +117,21 @@ fn main() -> Result<()> {
         Command::Infer {
             inputs,
             conventions,
+            params,
+            file_params,
         } => {
-            let conv = conv_opt(&conventions);
+            let options = nirs4all_io::core::infer::InferOptions {
+                conventions,
+                params: match params { Some(text) => nirs4all_io::core::canonical_json::parse_json_value(&text)?, None => serde_json::json!({}) },
+                file_params: match file_params {
+                    Some(text) => serde_json::from_value(nirs4all_io::core::canonical_json::parse_json_value(&text)?)?,
+                    None => Default::default(),
+                },
+            };
             let plan = if inputs.len() == 1 {
-                infer_path(&inputs[0], conv)
+                infer_path(&inputs[0], &options)
             } else {
-                infer_paths(&inputs, conv)
+                infer_paths(&inputs, &options)
             }
             .map_err(|e| anyhow!(e.message))?;
             emit(&plan.to_value())
@@ -131,7 +146,7 @@ fn main() -> Result<()> {
                 Some(spec_file) => {
                     let text = std::fs::read_to_string(&spec_file)
                         .with_context(|| format!("read spec file {spec_file}"))?;
-                    let value: Value = serde_json::from_str(&text)
+                    let value: Value = nirs4all_io::core::canonical_json::parse_json_value(&text)
                         .with_context(|| format!("parse spec JSON {spec_file}"))?;
                     Input::Spec(value)
                 }
@@ -144,7 +159,7 @@ fn main() -> Result<()> {
         Command::Validate { input } => {
             let text = std::fs::read_to_string(&input).with_context(|| format!("read {input}"))?;
             let value: Value =
-                serde_json::from_str(&text).with_context(|| format!("parse JSON {input}"))?;
+                nirs4all_io::core::canonical_json::parse_json_value(&text).with_context(|| format!("parse JSON {input}"))?;
             let spec = DatasetSpec::from_value(&value).map_err(|e| anyhow!(e.message))?;
             validate_spec(&spec).map_err(|e| anyhow!(e.message))?;
             eprintln!("valid: {input}");
@@ -157,7 +172,7 @@ fn main() -> Result<()> {
             limits,
         } => {
             let limits = limits.as_deref().map(|text| {
-                let value: Value = serde_json::from_str(text).context("parse --limits JSON")?;
+                let value: Value = nirs4all_io::core::canonical_json::parse_json_value(text).context("parse --limits JSON")?;
                 LoadLimits::from_value(&value).map_err(|e| anyhow!(e.message))
             }).transpose()?.unwrap_or_default();
             let assembled = load_assembled_with_limits(

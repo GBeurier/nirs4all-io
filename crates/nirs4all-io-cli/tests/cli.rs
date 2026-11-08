@@ -107,3 +107,36 @@ fn missing_input_is_a_usage_error() {
     let (ok, _, _) = run(&["infer"]);
     assert!(!ok);
 }
+
+#[test]
+fn json_ingress_refuses_out_of_range_integer_tokens_before_schema_use() {
+    let tmp = std::env::temp_dir().join(format!(
+        "n4io_cli_integer_guard_{}.json",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, r#"{"ignored":18446744073709551616}"#).unwrap();
+    let (ok, _, error) = run(&["validate", tmp.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(
+        error.contains("JSON integer token outside i64/u64 range"),
+        "{error}"
+    );
+    let (ok, _, error) = run(&["to-spec", "--spec", tmp.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(
+        error.contains("JSON integer token outside i64/u64 range"),
+        "{error}"
+    );
+    let _ = std::fs::remove_file(tmp);
+    let (ok, _, error) = run(&[
+        "load",
+        &corpus("train_test"),
+        "--limits",
+        r#"{"max_rows":18446744073709551616}"#,
+    ]);
+    assert!(!ok);
+    assert!(
+        error.contains("JSON integer token outside i64/u64 range"),
+        "{error}"
+    );
+}

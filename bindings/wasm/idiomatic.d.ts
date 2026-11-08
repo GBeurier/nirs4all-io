@@ -13,6 +13,14 @@ import type {
   AssembledDataset,
 } from "./types/nirs4all-io";
 
+// Inspection is currently a raw WASM export; these are DTO re-exports only.
+export type {
+  DescribeOptions,
+  TableColumnDescription,
+  TableDescription,
+  IgnoredInputNaReport,
+} from "./types/nirs4all-io";
+
 export interface NioModule {
   inferFiles(files: NamedFile[], options?: InferOptions): DatasetPlan;
   inferRecords(recordSets: RecordSet[]): DatasetPlan;

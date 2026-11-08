@@ -94,13 +94,14 @@ enum n4io_status_t n4io_to_spec(struct n4io_context_t *ctx,
                                 char **out);
 
 // Inspect a data input (path string or file-list array) and write the scored
-// `DatasetPlan` JSON to `*out` (owned).
+// `DatasetPlan` JSON to `*out` (owned). options_json is NULL or an InferOptions
+// object with conventions, params and exact-name file_params.
 //
 // # Safety
 // All pointers must be valid for the call; `out` writable.
 enum n4io_status_t n4io_infer(struct n4io_context_t *ctx,
                               const char *input_json,
-                              const char *conventions_json,
+                              const char *options_json,
                               char **out);
 
 // Materialize an input and write the assembled-dataset structural summary JSON

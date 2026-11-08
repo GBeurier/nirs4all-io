@@ -4,12 +4,13 @@
 \alias{n4io_infer}
 \title{Inspect a data input and return the scored DatasetPlan (JSON string).}
 \usage{
-n4io_infer(input_json, conventions_json = NULL)
+n4io_infer(input_json, options_json = NULL)
 }
 \arguments{
 \item{input_json}{A JSON path string or file-list array.}
 
-\item{conventions_json}{Optional JSON array of convention names, or NULL.}
+\item{options_json}{NULL or an InferOptions JSON object with optional
+\code{conventions}, \code{params}, and exact-name \code{file_params}.}
 }
 \value{
 The DatasetPlan as a JSON string.

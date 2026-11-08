@@ -74,13 +74,59 @@ pub fn concat_samples(frames: &[Frame], names: &[String]) -> (Frame, Vec<String>
         .iter()
         .map(|name| {
             let mut cells = Vec::with_capacity(total_rows);
+            let mut numeric_text = Vec::with_capacity(total_rows);
             for f in frames {
                 match f.column(name) {
-                    Some(col) => cells.extend(col.values.iter().cloned()),
-                    None => cells.extend(std::iter::repeat_n(Cell::Na, f.n_rows)),
+                    Some(col) => {
+                        cells.extend(col.values.iter().cloned());
+                        numeric_text.extend(col.values.iter().enumerate().map(|(row, cell)| {
+                            matches!(cell, Cell::Str(_)) && col.numeric_text_at(row)
+                        }));
+                    }
+                    None => {
+                        cells.extend(std::iter::repeat_n(Cell::Na, f.n_rows));
+                        numeric_text.extend(std::iter::repeat_n(false, f.n_rows));
+                    }
                 }
             }
-            Column::from_cells(name, cells)
+            let dtypes = frames
+                .iter()
+                .filter_map(|f| f.column(name))
+                .map(|c| c.source_dtype.clone())
+                .collect::<HashSet<_>>();
+            let numeric = frames
+                .iter()
+                .filter_map(|f| f.column(name))
+                .all(|column| column.dtype == crate::infer::table::ColDtype::Numeric);
+            let mixed_bool = cells.iter().any(|cell| matches!(cell, Cell::Bool(_)))
+                && frames
+                    .iter()
+                    .filter_map(|frame| frame.column(name))
+                    .any(|column| column.dtype == crate::infer::table::ColDtype::Numeric);
+            let mut column = if mixed_bool {
+                Column {
+                    source_dtype: None,
+                    name: name.clone(),
+                    dtype: crate::infer::table::ColDtype::String,
+                    numeric_kind: crate::infer::table::NumericKind::NonNumeric,
+                    values: cells,
+                    numeric_text: vec![],
+                }
+            } else {
+                Column::from_cells(name, cells)
+            };
+            if numeric_text.iter().any(|numeric| *numeric) {
+                column.numeric_text = numeric_text;
+            }
+            if numeric && !mixed_bool && !column.is_numeric_dtype() {
+                column.dtype = crate::infer::table::ColDtype::Numeric;
+                column.numeric_kind = crate::infer::table::NumericKind::Float;
+            }
+            column.with_source_dtype(if dtypes.len() == 1 {
+                dtypes.into_iter().next().flatten()
+            } else {
+                Some("mixed".into())
+            })
         })
         .collect();
     let mut audit = JoinAudit {
@@ -201,7 +247,12 @@ pub fn concat_features_with_limits(
             } else {
                 col.name.clone()
             };
-            seen.insert(new_name.clone());
+            if !seen.insert(new_name.clone()) {
+                return Err(SpecError::new(format!(
+                    "source '{name}': column '{}' generates duplicate output column '{new_name}'",
+                    col.name
+                )));
+            }
             columns.push(Column {
                 name: new_name,
                 ..col.clone()
@@ -346,6 +397,24 @@ pub fn join_tables_with_limits(
         })
         .collect();
 
+    let mut seen = HashSet::new();
+    for col in &left.columns {
+        if !seen.insert(col.name.as_str()) {
+            return Err(SpecError::new(format!(
+                "source '{left_name}': duplicate output column '{}'",
+                col.name
+            )));
+        }
+    }
+    for (col, name) in &right_extra {
+        if !seen.insert(name.as_str()) {
+            return Err(SpecError::new(format!(
+                "source '{right_name}': column '{}' generates duplicate output column '{name}'",
+                col.name
+            )));
+        }
+    }
+
     let drop = coverage == Coverage::Drop;
     if let Some(limits) = limits {
         let columns = left
@@ -369,6 +438,8 @@ pub fn join_tables_with_limits(
     }
     let mut left_out: Vec<Vec<Cell>> = vec![Vec::new(); left.columns.len()];
     let mut right_out: Vec<Vec<Cell>> = vec![Vec::new(); right_extra.len()];
+    let mut left_numeric: Vec<Vec<bool>> = vec![Vec::new(); left.columns.len()];
+    let mut right_numeric: Vec<Vec<bool>> = vec![Vec::new(); right_extra.len()];
     let mut n_matched = 0;
     for (li, t) in left_tuples.iter().enumerate() {
         let matches = t.as_ref().and_then(|k| right_map.get(k));
@@ -378,9 +449,15 @@ pub fn join_tables_with_limits(
                 for &ri in rows {
                     for (ci, col) in left.columns.iter().enumerate() {
                         left_out[ci].push(col.values[li].clone());
+                        left_numeric[ci].push(
+                            matches!(col.values[li], Cell::Str(_)) && col.numeric_text_at(li),
+                        );
                     }
                     for (ci, (col, _)) in right_extra.iter().enumerate() {
                         right_out[ci].push(col.values[ri].clone());
+                        right_numeric[ci].push(
+                            matches!(col.values[ri], Cell::Str(_)) && col.numeric_text_at(ri),
+                        );
                     }
                 }
             }
@@ -390,9 +467,12 @@ pub fn join_tables_with_limits(
                 }
                 for (ci, col) in left.columns.iter().enumerate() {
                     left_out[ci].push(col.values[li].clone());
+                    left_numeric[ci]
+                        .push(matches!(col.values[li], Cell::Str(_)) && col.numeric_text_at(li));
                 }
-                for col in right_out.iter_mut() {
+                for (col, numeric) in right_out.iter_mut().zip(&mut right_numeric) {
                     col.push(Cell::Na);
+                    numeric.push(false);
                 }
             }
         }
@@ -400,13 +480,18 @@ pub fn join_tables_with_limits(
 
     let mut columns: Vec<Column> = Vec::with_capacity(left.columns.len() + right_extra.len());
     for (ci, col) in left.columns.iter().enumerate() {
-        columns.push(Column::from_cells(
+        columns.push(col.aligned_cells(
             &col.name,
             std::mem::take(&mut left_out[ci]),
+            std::mem::take(&mut left_numeric[ci]),
         ));
     }
-    for (ci, (_, name)) in right_extra.iter().enumerate() {
-        columns.push(Column::from_cells(name, std::mem::take(&mut right_out[ci])));
+    for (ci, (col, name)) in right_extra.iter().enumerate() {
+        columns.push(col.aligned_cells(
+            name,
+            std::mem::take(&mut right_out[ci]),
+            std::mem::take(&mut right_numeric[ci]),
+        ));
     }
     let out = Frame::from_columns(columns, &left.header_unit);
 
@@ -692,5 +777,58 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("coverage 'complete'"));
+    }
+    #[test]
+    fn generated_concat_names_are_checked_in_column_order() {
+        let anchor = Frame::from_columns(vec![col("0", &[100, 200])], "text");
+        for reverse in [false, true] {
+            let columns = if reverse {
+                vec![col("b__0", &[11, 21]), col("0", &[10, 20])]
+            } else {
+                vec![col("0", &[10, 20]), col("b__0", &[11, 21])]
+            };
+            let other = Frame::from_columns(columns, "text");
+            let result = concat_features(
+                &[anchor.clone(), other],
+                &["anchor".into(), "b".into()],
+                None,
+            );
+            if reverse {
+                assert!(result
+                    .unwrap_err()
+                    .message
+                    .contains("source 'b': column '0' generates duplicate output column 'b__0'"));
+            } else {
+                let (frame, _) = result.unwrap();
+                assert_eq!(frame.column_names(), vec!["0", "b__0", "b__b__0"]);
+                assert_eq!(frame.numeric_column_f64("b__b__0"), vec![11., 21.]);
+            }
+        }
+    }
+
+    #[test]
+    fn keyed_output_names_are_unique_before_constructing_frame() {
+        for right_literal in [false, true] {
+            let mut left = vec![col("id", &[1, 2]), col("a", &[1, 2])];
+            let mut right = vec![col("id", &[1, 2]), col("a", &[70, 80])];
+            if right_literal {
+                right.push(col("a__y", &[90, 100]));
+            } else {
+                left.push(col("a__y", &[10, 20]));
+            }
+            let error = join_tables(
+                &Frame::from_columns(left, "text"),
+                &Frame::from_columns(right, "text"),
+                &["id".into()],
+                &["id".into()],
+                Cardinality::OneToOne,
+                Coverage::Complete,
+                "x",
+                "y",
+            )
+            .unwrap_err();
+            assert!(error.message.contains("source 'y': column"));
+            assert!(error.message.contains("duplicate output column 'a__y'"));
+        }
     }
 }

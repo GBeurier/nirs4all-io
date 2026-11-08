@@ -8,6 +8,7 @@ prediction and archive verification belong to Methods, DAG-ML and Core.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from typing import Any
 import numpy as np
 import yaml
 
+from . import strict_json
+from .materialize.numeric import int_to_f32, round_storage
 from .multimodal import MultimodalDataset, TensorSource
 from .public_content import canonical_source_schema, metadata_number
 
@@ -24,7 +27,9 @@ _U07_TYPES = {"nir": "signal_1d", "image": "rgb_image", "series": "series_mv", "
 
 def load_dataset_document(definition: Any) -> Any:
     """Read IO JSON/YAML input without discarding its outer public envelope."""
-    if isinstance(definition, (Mapping, MultimodalDataset)):
+    if isinstance(definition, Mapping):
+        return strict_json.check_numbers(definition)
+    if isinstance(definition, MultimodalDataset):
         return definition
     if not isinstance(definition, (str, Path)):
         raise TypeError("dataset definition must be a MultimodalDataset, mapping, JSON/YAML text or path")
@@ -41,12 +46,74 @@ def load_dataset_document(definition: Any) -> Any:
     else:
         text = source
     try:
-        document = json.loads(text) if text.lstrip().startswith(("{", "[")) else yaml.safe_load(text)
+        document = strict_json.loads(text) if text.lstrip().startswith(("{", "[")) else strict_json.check_numbers(yaml.safe_load(text))
     except (json.JSONDecodeError, yaml.YAMLError) as error:
         raise ValueError("dataset definition must contain valid JSON or safe YAML") from error
     if not isinstance(document, Mapping):
         raise ValueError("dataset definition must contain an object")
     return document
+
+
+def _float_width(dtype: Any) -> int | None:
+    """Byte width (4 or 8) of the NUMPY-RESOLVED float dtype a serialized array declares, else ``None``.
+
+    The gate keys on the resolved dtype, not on the spelling: ``<f8``, ``>f4``, ``f8``, ``float``, ``double``, ``d``,
+    ``single`` ... all reach the same cell check as ``float64`` / ``float32``. An unresolvable or other dtype is left to the
+    ordinary array validation (and, on the public record, to the closed vocabulary).
+    """
+    if not isinstance(dtype, str):
+        return None
+    try:
+        resolved = np.dtype(dtype)
+    except (TypeError, ValueError):
+        return None
+    return resolved.itemsize if resolved.kind == "f" and resolved.itemsize in (4, 8) else None
+
+
+def _declared_float_cells(value: Any) -> Any:
+    """Checked per-cell normalization of declared float arrays; ``MultimodalDataset._array_from_dict`` calls it per record.
+
+    One owner normalization for storage and the whole-dataset identity, for every serialized array (sources, targets,
+    groups, partitions, presence masks, ragged series):
+
+    - the declared dtype is resolved by NumPy first (any spelling of a 4- or 8-byte float);
+    - every integer cell of a declared float array is first checked against the shared integer domain
+      ``[-2**63, 2**64 - 1]`` (:func:`strict_json.check_integer`, a ``ValueError``), before any float conversion;
+    - a declared ``float64`` array refuses an integer cell it cannot hold exactly (``2**53 + 1``);
+    - a declared ``float32`` array rounds every numeric cell exactly once with the existing checked F32
+      rounding: an integer cell directly from the integer (never integer -> F64 -> F32), a float cell from its
+      binary64 value; finite overflow and a nonzero value that rounds to zero (underflow, e.g. ``5e-324``)
+      refuse, while subnormals, the minimum subnormal and observed ``+-0`` are kept.
+
+    It returns a converted copy, so the caller's document and its provenance snapshot stay untouched.
+    """
+    if isinstance(value, Mapping):
+        width = _float_width(value["dtype"]) if set(value) == {"dtype", "shape", "values"} else None
+        if width is not None and isinstance(value["values"], list):
+            to_f32 = width == 4
+
+            def convert(cell: Any) -> Any:
+                if isinstance(cell, list):
+                    return [convert(item) for item in cell]
+                if type(cell) not in (int, float):
+                    return cell
+                if type(cell) is int:
+                    strict_json.check_integer(cell)
+                if to_f32:
+                    if type(cell) is int:
+                        return int_to_f32(cell)
+                    if not math.isfinite(cell):
+                        return cell
+                    return float(round_storage(np.array([cell]), "float32")[0])
+                if type(cell) is int and int(float(cell)) != cell:
+                    raise ValueError(f"the integer {cell} cannot be represented exactly by a declared float64 array")
+                return cell
+
+            return {**value, "values": convert(value["values"])}
+        return {key: _declared_float_cells(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_declared_float_cells(item) for item in value]
+    return value
 
 
 def load_multimodal_definition(definition: Mapping[str, Any] | str | Path | MultimodalDataset) -> MultimodalDataset:

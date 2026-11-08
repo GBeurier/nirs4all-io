@@ -1177,8 +1177,35 @@ mod tests {
         .unwrap();
         assert_eq!(legacy, fixture["studio_legacy_config"]);
 
-        let actual = role_tagged_config_to_spec(config).unwrap().to_value();
-        assert_eq!(actual, fixture["expected_dataset_spec"]);
+        // This exact frozen request is a historical translation reference.
+        assert_eq!(
+            fixture["oracle"],
+            "nirs4all-studio/api/shared/dataset_config.py::build_nirs4all_config_from_stored@cdb9f46de1643ab170934481cd9471e54ed3701c"
+        );
+        assert_eq!(config["na_fill_config"]["method"], "mean");
+        assert_eq!(config["global_params"]["na_fill_config"]["method"], "mean");
+        assert_eq!(
+            fixture["expected_dataset_spec"]["params"]["na"]["fill"]["method"],
+            "mean"
+        );
+        let error = role_tagged_config_to_spec(config).unwrap_err();
+        assert_eq!(
+            error.message,
+            "na.fill.method: 'mean' is refused: IO does not compute fill statistics across samples; \
+             use fitted preprocessing in the training pipeline for train/test partitions and cross-validation folds. \
+             Supported IO options are na.fill.method 'value', 'forward_fill' or 'backward_fill' \
+             (within each sample), or na.policy 'remove_sample', 'remove_feature' or 'ignore'."
+        );
+
+        // Retain full structural parity for a supported control, changing only
+        // the duplicated fill method and its corresponding expected spec field.
+        let mut supported = config.clone();
+        supported["na_fill_config"]["method"] = json!("forward_fill");
+        supported["global_params"]["na_fill_config"]["method"] = json!("forward_fill");
+        let mut expected = fixture["expected_dataset_spec"].clone();
+        expected["params"]["na"]["fill"]["method"] = json!("forward_fill");
+        let actual = role_tagged_config_to_spec(&supported).unwrap().to_value();
+        assert_eq!(actual, expected);
         assert!(selection.is_some());
     }
 
@@ -1192,7 +1219,22 @@ mod tests {
             corpus["oracle_source_sha256"],
             "c5a4a4d37b498ffb17c42dce74e37db9b964fc30892aa3d6a7b0a27e836c2a62"
         );
-        for case in corpus["cases"].as_array().unwrap() {
+        let cases = corpus["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 4);
+        assert_eq!(
+            cases
+                .iter()
+                .map(|case| case["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "single-source-1",
+                "labels-gaps-duplicates",
+                "partial-na-override",
+                "fold-and-aggregation"
+            ]
+        );
+        let mut statistical_cases = Vec::new();
+        for case in cases {
             let mut config = Map::new();
             config.insert("files".into(), case["files"].clone());
             config.insert("parsing".into(), case["parsing"].clone());
@@ -1219,8 +1261,32 @@ mod tests {
                 "oracle case {}",
                 case["name"]
             );
-            role_tagged_config_to_spec(&config).unwrap();
+            if case["name"] == "partial-na-override" {
+                assert_eq!(case["parsing"]["na_fill_config"]["method"], "mean");
+                assert_eq!(
+                    case["files"][0]["overrides"]["na_fill_config"]["method"],
+                    "median"
+                );
+                statistical_cases.push(case["name"].as_str().unwrap());
+                let error = role_tagged_config_to_spec(&config).unwrap_err();
+                assert_eq!(
+                    error.message,
+                    "na.fill.method: 'median' is refused: IO does not compute fill statistics across samples; \
+                     use fitted preprocessing in the training pipeline for train/test partitions and cross-validation folds. \
+                     Supported IO options are na.fill.method 'value', 'forward_fill' or 'backward_fill' \
+                     (within each sample), or na.policy 'remove_sample', 'remove_feature' or 'ignore'."
+                );
+            } else {
+                assert!(case["parsing"].get("na_fill_config").is_none());
+                assert!(case["files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|file| { file["overrides"].get("na_fill_config").is_none() }));
+                role_tagged_config_to_spec(&config).unwrap();
+            }
         }
+        assert_eq!(statistical_cases, ["partial-na-override"]);
     }
 
     #[test]
@@ -1325,15 +1391,36 @@ mod tests {
     fn validates_partial_na_overrides_after_global_inheritance() {
         let mut value = minimal();
         value["na_policy"] = json!("replace");
-        value["na_fill_config"] = json!({"method": "mean"});
+        value["na_fill_config"] = json!({"method": "forward_fill"});
         value["files"][0]["overrides"] = json!({
-            "na_fill_config": {"method": "median"}
+            "na_fill_config": {"method": "backward_fill"}
         });
         let spec = adapt(value).unwrap();
         assert_eq!(spec["params"]["na"]["policy"], "replace");
+        assert_eq!(spec["params"]["na"]["fill"]["method"], "forward_fill");
         assert_eq!(
             spec["sources"][0]["params"]["na"]["fill"]["method"],
-            "median"
+            "backward_fill"
+        );
+    }
+
+    #[test]
+    fn refuses_statistical_na_fill_at_spec_admission() {
+        let mut value = minimal();
+        value["na_policy"] = json!("replace");
+        value["na_fill_config"] = json!({"method": "forward_fill"});
+        let control = adapt(value.clone()).unwrap();
+        assert_eq!(control["params"]["na"]["fill"]["method"], "forward_fill");
+
+        // Only the method differs from the owner-valid control above.
+        value["na_fill_config"]["method"] = json!("mean");
+        let error = adapt(value).unwrap_err();
+        assert_eq!(
+            error.message,
+            "na.fill.method: 'mean' is refused: IO does not compute fill statistics across samples; \
+             use fitted preprocessing in the training pipeline for train/test partitions and cross-validation folds. \
+             Supported IO options are na.fill.method 'value', 'forward_fill' or 'backward_fill' \
+             (within each sample), or na.policy 'remove_sample', 'remove_feature' or 'ignore'."
         );
     }
 

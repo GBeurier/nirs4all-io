@@ -78,3 +78,58 @@ def test_resolve_in_memory_arrays():
 def test_resolve_single_ndarray():
     iset = resolve(np.ones((2, 2)))
     assert len(iset.items) == 1 and iset.items[0].kind == "array"
+
+
+def test_path_reference_fixture_mirrors_are_exact():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "tests/fixtures/path_reference_vectors.json").read_bytes() == (root / "crates/nirs4all-io/tests/fixtures/path_reference_vectors.json").read_bytes()
+
+
+def test_path_reference_literal_file_and_logical_alias(tmp_path):
+    import pytest
+
+    from nirs4all_io.resolve.resolver import resolve
+    actual = tmp_path / "raw"
+    actual.write_text("x\n1\n")
+    alias = tmp_path / "Xcal.csv"
+    try:
+        alias.symlink_to(actual)
+    except OSError as error:
+        pytest.skip(f"symlink creation unavailable: {error}")
+    item = next(x for x in resolve(tmp_path).items if x.hints["basename"] == "Xcal.csv")
+    assert item.ref == "Xcal.csv"
+    assert item.identity == str(actual.resolve())
+    literal = tmp_path / "scan[2].csv"
+    literal.write_text("x\n0.1\n")
+    (tmp_path / "scan2.csv").write_text("x\n7.1\n")
+    assert resolve(str(literal)).items[0].identity == str(literal)
+    assert resolve([str(literal)]).items[0].identity == str(literal)
+
+
+def test_path_reference_alias_ties_use_logical_order(tmp_path):
+    import pytest
+
+    from nirs4all_io.resolve.resolver import resolve
+    target = tmp_path / "store"
+    target.write_text("x\n0.1\n")
+    aliases = tmp_path / "aliases"
+    aliases.mkdir()
+    for name in ["m.csv", "c.csv", "z.csv", "b.csv", "q.csv", "a.csv"]:
+        try:
+            (aliases / name).symlink_to(target)
+        except OSError as error:
+            pytest.skip(f"symlink creation unavailable: {error}")
+    assert resolve(aliases).names == ["a.csv", "b.csv", "c.csv", "m.csv", "q.csv", "z.csv"]
+    listed = resolve([str(aliases / "z.csv"), str(aliases / "a.csv")])
+    assert listed.names == ["z.csv", "a.csv"]
+
+
+def test_path_reference_literal_list_keeps_orphan_and_input_order(tmp_path):
+    paths = [tmp_path / "literal[2].csv", tmp_path / "orphan[3].csv"]
+    for path in paths:
+        _write(path)
+    _write(tmp_path / "literal2.csv", "x\n7.2\n")
+    items = resolve([str(path) for path in paths]).items
+    assert [item.ref for item in items] == ["literal[2].csv", "orphan[3].csv"]
+    assert [item.identity for item in items] == [str(path) for path in paths]

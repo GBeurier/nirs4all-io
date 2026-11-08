@@ -27,12 +27,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{json, Map, Value};
 
 use crate::infer::column_roles::infer_column_roles;
+use crate::infer::describe::{record_description, select_description_params, warn_inferred_header};
 use crate::infer::identity::detect_sample_id;
 use crate::infer::memory::{
     describe_bytes, file_stem, infer_browser_dataset, infer_partition_from_name, params_from,
     read_table_bytes, source_first_input, unique_source_id, DecodedRecordSet, NamedBytes,
 };
 use crate::infer::plan::{DatasetPlan, Decision};
+use crate::infer::InferOptions;
 use crate::pyfmt::py_round;
 use crate::spec::dataset_spec::LoadingParams;
 use crate::spec::{validate_spec, DatasetSpec, SpecError};
@@ -282,9 +284,9 @@ pub fn propose_browser_dataset(
     files: &[NamedBytes],
     record_sets: &[DecodedRecordSet],
     confirmed: &[ConfirmedLock],
-    conventions: Option<&[String]>,
+    options: &InferOptions,
 ) -> Result<ProposalResult, SpecError> {
-    let mut plan = infer_browser_dataset(files, record_sets, conventions)?;
+    let mut plan = infer_browser_dataset(files, record_sets, options)?;
     let by_name: BTreeMap<String, &NamedBytes> =
         files.iter().map(|f| (f.name.clone(), f)).collect();
 
@@ -297,7 +299,7 @@ pub fn propose_browser_dataset(
     // (C2) Fill the gap left by `unknown` / partial inference: one provisional
     // source per un-sourced tabular file.
     let mut provisional: BTreeSet<String> = BTreeSet::new();
-    synthesize_provisional_sources(&mut spec_val, files, &mut provisional);
+    synthesize_provisional_sources(&mut spec_val, files, &mut provisional, &mut plan, options)?;
 
     let mut confirmed_keys: BTreeSet<(String, String)> = BTreeSet::new();
     let mut echoes: Vec<Proposal> = Vec::new();
@@ -308,7 +310,7 @@ pub fn propose_browser_dataset(
         if lock.kind == "pairing" {
             continue;
         }
-        match apply_lock(&mut spec_val, lock) {
+        match apply_lock(&mut spec_val, lock, &by_name, &plan.columns, record_sets) {
             LockOutcome::Applied => {
                 confirmed_keys.insert((lock.kind.clone(), lock.target.clone()));
                 echoes.push(echo_proposal(lock));
@@ -326,7 +328,7 @@ pub fn propose_browser_dataset(
         if lock.kind != "pairing" {
             continue;
         }
-        match apply_lock(&mut spec_val, lock) {
+        match apply_lock(&mut spec_val, lock, &by_name, &plan.columns, record_sets) {
             LockOutcome::Applied => {
                 confirmed_keys.insert((lock.kind.clone(), lock.target.clone()));
                 echoes.push(echo_proposal(lock));
@@ -383,7 +385,9 @@ fn synthesize_provisional_sources(
     spec_val: &mut Value,
     files: &[NamedBytes],
     provisional: &mut BTreeSet<String>,
-) {
+    plan: &mut DatasetPlan,
+    options: &InferOptions,
+) -> Result<(), SpecError> {
     let sources = match spec_val.get_mut("sources").and_then(Value::as_array_mut) {
         Some(s) => s,
         None => {
@@ -411,7 +415,7 @@ fn synthesize_provisional_sources(
         if known_inputs.contains(&file.name) || known_inputs.contains(&file_stem(&file.name)) {
             continue;
         }
-        let source = provisional_source(file, base + offset);
+        let source = provisional_source(file, base + offset, plan, options)?;
         if let Some(id) = source.get("id").and_then(Value::as_str) {
             provisional.insert(id.to_string());
         }
@@ -419,29 +423,46 @@ fn synthesize_provisional_sources(
         known_inputs.insert(file_stem(&file.name));
         sources.push(source);
     }
+    Ok(())
 }
 
 /// Build one source object from a single tabular file (mirrors the per-file
 /// role logic of `infer_single_file`, but with a stable per-file id).
-fn provisional_source(file: &NamedBytes, idx: usize) -> Value {
-    let desc = describe_bytes(file);
+fn provisional_source(
+    file: &NamedBytes,
+    idx: usize,
+    plan: &mut DatasetPlan,
+    options: &InferOptions,
+) -> Result<Value, SpecError> {
+    let mut desc = describe_bytes(file);
     let id = unique_source_id(&file.name, idx);
+    let mut selected = options.effective_file_params(&file.name)?;
+    warn_inferred_header(&desc, &selected, None, &file.name, &mut plan.warnings);
+    select_description_params(&desc, &mut selected, true, None);
+    record_description(&desc, &selected, &id, &file.name, plan);
     let params = LoadingParams {
-        delimiter: Some(desc.delimiter.to_string()),
-        has_header: Some(true),
+        delimiter: selected
+            .get("delimiter")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        decimal_separator: selected
+            .get("decimal_separator")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        has_header: selected.get("has_header").and_then(Value::as_bool),
         ..Default::default()
     };
+    if params.has_header == Some(false) {
+        desc.is_wavelength_header = false;
+    }
     let mut source = Map::new();
     source.insert("id".into(), json!(id));
     source.insert("input".into(), json!(file.name));
-    source.insert(
-        "params".into(),
-        json!({"delimiter": desc.delimiter.to_string(), "has_header": true}),
-    );
+    source.insert("params".into(), Value::Object(selected));
 
     let Some(table) = read_table_bytes(&file.bytes, &params) else {
         source.insert("role".into(), json!("features"));
-        return Value::Object(source);
+        return Ok(Value::Object(source));
     };
     let profile = table.to_table_profile();
     let guesses = infer_column_roles(&desc, &profile);
@@ -479,7 +500,7 @@ fn provisional_source(file: &NamedBytes, idx: usize) -> Value {
     if let Some(col) = &id_col {
         source.insert("key".into(), json!(col));
     }
-    Value::Object(source)
+    Ok(Value::Object(source))
 }
 
 // --------------------------------------------------------------------------- //
@@ -517,7 +538,7 @@ fn gather_source_facts(
                 .values()
                 .find(|f| file_stem(&f.name) == file_stem(&input))
         }) {
-            tabular_facts(file, src)
+            tabular_facts(file, src, spec_val.get("params"))
         } else if let Some(set) = record_sets.iter().find(|s| {
             !s.records.is_empty()
                 && (s.source == input || file_stem(&s.source) == file_stem(&input))
@@ -538,8 +559,12 @@ fn gather_source_facts(
     facts
 }
 
-fn tabular_facts(file: &NamedBytes, src: &Value) -> (Option<usize>, BTreeSet<String>) {
-    let Some(table) = read_table_bytes(&file.bytes, &params_from(src)) else {
+fn tabular_facts(
+    file: &NamedBytes,
+    src: &Value,
+    global: Option<&Value>,
+) -> (Option<usize>, BTreeSet<String>) {
+    let Some(table) = read_table_bytes(&file.bytes, &params_from(src, global)) else {
         return (None, BTreeSet::new());
     };
     let profile = table.to_table_profile();
@@ -580,7 +605,13 @@ enum LockOutcome {
     Unresolved(String),
 }
 
-fn apply_lock(spec_val: &mut Value, lock: &ConfirmedLock) -> LockOutcome {
+fn apply_lock(
+    spec_val: &mut Value,
+    lock: &ConfirmedLock,
+    by_name: &BTreeMap<String, &NamedBytes>,
+    columns: &[Value],
+    record_sets: &[DecodedRecordSet],
+) -> LockOutcome {
     let Some(kind) = ProposalKind::from_str(&lock.kind) else {
         return LockOutcome::Unresolved(format!("unknown lock kind '{}'", lock.kind));
     };
@@ -589,7 +620,9 @@ fn apply_lock(spec_val: &mut Value, lock: &ConfirmedLock) -> LockOutcome {
         ProposalKind::Partition => {
             set_source_field(spec_val, &lock.target, "partition", lock.value.clone())
         }
-        ProposalKind::Identity => apply_identity_lock(spec_val, lock),
+        ProposalKind::Identity => {
+            apply_identity_lock(spec_val, lock, by_name, columns, record_sets)
+        }
         ProposalKind::Pairing => apply_pairing_lock(spec_val, lock),
         ProposalKind::SignalType => apply_signal_lock(spec_val, lock),
         ProposalKind::TaskType => apply_task_lock(spec_val, lock),
@@ -640,7 +673,80 @@ fn apply_role_lock(spec_val: &mut Value, lock: &ConfirmedLock) -> LockOutcome {
     LockOutcome::Applied
 }
 
-fn apply_identity_lock(spec_val: &mut Value, lock: &ConfirmedLock) -> LockOutcome {
+/// Prove a source key against every input, independently of uniqueness guesses.
+fn source_has_identity_column(
+    spec_val: &Value,
+    source: &Value,
+    col: &str,
+    by_name: &BTreeMap<String, &NamedBytes>,
+    columns: &[Value],
+    record_sets: &[DecodedRecordSet],
+) -> Result<bool, String> {
+    let inputs = source_input_keys(source);
+    if inputs.is_empty()
+        || source["input"]
+            .as_array()
+            .is_some_and(|items| items.len() != inputs.len())
+    {
+        return Err("identity lock has no named input column facts".into());
+    }
+    let global = LoadingParams::from_value(spec_val.get("params")).map_err(|e| e.message)?;
+    let local = LoadingParams::from_value(source.get("params")).map_err(|e| e.message)?;
+    let mut params = crate::materialize::effective_params(&global, &local);
+    // Column inspection must retain the original table, without executing its
+    // role-specific NA strategy (the same boundary as describe_tables).
+    params.na.policy = crate::spec::enums::NaPolicy::Ignore;
+    let mut present_in_all = true;
+    for input in inputs {
+        let mut decoded = record_sets.iter().filter(|set| set.source == input);
+        let decoded_set = decoded.next();
+        if decoded.next().is_some() {
+            return Err(format!(
+                "identity lock needs unambiguous owner column facts for input '{input}'"
+            ));
+        }
+        // Browser inference keeps raw + decoded representations. Assembly
+        // selects vendor Records, but retains Bytes for delimited-text tables
+        // (web/app.js::assemblyInputsForIo). Records-only inputs stay supported.
+        let use_records = decoded_set.is_some_and(|set| {
+            !by_name.contains_key(&input) || set.format.as_deref() != Some("delimited-text")
+        });
+        let records = columns.iter().find(|entry| {
+            entry["ref"].as_str() == Some(input.as_str()) && entry.get("record_roles").is_some()
+        });
+        let present = match (by_name.get(&input), records, use_records) {
+            (Some(file), _, false) => crate::materialize::read_table_bytes(&file.bytes, &params)
+                .map_err(|e| format!("identity column facts for '{input}': {}", e.message))?
+                .column(col)
+                .is_some(),
+            (_, Some(entry), true) => {
+                // These bare metadata/target names are facts from the existing
+                // decoded-record inference, matching records_to_frame. Spectral
+                // axis hints and dotted diagnostic paths are not column facts.
+                ["metadata", "targets"].iter().any(|role| {
+                    entry["record_roles"][*role]
+                        .as_array()
+                        .is_some_and(|names| names.iter().any(|name| name.as_str() == Some(col)))
+                })
+            }
+            _ => {
+                return Err(format!(
+                    "identity lock needs unambiguous owner column facts for input '{input}'"
+                ));
+            }
+        };
+        present_in_all &= present;
+    }
+    Ok(present_in_all)
+}
+
+fn apply_identity_lock(
+    spec_val: &mut Value,
+    lock: &ConfirmedLock,
+    by_name: &BTreeMap<String, &NamedBytes>,
+    columns: &[Value],
+    record_sets: &[DecodedRecordSet],
+) -> LockOutcome {
     let sample_index = match &lock.value {
         Value::String(col) => json!({"by": "id", "key": col}),
         Value::Object(_) => lock.value.clone(),
@@ -650,22 +756,36 @@ fn apply_identity_lock(spec_val: &mut Value, lock: &ConfirmedLock) -> LockOutcom
         .get("key")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let mut keyed_sources = Vec::new();
+    if let Some(col) = &key_col {
+        if let Some(sources) = spec_val.get("sources").and_then(Value::as_array) {
+            for (idx, src) in sources.iter().enumerate() {
+                if matches!(
+                    src.get("role").and_then(Value::as_str),
+                    Some("features") | Some("mixed")
+                ) {
+                    match source_has_identity_column(
+                        spec_val,
+                        src,
+                        col,
+                        by_name,
+                        columns,
+                        record_sets,
+                    ) {
+                        Ok(true) => keyed_sources.push(idx),
+                        Ok(false) => {}
+                        Err(message) => return LockOutcome::Unresolved(message),
+                    }
+                }
+            }
+        }
+    }
     if let Some(obj) = spec_val.as_object_mut() {
         obj.insert("sample_index".into(), sample_index);
     }
     if let Some(col) = key_col {
-        if let Some(sources) = spec_val.get_mut("sources").and_then(Value::as_array_mut) {
-            for src in sources.iter_mut() {
-                let feature_like = matches!(
-                    src.get("role").and_then(Value::as_str),
-                    Some("features") | Some("mixed")
-                );
-                if feature_like {
-                    if let Some(o) = src.as_object_mut() {
-                        o.insert("key".into(), json!(col));
-                    }
-                }
-            }
+        for idx in keyed_sources {
+            spec_val["sources"][idx]["key"] = json!(col);
         }
     }
     LockOutcome::Applied

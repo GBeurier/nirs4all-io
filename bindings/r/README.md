@@ -34,7 +34,7 @@ internally with `jsonlite` and the result is parsed back into a typed S3 object.
 | Function | Signature | Returns |
 |---|---|---|
 | `nio_to_spec` | `nio_to_spec(input, conventions = NULL)` | an `n4io_spec` (parsed canonical `DatasetSpec`) |
-| `nio_infer` | `nio_infer(input, conventions = NULL)` | an `n4io_plan` (parsed scored `DatasetPlan`) |
+| `nio_infer` | `nio_infer(input, conventions = NULL, params = NULL, file_params = NULL)` | an `n4io_plan` (parsed scored `DatasetPlan`) |
 | `nio_load` | `nio_load(input, conventions = NULL)` | the parsed assembled structural summary as a list |
 | `nio_validate` | `nio_validate(spec)` | invisibly `TRUE`; informative error if invalid. Accepts an `n4io_spec`, a `list`, or a JSON string |
 | `nio_resolved_spec` | `nio_resolved_spec(plan)` | the editable `n4io_spec` carried in `plan$resolved_spec` |
@@ -49,12 +49,34 @@ a character vector of convention names.
 | Function | Signature | Returns |
 |---|---|---|
 | `n4io_to_spec` | `n4io_to_spec(input_json, conventions_json = NULL)` | canonical `DatasetSpec` as a JSON string |
-| `n4io_infer` | `n4io_infer(input_json, conventions_json = NULL)` | scored `DatasetPlan` as a JSON string |
+| `n4io_infer` | `n4io_infer(input_json, options_json = NULL)` | scored `DatasetPlan` as a JSON string |
 | `n4io_load_summary` | `n4io_load_summary(input_json, conventions_json = NULL)` | assembled structural summary as a JSON string |
 | `n4io_validate` | `n4io_validate(spec_json)` | `invisible(NULL)`; raises an R error if the spec is invalid |
 | `n4io_abi_version` | `n4io_abi_version()` | the C ABI version string |
 
 `conventions_json`, when supplied, is a JSON array of convention names.
+For `infer`, `options_json` is instead `NULL` or an `InferOptions` JSON object
+with optional `conventions` (array), `params` (object), and `file_params` (object).
+An array is rejected. `to_spec` and `load_summary` retain conventions arrays.
+
+The idiomatic inference wrapper accepts named parameter lists. File choices
+override global `params` before the first read. Keys are exact input refs:
+basenames for file inputs/lists, relative paths for directory inputs. Unknown
+keys are refused; punctuation in keys is preserved.
+
+```r
+plan <- nio_infer("/data/noheader.csv", conventions = "nirs4all-classic",
+                  params = list(has_header = TRUE),
+                  file_params = list("noheader.csv" = list(has_header = FALSE)))
+summary <- nio_load(nio_resolved_spec(plan))
+n4io_infer('"/data/noheader.csv"',
+           '{"conventions":["nirs4all-classic"],"params":{"has_header":false}}')
+```
+
+Without a declared header choice, an unrecognized ambiguous header defaults to
+true and the plan carries a `header_ambiguous` warning. Declare false for a
+headerless table. The assembled summary rounds numeric values to four decimals;
+it does not expose their original precision.
 
 ## Low-level inputs cross as JSON values
 

@@ -17,7 +17,8 @@ pub mod limits;
 pub mod loaders;
 
 pub use assemble::{
-    assemble, assemble_with_limits, AssembledDataset, FoldProvenance, IdentityProvenance,
+    assemble, assemble_with_limits, assemble_with_limits_and_storage, assemble_with_storage,
+    package_with_limits_and_storage, AssembledDataset, FoldProvenance, IdentityProvenance,
     PartitionBlock, ASSEMBLED_DATASET_VERSION,
 };
 pub use folds::{parse_fold_file, Fold};
@@ -25,3 +26,8 @@ pub use frame::{Cell, Column, Frame, Matrix};
 pub use join::{concat_features, concat_samples, join_tables, merge_by_key, JoinAudit};
 pub use limits::LoadLimits;
 pub use loaders::{effective_params, read_table, LoadedTable};
+
+pub use nirs4all_io_core::materialize::{
+    DatasetPackage, ExecutedProjectionIdentityV1, NumericStorage, NumericStorageOptions,
+    PrecisionOrigin, PrecisionRecord, DATASET_PACKAGE_VERSION, EXECUTED_PROJECTION_PROFILE,
+};

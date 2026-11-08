@@ -1,0 +1,86 @@
+{
+  "status": "source_only_unexecuted_proposal",
+  "source": "nirs4all-quality/app/scripts/dataset-smoke.mjs",
+  "files": [
+    {
+      "name": "Xtrain.csv",
+      "text": "1000,1100,1200\n0.200,0.400,0.300\n0.210,0.415,0.320\n0.220,0.430,0.340\n0.230,0.445,0.360\n0.240,0.460,0.380\n0.250,0.475,0.400\n0.260,0.490,0.420\n0.270,0.505,0.440\n0.280,0.520,0.460\n0.290,0.535,0.480\n0.300,0.550,0.500\n0.310,0.565,0.520"
+    },
+    {
+      "name": "Mtrain.csv",
+      "text": "sample_id,site\nA,site1\nA,site2\nA,site1\nA,site2\nB,site1\nB,site2\nB,site1\nB,site2\nC,site1\nC,site2\nC,site1\nC,site2"
+    },
+    {
+      "name": "Ytrain.csv",
+      "text": "protein\n6.10\n7.30\n8.90"
+    }
+  ],
+  "explicit_user_confirmation": [
+    {"target_file": "Ytrain.csv", "data_row": 0, "sample_id": "A"},
+    {"target_file": "Ytrain.csv", "data_row": 1, "sample_id": "B"},
+    {"target_file": "Ytrain.csv", "data_row": 2, "sample_id": "C"}
+  ],
+  "in_memory_witness": {
+    "name": "Ytrain.confirmed-identities.csv",
+    "text": "sample_id\nA\nB\nC"
+  },
+  "spec": {
+    "schema_version": 1,
+    "name": "quali-explicit-target-identity",
+    "task_type": "regression",
+    "sample_index": {"by": "id", "key": "sample_id"},
+    "repetition": "sample_id",
+    "params": {"delimiter": ",", "has_header": true, "na": {"policy": "ignore"}},
+    "sources": [
+      {
+        "id": "x", "input": "Xtrain.csv", "role": "features",
+        "params": {"header_unit": "nm"},
+        "columns": [{"role": "features", "select": ["1000", "1100", "1200"]}]
+      },
+      {
+        "id": "meta", "input": "Mtrain.csv", "role": "metadata",
+        "join": {"left": "x", "right": "meta", "cardinality": "1:1", "coverage": "complete"}
+      },
+      {
+        "id": "target", "kind": "lookup", "role": "mixed",
+        "input": ["Ytrain.csv", "Ytrain.confirmed-identities.csv"],
+        "merge": "concat_features",
+        "columns": [
+          {"role": "targets", "select": ["protein"]},
+          {"role": "metadata", "select": ["sample_id"]}
+        ],
+        "join": {"left": "x", "right": "target", "left_on": "sample_id", "right_on": "sample_id", "cardinality": "m:1", "coverage": "complete"}
+      }
+    ]
+  },
+  "expected": {
+    "partition_names": ["train"],
+    "n_observation_rows": 12,
+    "n_distinct_samples": 3,
+    "sample_ids_in_physical_row_order": ["A", "A", "A", "A", "B", "B", "B", "B", "C", "C", "C", "C"],
+    "site_in_physical_row_order": ["site1", "site2", "site1", "site2", "site1", "site2", "site1", "site2", "site1", "site2", "site1", "site2"],
+    "feature_headers": [["1000", "1100", "1200"]],
+    "header_units": ["nm"],
+    "y_headers": ["protein"],
+    "x_shape": [12, 3],
+    "x_row_major": [0.200, 0.400, 0.300, 0.210, 0.415, 0.320, 0.220, 0.430, 0.340, 0.230, 0.445, 0.360, 0.240, 0.460, 0.380, 0.250, 0.475, 0.400, 0.260, 0.490, 0.420, 0.270, 0.505, 0.440, 0.280, 0.520, 0.460, 0.290, 0.535, 0.480, 0.300, 0.550, 0.500, 0.310, 0.565, 0.520],
+    "x_validity": [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true],
+    "y_shape": [12, 1],
+    "y_row_major": [6.10, 6.10, 6.10, 6.10, 7.30, 7.30, 7.30, 7.30, 8.90, 8.90, 8.90, 8.90],
+    "y_validity": [true, true, true, true, true, true, true, true, true, true, true, true],
+    "repetition": "sample_id",
+    "identity_sample_id": "sample_id",
+    "identity_observation_id": null,
+    "folds": []
+  },
+  "original_three_file_refusal": {
+    "target_source_replacement": {"id": "target", "role": "targets", "input": "Ytrain.csv"},
+    "message": "source 'target' (3 rows) is not row-aligned with 'x' (12 rows); supply a join key"
+  },
+  "limits": [
+    "The witness is literal explicit user-confirmed evidence, never inferred from metadata or first appearance.",
+    "No original file text contains a terminal newline; preserve the original text bytes.",
+    "No unique scan/observation IDs are declared; positions are fixture references, not identities.",
+    "Assembly-only profile, with no fit, aggregation, DAG handoff, frontend change or runtime qualification claim."
+  ]
+}

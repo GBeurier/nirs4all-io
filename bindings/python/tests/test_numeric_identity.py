@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 """Installed native wheel regressions: identities cross the real file loader."""
+import numpy as np
 import pytest
+from nirs4all_io._adapter import _decode_targets
 
 import nirs4all_io as nio
 
@@ -41,4 +43,5 @@ def test_native_tabular_large_ids_preserve_target_alignment(tmp_path, file_forma
         pq.write_table(pa.table({"sid": pa.array(ids[::-1], type=pa.int64()), "y": [40., 30., 20., 10.]}), right)
     full = nio.assembled_full(_spec(left, right))
     block = next(iter(full["blocks"].values()))
-    assert block["y"] == {"n_rows": 4, "n_cols": 1, "data": [10., 20., 30., 40.]}
+    assert [column["name"] for column in block["y"]["columns"]] == block["y_headers"]
+    np.testing.assert_array_equal(_decode_targets(block["y"])[:, 0], [10., 20., 30., 40.])

@@ -14,6 +14,7 @@ readme.workspace = true
 
 [dependencies]
 nirs4all-io-core.workspace = true
+nirs4all-formats.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -30,8 +31,6 @@ parquet = { version = "60.1.0", default-features = false, features = ["arrow", "
 cap-std = "3"
 same-file = "1"
 bytes = "1"
-calamine = { version = "0.37.0", features = ["dates"] }
-quick-xml = "0.42"
 
 [dev-dependencies]
 serde_json.workspace = true

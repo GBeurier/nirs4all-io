@@ -27,6 +27,14 @@ const OVERRIDE_VOCAB = {
 
 let lastFileKey = "";
 
+// Shared nirs4all-ui islands (local IIFE `Nirs4allUIBrowser`). Each island lives in
+// a dedicated, empty host div that is never written with innerHTML; handles are kept
+// here and unmounted before their host is cleared.
+let pending = 0; // owner cycles in flight; list actions are ignored while > 0
+let sentProposals = null; // the s.proposals array last projected into the list
+let proposalUi = null; // { host, mount, echoes, handle }
+let previewUi = null; // { host, msg, cards, foot, mounts: Map<partition, { el, handle }> }
+
 function state() {
   return APP().state;
 }
@@ -35,11 +43,32 @@ function esc(s) {
   return APP().esc(s);
 }
 
+function sharedUI() {
+  const ui = window.Nirs4allUIBrowser;
+  if (!ui || typeof ui.mountOwnerProposals !== "function" || typeof ui.mountDatasetPreview !== "function") {
+    throw new Error("The shared nirs4all-ui browser bundle is not loaded.");
+  }
+  return ui;
+}
+
 // --------------------------------------------------------------------------- //
 // Propose cycle                                                               //
 // --------------------------------------------------------------------------- //
 
+// Public entry. Counts in-flight cycles so the proposal list shows (and the
+// callbacks enforce) a busy state; overlapping calls are all still executed.
 async function runProposeCycle() {
+  pending += 1;
+  if (state().mode === "builder") renderProposals();
+  try {
+    await proposeCycle();
+  } finally {
+    pending -= 1;
+    if (state().mode === "builder") renderProposals();
+  }
+}
+
+async function proposeCycle() {
   const app = APP();
   const s = state();
   s.builderError = null;
@@ -175,6 +204,8 @@ function removeConfirmed(kind, target) {
 
 function acceptAll() {
   const s = state();
+  // Only the proposals on screen, and never while inputs or the owner are mid-run.
+  if (isBusy() || sentProposals !== s.proposals) return;
   for (const p of s.proposals) {
     upsertConfirmed({ kind: p.kind, target: p.target, value: p.value, status: "confirmed" });
   }
@@ -211,44 +242,97 @@ function valueLabel(p) {
   return String(v);
 }
 
-function proposalCard(p) {
-  const cls = scoreClass(p.score);
-  const score = Number.isFinite(p.score) ? p.score.toFixed(2) : "-";
-  const evidence = (p.evidence || []).join(" ");
-  const alts = (p.alternatives || [])
-    .map(
-      (alt) =>
-        `<button class="alt-chip" type="button" data-action="alt" data-id="${esc(p.id)}" data-alt='${esc(
-          JSON.stringify(alt.value)
-        )}'>${esc(valueLabel({ value: alt.value }))}<span class="alt-score">${(alt.score ?? 0).toFixed(2)}</span></button>`
-    )
-    .join("");
+// Known kinds first (KIND_ORDER), unknown kinds appended in the owner's order. The
+// sort is stable, so the owner's order is kept within a kind. Nothing is dropped.
+function orderByKind(proposals) {
+  const rank = (kind) => {
+    const i = KIND_ORDER.indexOf(kind);
+    return i < 0 ? KIND_ORDER.length : i;
+  };
+  return [...proposals].sort((a, b) => rank(a.kind) - rank(b.kind));
+}
+
+// Presentation-only projection of one owner proposal. Alternatives are identified by
+// their index in the owner's list; override choices carry the host vocabulary string.
+// The original owner values never travel through the UI: callbacks look them up again
+// in the latest s.proposals (see currentProposal).
+function projectProposal(p) {
+  const display = {
+    id: p.id,
+    kind: p.kind,
+    target: p.target,
+    valueLabel: valueLabel(p),
+    kindLabel: KIND_LABEL[p.kind] || p.kind,
+    score: Number.isFinite(p.score) ? p.score : null,
+    scoreClassName: `pill ${scoreClass(p.score)}`.trim(),
+    ambiguous: Boolean(p.ambiguous),
+    alternatives: (p.alternatives || []).map((alt, index) => ({
+      choiceId: String(index),
+      label: valueLabel({ value: alt.value }),
+      score: Number.isFinite(alt.score) ? alt.score : null,
+    })),
+  };
+  if (Array.isArray(p.evidence) && p.evidence.length) display.evidence = p.evidence.map(String);
   const vocab = OVERRIDE_VOCAB[p.kind];
-  const override = vocab
-    ? `<label class="override">override
-        <select data-action="override" data-id="${esc(p.id)}">
-          ${["", ...vocab]
-            .map(
-              (opt) =>
-                `<option value="${esc(opt)}"${opt === p.value ? " selected" : ""}>${opt || "pick…"}</option>`
-            )
-            .join("")}
-        </select></label>`
-    : "";
-  return `
-    <article class="proposal-card ${cls}${p.ambiguous ? " ambiguous" : ""}">
-      <div class="proposal-head">
-        <span class="proposal-title">${esc(KIND_LABEL[p.kind] || p.kind)} · <strong>${esc(p.target)}</strong></span>
-        <span class="pill ${cls}">${score}${p.ambiguous ? " ?" : ""}</span>
-      </div>
-      <div class="proposal-value">${esc(valueLabel(p))}</div>
-      ${evidence ? `<p class="proposal-why">${esc(evidence)}</p>` : ""}
-      ${alts ? `<div class="proposal-alts">${alts}</div>` : ""}
-      <div class="proposal-actions">
-        ${override}
-        <button class="primary compact" type="button" data-action="accept" data-id="${esc(p.id)}">Confirm</button>
-      </div>
-    </article>`;
+  if (vocab) display.overrideChoices = vocab.map((opt) => ({ choiceId: opt, label: opt, value: opt }));
+  return display;
+}
+
+// The owner proposal a list action refers to, or null when the action must be
+// ignored: an owner cycle is running, or the list on screen no longer shows the
+// latest s.proposals array (sources changed since it was projected).
+function currentProposal(id) {
+  const s = state();
+  if (isBusy() || sentProposals !== s.proposals) return null;
+  return s.proposals.find((x) => x.id === id) || null;
+}
+
+// Decision actions are refused while an owner cycle runs or while the bound input files
+// are changing (state.inputBusy, set by app.js before any byte is read).
+function isBusy() {
+  return pending > 0 || state().inputBusy > 0;
+}
+
+function onConfirm(id) {
+  const p = currentProposal(id);
+  if (!p) return;
+  upsertConfirmed({ kind: p.kind, target: p.target, value: p.value, status: "confirmed" });
+  runProposeCycle();
+}
+
+function onAlternative(id, choiceId) {
+  const p = currentProposal(id);
+  const index = Number(choiceId);
+  const alt = p && Number.isInteger(index) && String(index) === choiceId ? (p.alternatives || [])[index] : null;
+  if (!alt) return;
+  upsertConfirmed({ kind: p.kind, target: p.target, value: alt.value, status: "overridden" });
+  runProposeCycle();
+}
+
+function onOverride(id, value) {
+  const p = currentProposal(id);
+  if (!p || !(OVERRIDE_VOCAB[p.kind] || []).includes(value)) return;
+  upsertConfirmed({ kind: p.kind, target: p.target, value, status: "overridden" });
+  runProposeCycle();
+}
+
+function onEchoClick(event) {
+  const el = event.target.closest('[data-action="undo"]');
+  if (!el || isBusy() || sentProposals !== state().proposals) return;
+  removeConfirmed(el.dataset.kind, el.dataset.target);
+  runProposeCycle();
+}
+
+function ensureProposalDom(host) {
+  if (proposalUi && proposalUi.host === host) return proposalUi;
+  const mount = document.createElement("div");
+  mount.dataset.mount = "owner-proposals";
+  const echoes = document.createElement("div");
+  echoes.dataset.role = "confirmed-echoes";
+  echoes.addEventListener("click", onEchoClick);
+  host.replaceChildren(mount, echoes);
+  proposalUi = { host, mount, echoes, handle: null };
+  return proposalUi;
 }
 
 function renderProposals() {
@@ -262,34 +346,34 @@ function renderProposals() {
   }
   if (!host) return;
 
-  if (s.builderError) {
-    host.innerHTML = `<div class="empty err">${esc(s.builderError)}</div>`;
-    return;
-  }
-  if (!s.proposals.length && !s.confirmedEchoes.length) {
-    host.innerHTML = `<div class="empty">Add files to see decisions to validate.</div>`;
-    return;
-  }
+  const ui = ensureProposalDom(host);
+  const props = {
+    proposals: orderByKind(s.proposals).map(projectProposal),
+    busy: isBusy(),
+    error: s.builderError || null,
+    emptyMessage: s.builderError
+      ? ""
+      : s.inputBusy > 0
+        ? "Input files are changing: decisions are proposed again once decoding has finished."
+        : s.confirmedEchoes.length
+        ? "All decisions confirmed — review the materialized preview below."
+        : "Add files to see decisions to validate.",
+    onConfirm,
+    onAlternative,
+    onOverride,
+  };
+  sentProposals = s.proposals;
+  const acceptAllButton = document.querySelector("#acceptAll");
+  if (acceptAllButton) acceptAllButton.disabled = props.busy;
+  if (ui.handle) ui.handle.update(props);
+  else ui.handle = sharedUI().mountOwnerProposals(ui.mount, props);
 
-  const byKind = new Map();
-  for (const p of s.proposals) {
-    if (!byKind.has(p.kind)) byKind.set(p.kind, []);
-    byKind.get(p.kind).push(p);
+  // Confirmed echoes (with their undo links) stay host DOM, outside the island.
+  if (!s.confirmedEchoes.length) {
+    ui.echoes.replaceChildren();
+    return;
   }
-  let html = "";
-  for (const kind of KIND_ORDER) {
-    const group = byKind.get(kind);
-    if (!group || !group.length) continue;
-    html += `<div class="proposal-group">
-      <div class="proposal-group-title">${esc(KIND_LABEL[kind] || kind)}</div>
-      ${group.map(proposalCard).join("")}
-    </div>`;
-  }
-  if (!s.proposals.length) {
-    html += `<div class="empty ok">All decisions confirmed — review the materialized preview below.</div>`;
-  }
-  if (s.confirmedEchoes.length) {
-    html += `<details class="confirmed-list"><summary>Confirmed (${s.confirmedEchoes.length})</summary>
+  ui.echoes.innerHTML = `<details class="confirmed-list"><summary>Confirmed (${s.confirmedEchoes.length})</summary>
       ${s.confirmedEchoes
         .map(
           (p) =>
@@ -301,8 +385,6 @@ function renderProposals() {
         )
         .join("")}
     </details>`;
-  }
-  host.innerHTML = html;
 }
 
 function renderSteps() {
@@ -354,81 +436,134 @@ function renderDatasetSoFar() {
   host.innerHTML = rows + split + folds;
 }
 
+// Card view for one assembled partition block, passed as `view` only (the card's
+// `dataset` input would word counts as "samples"). `n_samples` is the owner's row
+// count (observations); per-source `n_cols` come straight from the owner matrices.
+// Nothing here decodes feature_axes or alters the owner result.
+function blockView(part, block, assembled) {
+  const num = (n) => APP().fmtInt(Number(n));
+  const sources = (block.x || []).map((matrix, index) => ({
+    id: block.source_ids?.[index] ?? `source ${index + 1}`,
+    cols: Number(matrix.n_cols) || 0,
+  }));
+  const xCols = sources.reduce((sum, source) => sum + source.cols, 0);
+  const rows = Number(block.n_samples);
+  const yCols = block.y ? Number(block.y.columns.length) : null;
+  const metaCols = block.metadata?.columns?.length || 0;
+  const task = typeof assembled.task_type === "string" && assembled.task_type ? assembled.task_type : null;
+  const stats = [
+    { id: "samples", label: "Rows", value: num(rows), detail: "observations, not unique samples", tone: "default" },
+    {
+      id: "features",
+      label: "X columns",
+      value: num(xCols),
+      detail: sources.length ? sources.map((source) => `${source.id}: ${num(source.cols)}`).join(" · ") : null,
+      tone: "default",
+    },
+  ];
+  if (yCols !== null) {
+    stats.push({ id: "targets", label: "y columns", value: num(yCols), detail: (block.y_headers || []).join(", ") || null, tone: "default" });
+  }
+  const badges = [{ id: "partition", label: part, tone: "muted" }];
+  if (task) badges.push({ id: "task", label: task, tone: "default" });
+  return {
+    id: `partition-${part}`,
+    title: part,
+    description: [yCols === null ? "no y" : null, metaCols ? `${num(metaCols)} metadata column${metaCols === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || null,
+    taskKind: "unknown",
+    taskLabel: task || "Task not declared",
+    sampleCount: Number.isFinite(rows) ? rows : null,
+    sampleCountLabel: Number.isFinite(rows) ? `${num(rows)} rows` : null,
+    featureCount: xCols,
+    featureCountLabel: `${num(xCols)} columns`,
+    targetCount: yCols,
+    targetCountLabel: yCols === null ? null : `${num(yCols)} columns`,
+    classCount: null,
+    classCountLabel: null,
+    spectralRangeLabel: null,
+    splitCounts: [],
+    splitSummaryLabel: null,
+    tags: [],
+    badges,
+    stats,
+  };
+}
+
+function ensurePreviewDom(host) {
+  if (previewUi && previewUi.host === host) return previewUi;
+  const msg = document.createElement("div");
+  msg.style.gridColumn = "1 / -1";
+  const cards = document.createElement("div"); // holds one dedicated mount div per partition
+  cards.style.display = "contents";
+  const foot = document.createElement("div"); // host-rendered footers
+  foot.style.display = "contents";
+  host.replaceChildren(msg, cards, foot);
+  previewUi = { host, msg, cards, foot, mounts: new Map() };
+  return previewUi;
+}
+
+function releasePreviewCards(ui) {
+  for (const { el, handle } of ui.mounts.values()) {
+    handle.unmount();
+    el.remove();
+  }
+  ui.mounts.clear();
+}
+
 function renderPreview() {
   const host = document.querySelector("#materializePreview");
   if (!host) return;
   const s = state();
-  if (s.assembleError) {
-    host.innerHTML = `<div class="empty warn">Not materializable yet: ${esc(s.assembleError)}</div>`;
-    return;
-  }
+  const ui = ensurePreviewDom(host);
+  const message = (cls, text) => {
+    releasePreviewCards(ui);
+    ui.foot.replaceChildren();
+    ui.msg.className = cls;
+    ui.msg.textContent = text;
+    ui.msg.hidden = false;
+  };
+  if (s.assembleError) return message("empty warn", `Not materializable yet: ${s.assembleError}`);
   const a = s.assembled;
-  if (!a || !a.blocks) {
-    host.innerHTML = `<div class="empty">Confirm the open decisions to preview the assembled dataset.</div>`;
-    return;
+  if (!a || !a.blocks) return message("empty", "Confirm the open decisions to preview the assembled dataset.");
+
+  ui.msg.hidden = true;
+  const parts = Object.keys(a.blocks);
+  // Drop cards of partitions that disappeared (unmount before removing the host div).
+  for (const [part, mount] of [...ui.mounts]) {
+    if (parts.includes(part)) continue;
+    mount.handle.unmount();
+    mount.el.remove();
+    ui.mounts.delete(part);
   }
-  const num = (n) => APP().fmtInt(Number(n));
-  const blocks = Object.entries(a.blocks)
-    .map(([part, block]) => {
-      const xCols = (block.x || []).reduce((sum, m) => sum + (Number(m.n_cols) || 0), 0);
-      const ySummary = block.y ? `y[${num(block.y.n_rows)}×${num(block.y.n_cols)}]` : "no y";
-      const meta = block.metadata?.columns?.length ? ` · meta ${num(block.metadata.columns.length)}` : "";
-      return `<div class="preview-block">
-        <div class="preview-part">${esc(part)}</div>
-        <div class="preview-stat"><strong>${num(block.n_samples)}</strong> samples</div>
-        <div class="preview-stat">X[${num(block.n_samples)}×${num(xCols)}]</div>
-        <div class="preview-stat">${esc(ySummary)}${esc(meta)}</div>
-      </div>`;
-    })
-    .join("");
+  for (const part of parts) {
+    const props = { view: blockView(part, a.blocks[part], a) };
+    const mount = ui.mounts.get(part);
+    if (mount) {
+      mount.handle.update(props);
+    } else {
+      const el = document.createElement("div");
+      el.dataset.partition = part;
+      ui.cards.appendChild(el);
+      ui.mounts.set(part, { el, handle: sharedUI().mountDatasetPreview(el, props) });
+    }
+    ui.cards.appendChild(ui.mounts.get(part).el); // keep owner partition order
+  }
+
   const folds = (a.folds || []).length ? `<div class="preview-foot">${a.folds.length} fold(s)</div>` : "";
   const missing = APP().missingValueSummary(a).map((item) =>
     `<div class="preview-foot">${esc(`${item.partition} · ${item.label}: ${item.rows.length} of ${item.total} samples missing (${APP().missingRowsLabel(item.rows)})`)}</div>`).join("");
   const refused = a.naAbort ? `<div class="preview-foot">Missing values are kept for the preview; the current NA policy refuses them when loading.</div>` : "";
-  host.innerHTML = blocks + folds + refused + missing;
+  ui.foot.innerHTML = folds + refused + missing;
 }
 
 // --------------------------------------------------------------------------- //
 // Events                                                                      //
 // --------------------------------------------------------------------------- //
 
-function onProposalClick(event) {
-  const el = event.target.closest("[data-action]");
-  if (!el) return;
-  const action = el.dataset.action;
-  const s = state();
-  if (action === "accept" || action === "alt") {
-    const p = s.proposals.find((x) => x.id === el.dataset.id);
-    if (!p) return;
-    let value = p.value;
-    if (action === "alt") {
-      try {
-        value = JSON.parse(el.dataset.alt);
-      } catch (_) {
-        return;
-      }
-    }
-    upsertConfirmed({ kind: p.kind, target: p.target, value, status: action === "alt" ? "overridden" : "confirmed" });
-    runProposeCycle();
-  } else if (action === "undo") {
-    removeConfirmed(el.dataset.kind, el.dataset.target);
-    runProposeCycle();
-  }
-}
-
-function onProposalChange(event) {
-  const el = event.target.closest('[data-action="override"]');
-  if (!el || !el.value) return;
-  const s = state();
-  const p = s.proposals.find((x) => x.id === el.dataset.id);
-  if (!p) return;
-  upsertConfirmed({ kind: p.kind, target: p.target, value: el.value, status: "overridden" });
-  runProposeCycle();
-}
-
+// List actions (confirm / alternative / override) arrive as callbacks of the shared
+// proposal list; the confirmed-echo undo link has its own listener on its own host
+// div (see ensureProposalDom), so no delegated listener overlaps the island.
 function wire() {
-  document.querySelector("#proposalGroups")?.addEventListener("click", onProposalClick);
-  document.querySelector("#proposalGroups")?.addEventListener("change", onProposalChange);
   document.querySelector("#acceptAll")?.addEventListener("click", acceptAll);
 }
 

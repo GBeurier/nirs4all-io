@@ -3,16 +3,20 @@
 
 This gate proves a deliberately bounded claim: Rust, Python, WASM, R,
 MATLAB/Octave, and the direct C ABI all invoke the same Rust assembly engine for
-the public assembled-summary-v2 contract. It does not claim that every host has
+the public assembled-summary-v3 contract. It does not claim that every host has
 Python's richer `SpectroDataset` adapter or that materialized arrays cross the
-v0 C ABI.
+C ABI (currently 0.3).
 
 The frozen corpus under `tests/cross_binding/corpus/` includes explicit sample,
 observation, repetition, group, source, partition, and fold identity. Every
 binding must reproduce `identity.expected.canonical` byte-for-byte. That golden
 is also checked structurally so an accidental removal of an identity axis cannot
-be hidden by updating only the comparison harness. The existing DATA schema,
-canonical JSON, and assembled-summary version remain unchanged.
+be hidden by updating only the comparison harness. The profile ID `IO-XLG-001`,
+report `schema_version: 1`, DATA schema and canonical JSON are versioned
+independently of the assembled artifact. The golden and report `contract` name
+assembled summary version 3. That summary is a rounded structural fingerprint;
+it does not cover the exact bytes, masks, precision or axes of the full v3
+payload, which are qualified separately.
 
 Run the strict gate:
 
@@ -66,4 +70,5 @@ node bindings/wasm/tests/node_smoke.cjs
 It must print `wasm node smoke OK`. The dedicated cross-binding runner also
 calls the pre-existing `assembleDataset` and the canonical `loadSummary` over
 the same rich fixture, and refuses unless identity, fold provenance, and
-per-block source ids agree.
+per-block source ids agree. This comparison does not qualify the WASM
+typed-array view or its masks, which need separate stage4 qualification.

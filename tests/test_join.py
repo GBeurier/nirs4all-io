@@ -158,3 +158,29 @@ def test_merge_by_key_three_frames():
     out, _ = merge_by_key([a, b, c], ["a", "b", "c"], key="id")
     assert set(out.columns) == {"id", "a", "b", "c"}
     assert len(out) == 3
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_concat_generated_names_are_checked_per_column(reverse):
+    anchor = pd.DataFrame({"0": [100, 200]})
+    other = pd.DataFrame({"0": [10, 20], "b__0": [11, 21]})
+    if reverse:
+        other = other[["b__0", "0"]]
+        with pytest.raises(JoinError, match="source 'b'.*column '0'.*'b__0'"):
+            concat_features([anchor, other], ["anchor", "b"])
+    else:
+        result, _ = concat_features([anchor, other], ["anchor", "b"])
+        assert list(result) == ["0", "b__0", "b__b__0"]
+        assert result.values.tolist() == [[100, 10, 11], [200, 20, 21]]
+
+
+@pytest.mark.parametrize("right_literal", [False, True])
+def test_keyed_join_generated_names_refuse_before_output(right_literal):
+    left = pd.DataFrame({"id": ["s1", "s2"], "a": [1, 2]})
+    right = pd.DataFrame({"id": ["s1", "s2"], "a": [70, 80]})
+    if right_literal:
+        right["a__y"] = [90, 100]
+    else:
+        left["a__y"] = [10, 20]
+    with pytest.raises(JoinError, match="source 'y'.*duplicate output column 'a__y'"):
+        join_tables(left, right, left_on="id", right_on="id", cardinality=Cardinality.ONE_TO_ONE, coverage=Coverage.COMPLETE, right_name="y")

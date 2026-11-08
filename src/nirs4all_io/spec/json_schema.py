@@ -4,7 +4,7 @@
 The dataclass IR + :func:`validate_spec` are the runtime authority; this JSON
 Schema is the **portable wire contract** (shared verbatim with the Rust core,
 cross-language gate 6.4). It enforces the closed vocabularies and the
-source/join structure; it is lenient about extra keys (the IR ignores unknowns).
+source/join structure; partitions use a closed key set, while other IR objects remain lenient about extra keys.
 """
 
 from __future__ import annotations
@@ -89,13 +89,14 @@ DATASET_SPEC_SCHEMA: dict[str, Any] = {
         },
         "partitions": {
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "by": {"enum": ["files", "column", "index", "index_file"]},
                 "column": {"type": "string"},
-                "train_values": {"type": "array"}, "test_values": {"type": "array"}, "predict_values": {"type": "array"},
+                "train_values": {"type": "array"}, "test_values": {"type": "array"}, "val_values": {"type": "array"}, "predict_values": {"type": "array"},
                 "unknown_policy": {"enum": ["train", "test", "drop", "error"]},
-                "train": {}, "test": {}, "predict": {},
-                "train_file": {"type": "string"}, "test_file": {"type": "string"}, "predict_file": {"type": "string"},
+                "train": {}, "test": {}, "val": {}, "predict": {},
+                "train_file": {"type": "string"}, "test_file": {"type": "string"}, "val_file": {"type": "string"}, "predict_file": {"type": "string"},
             },
         },
         "folds": {"type": "object", "properties": {"inline": {"type": "array"}, "file": {"type": "string"}, "format": {"enum": ["auto", "csv", "json", "yaml", "txt"]}, "column": {"type": "string"}}},

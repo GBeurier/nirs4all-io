@@ -105,3 +105,30 @@ when those directories exist, groups known sidecars, and checks that every case
 is either loaded into a valid `DatasetSpec` or refused explicitly by the UI. Set
 `NIRS4ALL_ALL_SAMPLES_STRICT=1` to make decode refusals fail, and
 `NIRS4ALL_ALL_SAMPLES_LIMIT=<n>` for a quick partial run.
+
+## Dataset Builder page (`dataset-builder.html`)
+
+A second page for **delimited text tables** (`.csv`, `.tsv`, `.txt`, `.dat`), served only (it needs the
+vendored `pkg/io`, not a standalone build). The nirs4all-io WASM owner does the work: `describeTables`
+(column list read exactly as the assembler reads it), `proposeDataset` with confirmed locks,
+`validate`/`to_spec`, `assembleDataset`. The page keeps the original bytes and the complete owner
+results, and the exported file is the owner-validated canonical `DatasetSpec`.
+
+- **Column table.** Roles come from the owner's literal specification (owner guesses are labelled); your
+  changes are written as `sources[].columns`/`role`, identity and pairing locks, `partitions`,
+  `repetition`/`sample_index.repetition_id`/`group_id`, and `params`. The owner validates the result.
+- **Missing values.** Only the owner vocabulary is offered (`auto`, `abort`, `remove_sample`,
+  `remove_feature`, `ignore`, `replace` with a numeric value). The owner refuses cross-sample
+  statistical fills (mean, median) and admits forward/backward fill within a sample; neither is offered here. When the owner aborts on missing data the preview is materialized with missing
+  values kept and labelled; the exported specification keeps your policy. Ignored columns are not exempt
+  from `abort`.
+- **Refusals.** Every selected file is kept whatever its name (extensionless tables included); the owner's
+  `describeTables` decides readability. A file the owner cannot read is listed with the owner's refusal, is
+  never passed to `proposeDataset`/`assembleDataset`, and blocks export until removed. The owner reads any
+  bytes as delimited text and refuses only on reader errors, so vendor binary formats are not reliably
+  rejected here: use the main builder for them.
+- **Build.** `node build-dataset-builder.mjs --tgz <accepted nirs4all-ui .1 package> --node-modules <dir>`
+  verifies the package digest and writes `vendor/ui-columns/`. Smoke: `node tests/dataset-builder-smoke.mjs`.
+- **Known limits.** `proposeDataset` takes no parsing parameters, so proposals for a file whose delimiter you
+  chose are computed without it (the page says so). `file://` is not supported for this page. Google Fonts
+  and GoatCounter are optional network requests.

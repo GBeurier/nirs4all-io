@@ -2,6 +2,10 @@
 //! `to_dag_ml_data`: build a dag-ml-data `CoordinatorDataPlanEnvelope` from a
 //! nirs4all-io [`AssembledDataset`] (EPIC 10, D-R8, ADR-0001).
 //!
+//! The library depends directly on the pure `nirs4all-io-core`. The default
+//! `cli` feature enables the file-IO facade and `emit-dagml` binary; portable
+//! callers can disable default features.
+//!
 //! io owns the assembled → envelope bridge. It maps the `AssembledDataset` onto a
 //! `DatasetSchema` (+ `SourceDescriptor`/`RepresentationSpec`/`AxisSpec`;
 //! nm→`Wavelength`, cm⁻¹→`Frequency`; signal_type→`tags`), a minimal `DataPlan`,
@@ -34,11 +38,11 @@ use dag_ml_data::{
     REPRESENTATION_FEATURE_BLOCK_SET, REPRESENTATION_SAMPLE_METADATA,
 };
 use dag_ml_data_provider::{DagMlDataProvider, InMemoryProvider};
-use nirs4all_io::core::infer::{ColDtype, NumericKind};
-pub use nirs4all_io::core::materialize::package::DatasetPackage;
-use nirs4all_io::core::materialize::package::PayloadBlock;
-use nirs4all_io::core::spec::SpecError;
-use nirs4all_io::materialize::{AssembledDataset, Cell, PartitionBlock};
+use nirs4all_io_core::infer::{ColDtype, NumericKind};
+pub use nirs4all_io_core::materialize::package::DatasetPackage;
+use nirs4all_io_core::materialize::package::PayloadBlock;
+use nirs4all_io_core::spec::SpecError;
+use nirs4all_io_core::materialize::{AssembledDataset, Cell, PartitionBlock};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -334,6 +338,14 @@ pub fn methods_pls_predict_cohort(
                 "cannot emit Methods PLS PREDICT cohort: partition `{partition}` has no source `{source_id}`"
             ))
         })?;
+    if block.weights.is_some()
+        || block
+            .processings
+            .get(source_index)
+            .is_some_and(|processings| !processings.is_empty())
+    {
+        return Err(SpecError::new("cannot emit Methods PLS PREDICT cohort: weights/processings require an explicitly supported execution operation"));
+    }
     let matrix = &block.x[source_index];
     if matrix.n_rows != block.n_samples {
         return Err(SpecError::new(format!(
@@ -357,11 +369,12 @@ pub fn methods_pls_predict_cohort(
             "cannot emit Methods PLS PREDICT cohort: duplicate sample identities",
         ));
     }
-    let values = matrix
-        .data
-        .iter()
-        .map(|value| f64::from(*value))
-        .collect::<Vec<_>>();
+    if matrix.validity.len() != matrix.data.len() || matrix.validity.iter().any(|valid| !valid) {
+        return Err(SpecError::new(
+            "cannot emit Methods PLS PREDICT cohort: selected feature matrix is masked",
+        ));
+    }
+    let values = matrix.data.clone();
     let data_content_fingerprint =
         methods_pls_predict_content_fingerprint(matrix.n_rows, matrix.n_cols, &values)?;
     Ok(MethodsPlsPredictCohort {
@@ -478,7 +491,12 @@ fn collect_identity_rows(
                 });
             }
             for (row, weight) in weights.iter().enumerate() {
-                if !weight.is_finite() {
+                if !weight.is_finite()
+                    || block
+                        .weights_validity
+                        .as_ref()
+                        .is_some_and(|validity| validity.get(row).copied() != Some(true))
+                {
                     return Err(DagMlPreflightError::NonFiniteWeight {
                         partition: partition.clone(),
                         row,
@@ -752,19 +770,30 @@ fn target_matrix_representation(
 
 fn target_is_categorical(
     assembled: &AssembledDataset,
-    first_block: &nirs4all_io::core::materialize::PartitionBlock,
+    first_block: &nirs4all_io_core::materialize::PartitionBlock,
     header: &str,
 ) -> bool {
     first_block.y_categorical.contains_key(header)
-        || matches!(assembled.task_type.as_str(), "binary" | "multiclass")
+        || matches!(
+            assembled.task_type.as_str(),
+            "classification" | "binary" | "multiclass"
+        )
 }
 
 fn emit_target_specs(
     assembled: &AssembledDataset,
     n_samples: usize,
-    first_block: &nirs4all_io::core::materialize::PartitionBlock,
+    first_block: &nirs4all_io_core::materialize::PartitionBlock,
     headers: &[String],
 ) -> Result<BTreeMap<TargetId, RepresentationSpec>, SpecError> {
+    let mut derived = BTreeSet::new();
+    for (i, header) in headers.iter().enumerate() {
+        if !derived.insert(sanitize(header, &format!("target{i}"))) {
+            return Err(SpecError::new(
+                "derived target ID collision before target map insertion",
+            ));
+        }
+    }
     let mut targets = BTreeMap::new();
     if headers.is_empty() {
         return Ok(targets);
@@ -798,7 +827,7 @@ fn emit_target_specs(
 }
 
 fn metadata_value_kind(
-    column: &nirs4all_io::core::materialize::frame::Column,
+    column: &nirs4all_io_core::materialize::frame::Column,
 ) -> MetadataValueKind {
     match column.dtype {
         ColDtype::Bool => MetadataValueKind::Boolean,
@@ -835,7 +864,7 @@ fn sample_metadata_representation(
 }
 
 fn emit_metadata(
-    first_block: &nirs4all_io::core::materialize::PartitionBlock,
+    first_block: &nirs4all_io_core::materialize::PartitionBlock,
     n_samples: usize,
 ) -> (BTreeMap<String, RepresentationSpec>, Option<MetadataSchema>) {
     let Some(frame) = &first_block.metadata else {
@@ -885,6 +914,7 @@ struct SourceLayout {
     unit: String,
     signal: Option<String>,
     processings: Vec<String>,
+    axes: Option<Vec<Value>>,
 }
 
 fn source_layouts(assembled: &AssembledDataset) -> Result<Vec<SourceLayout>, DagMlPreflightError> {
@@ -943,12 +973,23 @@ fn source_layouts(assembled: &AssembledDataset) -> Result<Vec<SourceLayout>, Dag
                 unit,
                 signal,
                 processings,
+                axes: block.feature_axes.get(index).cloned(),
             };
             if let Some(existing) = layouts.iter().find(|layout| layout.id == id) {
                 let detail = if existing.n_features != candidate.n_features {
                     Some("feature width differs")
                 } else if existing.headers != candidate.headers {
                     Some("feature headers differ")
+                } else if existing
+                    .axes
+                    .as_ref()
+                    .map(|axes| nirs4all_io_core::materialize::projection::axes_full(axes))
+                    != candidate
+                        .axes
+                        .as_ref()
+                        .map(|axes| nirs4all_io_core::materialize::projection::axes_full(axes))
+                {
+                    Some("exact feature axis metadata differs")
                 } else if existing.unit != candidate.unit {
                     Some("header unit differs")
                 } else if existing.signal != candidate.signal {
@@ -987,7 +1028,7 @@ fn validate_partition_contracts(
                 detail: "target layout differs",
             });
         }
-        let metadata_layout = |value: &Option<nirs4all_io::materialize::Frame>| {
+        let metadata_layout = |value: &Option<nirs4all_io_core::materialize::Frame>| {
             value.as_ref().map(|frame| {
                 frame
                     .columns
@@ -1162,7 +1203,7 @@ fn build_dag_ml_data_parts(
     // --- sources (validated union of each X source across partitions) ---
     let mut sources = Vec::with_capacity(source_layouts.len());
     for layout in &source_layouts {
-        let native_representation = source_representation(
+        let mut native_representation = source_representation(
             n_samples,
             layout.n_features,
             &layout.headers,
@@ -1170,6 +1211,31 @@ fn build_dag_ml_data_parts(
             layout.signal.as_deref(),
             &layout.processings,
         );
+        if let Some(axes) = &layout.axes {
+            if axes.len() > 1 {
+                return Err(SpecError::new(
+                    "Rank-2 feature bridge supports at most one non-sample axis",
+                ));
+            }
+            let axis = native_representation.axes.last_mut().unwrap();
+            axis.coordinate = axes
+                .first()
+                .and_then(|raw| raw["coordinates"].as_array())
+                .map(|coordinates| CoordinateSpec {
+                    dtype: if coordinates.iter().all(Value::is_number) {
+                        CoordinateDType::Numeric
+                    } else {
+                        CoordinateDType::Categorical
+                    },
+                    ordered: false,
+                    values: CoordinateValues::Explicit {
+                        values: coordinates.clone(),
+                    },
+                });
+            if let Some(name) = axes.first().and_then(|raw| raw["name"].as_str()) {
+                axis.name = name.to_owned();
+            }
+        }
         let mut tags = BTreeMap::new();
         if let Some(sig) = &layout.signal {
             tags.insert("signal_type".to_string(), Value::String(sig.clone()));
@@ -1398,6 +1464,7 @@ pub struct PackageProvider {
     target_ids: Vec<TargetId>,
     target_names: Vec<String>,
     provider: InMemoryProvider,
+    executed_projection: nirs4all_io_core::materialize::ExecutedProjectionIdentityV1,
 }
 
 impl PackageProvider {
@@ -1480,10 +1547,19 @@ impl PackageProvider {
         let target_ids = target_tables.keys().cloned().collect();
         let target_names = package_target_names(&assembled)?;
         let mut envelope = envelope_from_parts(&assembled, &schema, plan, relations.as_ref())?;
-        let package_content_fingerprint = package.manifest().root;
-        envelope.data_content_fingerprint = Some(package_content_fingerprint.clone());
-        envelope.target_content_fingerprint =
-            (!target_tables.is_empty()).then_some(package_content_fingerprint);
+        let selected = assembled.identity.source_ids.clone();
+        let (executed_projection, _, _) = package.executed_projection(&selected).map_err(err)?;
+        executed_projection.validate(package).map_err(err)?;
+        envelope.data_content_fingerprint =
+            Some(executed_projection.feature_content_fingerprint.clone());
+        envelope.target_content_fingerprint = executed_projection
+            .targets
+            .as_ref()
+            .map(|_| executed_projection.target_content_fingerprint.clone());
+        envelope.metadata.insert(
+            "io.executed_projection".into(),
+            serde_json::to_value(&executed_projection).map_err(err)?,
+        );
         envelope.validate().map_err(err)?;
         let provider =
             InMemoryProvider::new(envelope.clone(), target_tables, feature_store).map_err(err)?;
@@ -1494,7 +1570,14 @@ impl PackageProvider {
             target_ids,
             target_names,
             provider,
+            executed_projection,
         })
+    }
+
+    pub fn executed_projection(
+        &self,
+    ) -> &nirs4all_io_core::materialize::ExecutedProjectionIdentityV1 {
+        &self.executed_projection
     }
 
     /// Exact coordinator envelope used by this provider.
@@ -1528,8 +1611,20 @@ impl PackageProvider {
 }
 
 fn preflight_package_payloads(package: &DatasetPackage) -> Result<(), SpecError> {
+    package.validate_storage().map_err(err)?;
     for partition in package.partitions.values() {
         for (_, payload) in &partition.payloads {
+            if matches!(payload,PayloadBlock::TargetTable(table) if table.headers.is_empty()) {
+                return Err(SpecError::new(
+                    "Present-empty targets are unsupported by this DMD provider operation",
+                ));
+            }
+            if matches!(payload, PayloadBlock::Weights(w) if w.validity.iter().any(|valid| !valid))
+            {
+                return Err(SpecError::new(
+                    "Missing weights are unsupported by this DMD metadata-weight projection",
+                ));
+            }
             if !matches!(
                 payload,
                 PayloadBlock::FeatureMatrix(_)
@@ -1573,6 +1668,15 @@ fn select_assembled_source(
             })?;
         block.source_ids = vec![block.source_ids[index].clone()];
         block.x = vec![block.x[index].clone()];
+        if !block.feature_names.is_empty() {
+            block.feature_names = vec![block.feature_names[index].clone()];
+        }
+        if !block.feature_axes.is_empty() {
+            block.feature_axes = vec![block.feature_axes[index].clone()];
+        }
+        if !block.representation_ids.is_empty() {
+            block.representation_ids = vec![block.representation_ids[index].clone()];
+        }
         block.feature_headers = vec![block
             .feature_headers
             .get(index)
@@ -1698,9 +1802,16 @@ fn package_feature_matrix(
                 ));
             }
             observation_ids.push(ObservationId::new(&identity.observation_id).map_err(err)?);
-            for value in &matrix.data[row * matrix.n_cols..(row + 1) * matrix.n_cols] {
-                let valid = value.is_finite();
-                values.push(if valid { f64::from(*value) } else { 0.0 });
+            if matrix.validity.len() != matrix.data.len() {
+                return Err(SpecError::new("Feature validity length mismatch"));
+            }
+            for pos in row * matrix.n_cols..(row + 1) * matrix.n_cols {
+                let valid = matrix.validity[pos];
+                let value = matrix.data[pos];
+                if valid && !value.is_finite() {
+                    return Err(SpecError::new("Observed feature is nonfinite"));
+                }
+                values.push(if valid { value } else { 0.0 });
                 validity_mask.push(valid);
             }
         }
@@ -1713,10 +1824,7 @@ fn package_feature_matrix(
         feature_names: feature_names.unwrap_or_default(),
         observation_ids,
         values,
-        validity_mask: validity_mask
-            .iter()
-            .any(|valid| !valid)
-            .then_some(validity_mask),
+        validity_mask: Some(validity_mask),
     })
 }
 
@@ -1731,11 +1839,17 @@ fn package_target_tables(
     let matrix_target = schema.targets.len() == 1
         && schema
             .targets
-            .keys()
+            .values()
             .next()
-            .is_some_and(|target_id| target_id.as_str() == "targets");
-    let mut values = BTreeMap::<TargetId, Vec<CoordinatorTargetValue>>::new();
+            .is_some_and(|representation| representation.rank == Some(2));
+    let mut values = schema
+        .targets
+        .keys()
+        .cloned()
+        .map(|id| (id, Vec::<CoordinatorTargetValue>::new()))
+        .collect::<BTreeMap<_, _>>();
     let mut seen = BTreeMap::<(TargetId, SampleId), Value>::new();
+    let mut seen_validity = BTreeMap::<(TargetId, SampleId), bool>::new();
     let mut identity_offset = 0usize;
 
     for (partition, block) in &assembled.blocks {
@@ -1748,12 +1862,64 @@ fn package_target_tables(
                 "cannot build PackageProvider: target matrix shape differs from headers in partition `{partition}`"
             )));
         }
+        if matrix.validity.len() != matrix.data.len() {
+            return Err(SpecError::new("Target validity length mismatch"));
+        }
+        if matrix_target && matrix.validity.iter().any(|v| !v) {
+            return Err(SpecError::new("Partial target matrix validity is unsupported by this DMD matrix-target API; select supported scalar targets"));
+        }
+        let target_value = |row: usize, column: usize| -> Result<Value, SpecError> {
+            let header = &block.y_headers[column];
+            let value = matrix.data[row * matrix.n_cols + column];
+            if let Some(codebook) = block.y_categorical.get(header) {
+                let categories = codebook["categories"]
+                    .as_array()
+                    .ok_or_else(|| SpecError::new("Invalid categorical codebook"))?;
+                if value.fract() != 0.0 || value < 0.0 {
+                    return Err(SpecError::new("Invalid categorical code"));
+                }
+                return categories
+                    .get(value as usize)
+                    .filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+                    .cloned()
+                    .ok_or_else(|| SpecError::new("Unsupported categorical label/code"));
+            }
+            if target_is_categorical(assembled, block, header) {
+                if value.fract() != 0.0 || value.abs() > 9_007_199_254_740_991.0 {
+                    return Err(SpecError::new(
+                        "Classification requires portable integer labels",
+                    ));
+                }
+                nirs4all_io_core::materialize::numeric::validate_label(
+                    value as i64,
+                    matrix.precision.dtype,
+                )
+                .map_err(err)?;
+                return Ok(Value::from(value as i64));
+            }
+            finite_target_value(value)
+        };
         for row in 0..block.n_samples {
             let identity = &identity_rows[identity_offset + row];
             let sample_id = SampleId::new(&identity.sample_id).map_err(err)?;
+            for (column, header) in block.y_headers.iter().enumerate() {
+                let target_id = TargetId::new(if matrix_target {
+                    "targets".to_owned()
+                } else {
+                    sanitize(header, &format!("target{column}"))
+                })
+                .map_err(err)?;
+                let valid = matrix.validity[row * matrix.n_cols + column];
+                if seen_validity
+                    .insert((target_id.clone(), sample_id.clone()), valid)
+                    .is_some_and(|previous| previous != valid)
+                {
+                    return Err(SpecError::new(format!("cannot build PackageProvider: repeated sample `{sample_id}` has conflicting validity for target `{target_id}`")));
+                }
+            }
             let target_values = if matrix_target {
                 let row_values = (0..matrix.n_cols)
-                    .map(|column| finite_target_value(matrix.data[row * matrix.n_cols + column]))
+                    .map(|column| target_value(row, column))
                     .collect::<Result<Vec<_>, _>>()?;
                 vec![(
                     TargetId::new("targets").map_err(err)?,
@@ -1764,11 +1930,12 @@ fn package_target_tables(
                     .y_headers
                     .iter()
                     .enumerate()
+                    .filter(|(column, _)| matrix.validity[row * matrix.n_cols + column])
                     .map(|(column, header)| {
                         Ok((
                             TargetId::new(sanitize(header, &format!("target{column}")))
                                 .map_err(err)?,
-                            finite_target_value(matrix.data[row * matrix.n_cols + column])?,
+                            target_value(row, column)?,
                         ))
                     })
                     .collect::<Result<Vec<_>, SpecError>>()?
@@ -1809,13 +1976,13 @@ fn package_target_tables(
         .collect()
 }
 
-fn finite_target_value(value: f32) -> Result<Value, SpecError> {
+fn finite_target_value(value: f64) -> Result<Value, SpecError> {
     if !value.is_finite() {
         return Err(SpecError::new(
             "cannot build PackageProvider: target matrix contains a non-finite value",
         ));
     }
-    Ok(Value::from(f64::from(value)))
+    Ok(Value::from(value))
 }
 
 /// Build the v3 [`DatasetPackage`] for an [`AssembledDataset`] — the typed-payload
@@ -1830,8 +1997,8 @@ fn finite_target_value(value: f32) -> Result<Value, SpecError> {
 /// asserted by the `core_repr_ids_match_dag_ml_data_registry` drift guard below.
 /// Payload-store export (`IO-006`) can later hang off this manifest without
 /// touching the envelope seam.
-pub fn to_dataset_package(assembled: &AssembledDataset) -> DatasetPackage {
-    DatasetPackage::from_assembled(assembled)
+pub fn to_dataset_package(assembled: &AssembledDataset) -> Result<DatasetPackage, SpecError> {
+    DatasetPackage::from_assembled(assembled).map_err(err)
 }
 
 #[cfg(test)]
@@ -1841,16 +2008,16 @@ mod tests {
         DataPlanStepKind, REPRESENTATION_SIGNAL_1D, REPRESENTATION_SIGNAL_WITH_PROCESSINGS,
         REPRESENTATION_TARGET_NUMERIC, REPRESENTATION_TARGET_NUMERIC_MATRIX,
     };
-    use nirs4all_io::core::materialize::{
+    use nirs4all_io_core::materialize::{
         AssembledDataset, Cell, Column, Frame, Matrix, PartitionBlock,
     };
 
     fn matrix(rows: usize, cols: usize) -> Matrix {
-        Matrix {
-            data: (0..rows * cols).map(|value| value as f32).collect(),
-            n_rows: rows,
-            n_cols: cols,
-        }
+        Matrix::new(
+            (0..rows * cols).map(|value| value as f64).collect(),
+            rows,
+            cols,
+        )
     }
 
     fn assembled_with_block(block: PartitionBlock) -> AssembledDataset {
@@ -1863,7 +2030,7 @@ mod tests {
             folds: vec![],
             fold_provenance: vec![],
             repetition: None,
-            identity: nirs4all_io::materialize::IdentityProvenance {
+            identity: nirs4all_io_core::materialize::IdentityProvenance {
                 source_ids: vec!["spectra".into()],
                 sample_id: Some("sample_id".into()),
                 observation_id: Some("scan_id".into()),
@@ -1884,6 +2051,9 @@ mod tests {
             source_ids: vec!["spectra".into()],
             x: vec![matrix(2, 3)],
             feature_headers: vec![vec!["1000".into(), "1010".into(), "1020".into()]],
+            feature_names: vec![],
+            feature_axes: vec![],
+            representation_ids: vec![],
             header_units: vec!["nm".into()],
             signal_types: vec![Some("absorbance".into())],
             processings: vec![vec![]],
@@ -1906,8 +2076,267 @@ mod tests {
                 "text",
             )),
             weights: None,
+            weights_validity: None,
+            weights_precision: Default::default(),
             weights_header: None,
         }
+    }
+
+    fn all_rows_view(provider: &PackageProvider, sample_ids: &[&str]) -> u64 {
+        let envelope = provider.envelope();
+        let request = CoordinatorDataMaterializationRequest {
+            run_id: "float64".into(),
+            node_id: "model".into(),
+            input_name: "X".into(),
+            phase: "fit".into(),
+            variant_id: None,
+            fold_id: None,
+            request_id: "float64.owner".into(),
+            schema_fingerprint: envelope.schema_fingerprint.clone(),
+            plan_fingerprint: envelope.plan_fingerprint.clone(),
+            relation_fingerprint: envelope.relation_fingerprint.clone(),
+            output_representation: envelope.plan.output_representation.clone(),
+            source_ids: vec![SourceId::new("spectra").unwrap()],
+            require_relations: true,
+        };
+        let handle = provider.materialize(&request).unwrap();
+        provider
+            .make_view(
+                handle.handle.handle,
+                &DataView {
+                    sample_ids: Some(
+                        sample_ids
+                            .iter()
+                            .map(|id| SampleId::new(*id).unwrap())
+                            .collect(),
+                    ),
+                    include_augmented: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .handle
+            .handle
+    }
+
+    #[test]
+    fn exact_f64_and_false_mask_reach_existing_dmd_refusal() {
+        let mut block = base_block();
+        block.x[0].data[0] = f64::from_bits(0x3ff0000000000001);
+        block.x[0].data[1] = -0.0;
+        block.x[0].data[2] = f64::NAN;
+        block.x[0].validity[2] = false;
+        let package = to_dataset_package(&assembled_with_block(block)).unwrap();
+        let provider = PackageProvider::from_package(&package).unwrap();
+        assert_ne!(
+            provider.envelope().data_content_fingerprint,
+            provider.envelope().target_content_fingerprint
+        );
+        let emitted: nirs4all_io_core::materialize::ExecutedProjectionIdentityV1 =
+            serde_json::from_value(provider.envelope().metadata["io.executed_projection"].clone())
+                .unwrap();
+        emitted.validate(&package).unwrap();
+        assert_eq!(&emitted, provider.executed_projection());
+        assert_ne!(
+            provider.envelope().data_content_fingerprint.as_deref(),
+            Some(package.manifest().root.as_str())
+        );
+        let selected = all_rows_view(&provider, &["S1"]);
+        let nullable = provider.feature_block(selected, "spectra").unwrap();
+        assert_eq!(
+            nullable.values[0][0].as_f64().unwrap().to_bits(),
+            0x3ff0000000000001
+        );
+        assert_eq!(
+            nullable.values[0][1].as_f64().unwrap().to_bits(),
+            0x8000000000000000
+        );
+        assert!(nullable.values[0][2].is_null());
+        assert!(provider
+            .feature_block_f64(selected)
+            .unwrap_err()
+            .to_string()
+            .contains("masked"));
+        let excluded = all_rows_view(&provider, &["S2"]);
+        assert_eq!(
+            provider.feature_block_f64(excluded).unwrap().values,
+            vec![3., 4., 5.]
+        );
+        let mut zero = package.to_assembled();
+        zero.blocks["train"].x[0].validity[2] = true;
+        let zero_package = to_dataset_package(&zero).unwrap();
+        let zero_provider = PackageProvider::from_package(&zero_package).unwrap();
+        let observed = all_rows_view(&zero_provider, &["S1"]);
+        assert_eq!(
+            zero_provider.feature_block_f64(observed).unwrap().values[2].to_bits(),
+            0
+        );
+        assert_ne!(
+            provider.envelope().data_content_fingerprint,
+            zero_provider.envelope().data_content_fingerprint
+        );
+        assert_eq!(
+            provider.envelope().target_content_fingerprint,
+            zero_provider.envelope().target_content_fingerprint
+        );
+    }
+
+    #[test]
+    fn missing_scalar_targets_stay_absent_and_classification_stays_categorical() {
+        let mut block = base_block();
+        block.y.as_mut().unwrap().validity[0] = false;
+        let mut assembled = assembled_with_block(block);
+        assembled.task_type = "classification".into();
+        let package = to_dataset_package(&assembled).unwrap();
+        let provider = PackageProvider::from_package(&package).unwrap();
+        assert_eq!(
+            provider.envelope().metadata["io.dataset_schema"]["targets"]["protein"]["id"],
+            "target_categorical"
+        );
+        let missing = all_rows_view(&provider, &["S1"]);
+        assert!(provider
+            .target_block(missing, &TargetId::new("protein").unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("has no value"));
+        let observed = all_rows_view(&provider, &["S2"]);
+        assert_eq!(
+            provider
+                .target_block(observed, &TargetId::new("protein").unwrap())
+                .unwrap()
+                .values,
+            vec![Value::from(1)]
+        );
+        let mut matrix = base_block();
+        matrix.y = Some(Matrix::new(vec![1., 2., 3., 4.], 2, 2));
+        matrix.y_headers = vec!["a".into(), "b".into()];
+        matrix.y.as_mut().unwrap().validity[0] = false;
+        let package = to_dataset_package(&assembled_with_block(matrix)).unwrap();
+        assert!(PackageProvider::from_package(&package)
+            .err()
+            .unwrap()
+            .message
+            .contains("Partial target matrix"));
+    }
+
+    #[test]
+    fn decoded_axis_signed_zero_and_ulp_reach_dmd_without_header_reconstruction() {
+        use nirs4all_io_core::materialize::{assemble_in_memory, InMemorySource, SourcePayload};
+        use nirs4all_io_core::spec::DatasetSpec;
+        let spec=DatasetSpec::from_value(&serde_json::json!({"sources":[{"id":"spectra","role":"features","input":"decoded"}],"sample_index":{"by":"id","key":"sample_id"}})).unwrap();
+        let records=["S1","S2"].into_iter().map(|sample|serde_json::json!({"signals":{"raw":{"values":[1.0,2.0,3.0],"axis":{"unit":"nm","values":[-0.0,f64::from_bits(0x4079000000000001),401.0]}}},"metadata":{"sample_id":sample}})).collect();
+        let assembled = assemble_in_memory(
+            &spec,
+            &[InMemorySource {
+                name: "decoded".into(),
+                payload: SourcePayload::Records(records),
+            }],
+            &Default::default(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(assembled.blocks["train"].feature_headers[0][0], "0");
+        let provider =
+            PackageProvider::from_package(&to_dataset_package(&assembled).unwrap()).unwrap();
+        let schema = &provider.envelope().metadata["io.dataset_schema"];
+        let values = &schema["sources"][0]["native_representation"]["axes"][1]["coordinate"]
+            ["values"]["values"];
+        assert_eq!(values[0].as_f64().unwrap().to_bits(), 0x8000000000000000);
+        assert_eq!(values[1].as_f64().unwrap().to_bits(), 0x4079000000000001);
+    }
+
+    #[test]
+    fn scalar_target_named_targets_is_not_mistaken_for_a_matrix_container() {
+        for task in ["regression", "classification"] {
+            let mut block = base_block();
+            block.y_headers = vec!["targets".into()];
+            let mut assembled = assembled_with_block(block);
+            assembled.task_type = task.into();
+            let provider =
+                PackageProvider::from_package(&to_dataset_package(&assembled).unwrap()).unwrap();
+            let view = all_rows_view(&provider, &["S1", "S2"]);
+            let targets = provider
+                .target_block(view, &TargetId::new("targets").unwrap())
+                .unwrap();
+            assert_eq!(targets.values.len(), 2);
+            assert!(targets.values.iter().all(Value::is_number));
+        }
+    }
+
+    #[test]
+    fn repeated_sample_target_validity_conflicts_refuse() {
+        let mut block = base_block();
+        let metadata = block.metadata.as_mut().unwrap();
+        metadata
+            .columns
+            .iter_mut()
+            .find(|c| c.name == "sample_id")
+            .unwrap()
+            .values[1] = Cell::Str("S1".into());
+        metadata
+            .columns
+            .iter_mut()
+            .find(|c| c.name == "batch")
+            .unwrap()
+            .values[1] = Cell::Str("a".into());
+        block.y.as_mut().unwrap().validity[0] = false;
+        let package = to_dataset_package(&assembled_with_block(block)).unwrap();
+        let error = PackageProvider::from_package(&package).err().unwrap();
+        assert!(error.message.contains("conflicting validity"));
+    }
+
+    #[test]
+    fn derived_target_ids_refuse_before_map_insertion() {
+        for headers in [
+            vec!["a b".to_owned(), "a_b".to_owned()],
+            vec![
+                format!("{}x", "a".repeat(128)),
+                format!("{}y", "a".repeat(128)),
+            ],
+            vec!["!!!".to_owned(), "target0".to_owned()],
+        ] {
+            let mut block = base_block();
+            block.y = Some(Matrix::new(vec![1., 2., 3., 4.], 2, 2));
+            block.y_headers = headers;
+            let error = build_dag_ml_data_parts(&assembled_with_block(block)).unwrap_err();
+            assert!(error.message.contains("collision"));
+        }
+        let mut invalid = base_block();
+        invalid
+            .metadata
+            .as_mut()
+            .unwrap()
+            .columns
+            .iter_mut()
+            .find(|c| c.name == "sample_id")
+            .unwrap()
+            .values[0] = Cell::Str("primary invalid".into());
+        assert!(build_dag_ml_data_parts(&assembled_with_block(invalid)).is_err());
+    }
+
+    #[test]
+    fn base_identity_and_fixed_x_only_profile_are_distinct() {
+        let assembled = assembled_with_block(base_block());
+        let package = to_dataset_package(&assembled).unwrap();
+        let (mut receipt, _, _) = package.executed_projection(&["spectra".into()]).unwrap();
+        let old = methods_pls_predict_cohort(&assembled, "train", "spectra").unwrap();
+        assert_eq!(
+            old.data_content_profile,
+            METHODS_PLS_PREDICT_CONTENT_PROFILE
+        );
+        assert_ne!(
+            old.data_content_fingerprint,
+            receipt.feature_content_fingerprint
+        );
+        receipt.profile = METHODS_PLS_PREDICT_CONTENT_PROFILE.into();
+        assert!(receipt.validate(&package).is_err());
+        let mut target_free = assembled;
+        target_free.blocks["train"].y = None;
+        target_free.blocks["train"].y_headers.clear();
+        let provider =
+            PackageProvider::from_package(&to_dataset_package(&target_free).unwrap()).unwrap();
+        assert!(provider.envelope().target_content_fingerprint.is_none());
+        assert!(provider.executed_projection().targets.is_none());
     }
 
     #[test]
@@ -1949,7 +2378,7 @@ mod tests {
         assert!(error.to_string().contains("duplicate sample"));
 
         let mut nonfinite = base_block();
-        nonfinite.x[0].data[0] = f32::NAN;
+        nonfinite.x[0].data[0] = f64::NAN;
         let error =
             methods_pls_predict_cohort(&assembled_with_block(nonfinite), "train", "spectra")
                 .unwrap_err();
@@ -2074,7 +2503,7 @@ mod tests {
         block.weights_header = Some("quality_weight".into());
         let mut assembled = assembled_with_block(block);
         assembled.folds = vec![(vec![0], vec![1])];
-        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+        assembled.fold_provenance = vec![nirs4all_io_core::materialize::FoldProvenance {
             train_observation_ids: vec!["O1".into()],
             validation_observation_ids: vec!["O2".into()],
         }];
@@ -2115,17 +2544,65 @@ mod tests {
     }
 
     #[test]
+    fn canonical_missing_weight_refuses_both_identity_apis_but_observed_zero_emits() {
+        let mut block = base_block();
+        block.weights = Some(vec![f64::NAN, 2.0]);
+        block.weights_validity = Some(vec![false, true]);
+        block.weights_header = Some("quality_weight".into());
+        let package = to_dataset_package(&assembled_with_block(block)).unwrap();
+        let view = package.to_assembled();
+        assert_eq!(
+            view.blocks["train"].weights.as_ref().unwrap()[0].to_bits(),
+            0
+        );
+        assert!(!view.blocks["train"].weights_validity.as_ref().unwrap()[0]);
+        let expected = DagMlPreflightError::NonFiniteWeight {
+            partition: "train".into(),
+            row: 0,
+        };
+        assert_eq!(preflight_identity(&view).unwrap_err(), expected);
+        assert_eq!(
+            to_dag_ml_data(&view).err().unwrap().message,
+            expected.to_string()
+        );
+        assert!(PackageProvider::from_package(&package)
+            .err()
+            .unwrap()
+            .message
+            .contains("Missing weights"));
+
+        let mut short_mask = view.clone();
+        short_mask.blocks["train"].weights_validity = Some(vec![]);
+        assert_eq!(preflight_identity(&short_mask).unwrap_err(), expected);
+
+        let mut observed = view;
+        observed.blocks["train"].weights_validity.as_mut().unwrap()[0] = true;
+        preflight_identity(&observed).unwrap();
+        let envelope = to_dag_ml_data(&observed).unwrap();
+        assert_eq!(
+            envelope.coordinator_relations.as_ref().unwrap().records[0].metadata
+                ["io.sample_weight"]
+                .as_f64()
+                .unwrap()
+                .to_bits(),
+            0
+        );
+        let observed_package = to_dataset_package(&observed).unwrap();
+        assert!(PackageProvider::from_package(&observed_package).is_ok());
+    }
+
+    #[test]
     fn dataset_package_materializes_provider_without_spectrodataset() {
         let mut assembled = assembled_with_block(base_block());
         assembled.folds = vec![(vec![0], vec![1])];
-        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+        assembled.fold_provenance = vec![nirs4all_io_core::materialize::FoldProvenance {
             train_observation_ids: vec!["O1".into()],
             validation_observation_ids: vec!["O2".into()],
         }];
 
         // Rust loader output -> DatasetPackage -> dag-ml-data provider. No
         // JSON/pickle/Python/SpectroDataset adapter participates in this path.
-        let package = to_dataset_package(&assembled);
+        let package = to_dataset_package(&assembled).unwrap();
         let provider = PackageProvider::from_package(&package).unwrap();
         let envelope = provider.envelope();
         let relations = &envelope.coordinator_relations.as_ref().unwrap().records;
@@ -2251,7 +2728,7 @@ mod tests {
             });
         assembled.blocks.insert("test".into(), test);
         assembled.folds = vec![(vec![0, 1], vec![2])];
-        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+        assembled.fold_provenance = vec![nirs4all_io_core::materialize::FoldProvenance {
             train_observation_ids: vec!["O3".into(), "O1".into()],
             validation_observation_ids: vec!["O2".into()],
         }];
@@ -2307,7 +2784,7 @@ mod tests {
     fn preflight_refuses_fold_overlap_and_group_leakage() {
         let mut assembled = assembled_with_block(base_block());
         assembled.folds = vec![(vec![0], vec![1])];
-        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+        assembled.fold_provenance = vec![nirs4all_io_core::materialize::FoldProvenance {
             train_observation_ids: vec!["O1".into()],
             validation_observation_ids: vec!["O1".into()],
         }];
@@ -2339,7 +2816,7 @@ mod tests {
             })
         );
 
-        assembled.fold_provenance[0] = nirs4all_io::materialize::FoldProvenance {
+        assembled.fold_provenance[0] = nirs4all_io_core::materialize::FoldProvenance {
             train_observation_ids: vec!["O1".into(), "O1".into()],
             validation_observation_ids: vec!["O2".into()],
         };
@@ -2358,7 +2835,7 @@ mod tests {
         let mut assembled = assembled_with_block(base_block());
         assembled.identity.group_id = None;
         assembled.folds = vec![(vec![0], vec![1])];
-        assembled.fold_provenance = vec![nirs4all_io::materialize::FoldProvenance {
+        assembled.fold_provenance = vec![nirs4all_io_core::materialize::FoldProvenance {
             train_observation_ids: vec!["O1".into()],
             validation_observation_ids: vec!["O2".into()],
         }];

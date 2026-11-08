@@ -12,7 +12,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ._assembled import require_assembled_dataset_v2
+from ._adapter import _decode_targets, _matrix
+from ._assembled import require_assembled_dataset
 
 __all__ = [
     "DatasetPackage",
@@ -153,7 +154,7 @@ class DatasetPackage:
     """
 
     def __init__(self, full: dict[str, Any]) -> None:
-        require_assembled_dataset_v2(full)
+        require_assembled_dataset(full)
         self._full = full
         self.name = str(full.get("name") or "dataset")
         self.task_type = str(full.get("task_type") or "auto")
@@ -169,14 +170,15 @@ class DatasetPackage:
 
     def manifest(self) -> PayloadManifest:
         entries: list[PayloadManifestEntry] = []
-        for partition, block in self._full.get("blocks", {}).items():
+        for partition in self._full["partition_order"]:
+            block = self._full["blocks"][partition]
             entries.extend(_manifest_entries(str(partition), block, task_type=self.task_type))
         root = _sha256_json([entry.to_dict() for entry in entries])
         return PayloadManifest(root=root, entries=entries)
 
     def to_summary_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "name": self.name,
             "task_type": self.task_type,
             "signal_type": self.signal_type,
@@ -205,7 +207,8 @@ class DatasetPackage:
     def to_assembled(self) -> _AssembledDataset:
         blocks = {
             str(partition): _block_from_full(block)
-            for partition, block in self._full.get("blocks", {}).items()
+            for partition in self._full["partition_order"]
+            for block in [self._full["blocks"][partition]]
         }
         return _AssembledDataset(
             name=self.name,
@@ -258,18 +261,81 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _matrix(matrix: dict[str, Any]) -> np.ndarray:
-    return np.asarray(matrix["data"], dtype=np.float32).reshape(int(matrix["n_rows"]), int(matrix["n_cols"]))
+def _blob(value: bytes) -> bytes:
+    return len(value).to_bytes(8, "little") + value
+
+
+def _string(value: str) -> bytes:
+    return _blob(value.encode("utf-8"))
+
+
+def _option_string(value: str | None) -> bytes:
+    return b"\0" if value is None else b"\1" + _string(value)
+
+
+def _strings(values: list[str]) -> bytes:
+    return len(values).to_bytes(8, "little") + b"".join(_string(value) for value in values)
+
+
+def _precision(matrix: dict[str, Any]) -> bytes:
+    record = matrix["precision"]
+    tags = {"float32": 1, "float64": 2, "string-label": 3}
+    origins = {"default": 0, "source-declared": 1, "requested": 2, "consumer": 3}
+    request = record["requested_dtype"]
+    return (bytes([tags[record["dtype"]], origins[record["origin"]]])
+            + _option_string(record["source_dtype"])
+            + (b"\0" if request is None else bytes([1, tags[request]]))
+            + _option_string(record["consumer"]))
 
 
 def _matrix_bytes(matrix: dict[str, Any]) -> bytes:
-    return np.ascontiguousarray(_matrix(matrix).astype("<f4", copy=False)).tobytes(order="C")
+    # Serialize declared owner bytes, including masks; never choose precision here.
+    return (bytes([{"float32": 1, "float64": 2, "string-label": 3}[matrix["dtype"]]])
+            + matrix["n_rows"].to_bytes(8, "little") + matrix["n_cols"].to_bytes(8, "little")
+            + _blob(bytes.fromhex(matrix["data_bytes_hex"])) + _blob(bytes(matrix["validity"])))
+
+
+def _payload_head(role: str) -> bytes:
+    return _string("nirs4all.io.package-payload.v4") + (4).to_bytes(4, "little") + _string(role)
+
+
+def _feature_content(block: dict[str, Any], index: int) -> bytes:
+    matrix = block["x"][index]
+    names = block["feature_names"][index]
+    axes = block["feature_axes"][index]
+    content = (_payload_head("features") + _string(block["source_ids"][index])
+               + _string(block["representation_ids"][index]) + _precision(matrix) + _matrix_bytes(matrix)
+               + (b"\0" if names is None else b"\1" + _strings(names)) + len(axes).to_bytes(8, "little"))
+    for axis in axes:
+        content += _string(axis["name"]) + _option_string(axis["unit"])
+        coordinates = axis["coordinates"]
+        if coordinates is None:
+            content += b"\0"
+        elif coordinates["kind"] == "numeric":
+            content += b"\1\1" + coordinates["count"].to_bytes(8, "little") + _blob(bytes.fromhex(coordinates["data_bytes_hex"]))
+        else:
+            content += b"\1\2" + _strings(coordinates["values"])
+    processings = block["processings"][index]
+    content += len(processings).to_bytes(8, "little")
+    for processing in processings:
+        content += _string(processing["name"]) + _matrix_bytes(processing["matrix"])
+    return content
+
+
+def _target_content(y: dict[str, Any]) -> bytes:
+    content = _payload_head("targets") + len(y["columns"]).to_bytes(8, "little")
+    for column in y["columns"]:
+        content += (_string(column["name"]) + bytes([{"numeric": 0, "classification_integer": 1, "classification_string": 2}[column["kind"]]])
+                    + _precision(column["block"]) + _matrix_bytes(column["block"]))
+    return content
 
 
 def _frame(meta: dict[str, Any] | None) -> pd.DataFrame | None:
     if meta is None:
         return None
-    return pd.DataFrame({str(column["name"]): column["values"] for column in meta.get("columns", [])})
+    if any(len(column["values"]) != meta["n_rows"] for column in meta.get("columns", [])):
+        raise ValueError("Package metadata rows differ from declared row count")
+    return pd.DataFrame({str(column["name"]): pd.Series(column["values"], dtype=object) for column in meta.get("columns", [])}, index=range(meta["n_rows"]))
 
 
 def _frame_content(meta: dict[str, Any]) -> bytes:
@@ -286,7 +352,7 @@ def _metadata_content_bytes(frame: pd.DataFrame) -> bytes:
         columns.append(
             {
                 "name": str(name),
-                "dtype": _series_dtype_label(series),
+                "dtype": _series_dtype_label(pd.Series(series.tolist())),
                 "values": [_json_safe(value) for value in series.tolist()],
             }
         )
@@ -356,13 +422,7 @@ def _manifest_entries(partition: str, block: dict[str, Any], *, task_type: str) 
         headers = block.get("feature_headers") or []
         units = block.get("header_units") or []
         proc = processings[idx] if idx < len(processings) else []
-        content = bytearray(_matrix_bytes(matrix))
-        content.extend("\x1f".join(str(h) for h in (headers[idx] if idx < len(headers) else [])).encode("utf-8"))
-        for item in proc:
-            content.append(0)
-            content.extend(str(item.get("name")).encode("utf-8"))
-            content.append(0)
-            content.extend(_matrix_bytes(item["matrix"]))
+        content = _feature_content(block, idx)
         axes = ["sample", "processing", _feature_axis_name(units[idx] if idx < len(units) else None)] if proc else [
             "sample",
             _feature_axis_name(units[idx] if idx < len(units) else None),
@@ -374,7 +434,7 @@ def _manifest_entries(partition: str, block: dict[str, Any], *, task_type: str) 
                 role="features",
                 payload_kind="feature_matrix",
                 representation_id=repr_ids.SIGNAL_WITH_PROCESSINGS if proc else repr_ids.SIGNAL_1D,
-                dtype="float32",
+                dtype=matrix["dtype"],
                 shape=[int(matrix["n_rows"]), int(matrix["n_cols"])],
                 axes=axes,
                 content=bytes(content),
@@ -384,10 +444,12 @@ def _manifest_entries(partition: str, block: dict[str, Any], *, task_type: str) 
         y = block["y"]
         headers = [str(h) for h in block.get("y_headers", [])]
         categorical = dict(block.get("y_categorical") or {})
-        content = bytearray(_matrix_bytes(y))
-        content.extend("\x1f".join(headers).encode("utf-8"))
-        content.append(0)
-        content.extend(_canonical_json(categorical).encode("utf-8"))
+        content = _target_content(y)
+        columns = y["columns"]
+        dtypes = {column["block"]["dtype"] for column in columns}
+        dtype = next(iter(dtypes)) if len(dtypes) == 1 else "mixed"
+        n_rows = columns[0]["block"]["n_rows"]
+        n_cols = len(columns)
         entries.append(
             _entry(
                 partition=partition,
@@ -395,9 +457,9 @@ def _manifest_entries(partition: str, block: dict[str, Any], *, task_type: str) 
                 role="targets",
                 payload_kind="target_table",
                 representation_id=_target_representation_id(task_type, headers, categorical),
-                dtype="float32",
-                shape=[int(y["n_rows"]), int(y["n_cols"])],
-                axes=["sample", "target"] if int(y["n_cols"]) > 1 else ["sample"],
+                dtype=dtype,
+                shape=[n_rows, n_cols],
+                axes=["sample", "target"] if n_cols > 1 else ["sample"],
                 content=bytes(content),
             )
         )
@@ -417,12 +479,8 @@ def _manifest_entries(partition: str, block: dict[str, Any], *, task_type: str) 
             )
         )
     if block.get("weights") is not None:
-        weights = np.asarray(block["weights"], dtype=np.float32).reshape(-1)
-        content = bytearray(np.ascontiguousarray(weights.astype("<f4", copy=False)).tobytes(order="C"))
-        header = block.get("weights_header")
-        if header:
-            content.append(0)
-            content.extend(str(header).encode("utf-8"))
+        weights = block["weights"]
+        content = _payload_head("weights") + _precision(weights) + _matrix_bytes(weights)
         entries.append(
             _entry(
                 partition=partition,
@@ -430,8 +488,8 @@ def _manifest_entries(partition: str, block: dict[str, Any], *, task_type: str) 
                 role="weights",
                 payload_kind="weights",
                 representation_id=None,
-                dtype="float32",
-                shape=[int(weights.size)],
+                dtype=weights["dtype"],
+                shape=[weights["n_rows"]],
                 axes=["sample"],
                 content=bytes(content),
             )
@@ -440,7 +498,7 @@ def _manifest_entries(partition: str, block: dict[str, Any], *, task_type: str) 
 
 
 def _row_position_fallback(full: dict[str, Any]) -> RowPositionFallback:
-    partitions = list(full.get("blocks", {}))
+    partitions = list(full["partition_order"])
     identity = full.get("identity") or {}
     provenance = identity.get("provenance") or {}
     sample_id = provenance.get("sample_id")
@@ -476,11 +534,11 @@ def _block_from_full(block: dict[str, Any]) -> _PartitionBlock:
         feature_headers=[list(headers) for headers in block.get("feature_headers", [])],
         header_units=list(block.get("header_units", [])),
         signal_types=list(block.get("signal_types", [])),
-        y=_matrix(block["y"]) if block.get("y") is not None else None,
+        y=_decode_targets(block["y"]) if block.get("y") is not None else None,
         y_headers=list(block.get("y_headers", [])),
         y_categorical=dict(block.get("y_categorical") or {}),
         metadata=_frame(block.get("metadata")),
-        weights=np.asarray(block["weights"], dtype=np.float32) if block.get("weights") is not None else None,
+        weights=_matrix(block["weights"]).reshape(-1) if block.get("weights") is not None else None,
         weights_header=block.get("weights_header"),
         processings=[
             [(str(item.get("name")), _matrix(item["matrix"])) for item in source_processings]

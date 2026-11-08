@@ -10,11 +10,11 @@ csv-assignment (a ``fold`` column of VAL membership, train = complement), JSON/Y
 from __future__ import annotations
 
 import csv
-import json
 from pathlib import Path
 
 import yaml
 
+from .. import strict_json
 from ..spec.enums import SpecError
 
 Fold = tuple[list[int], list[int]]
@@ -32,9 +32,9 @@ def parse_fold_file(path: str | Path, fmt: str = "auto") -> list[Fold]:
     if fmt == "csv":
         return _parse_csv(path)
     if fmt == "json":
-        return _parse_json(json.loads(path.read_text(encoding="utf-8")))
+        return _parse_json(strict_json.loads(path.read_text(encoding="utf-8")))
     if fmt in ("yaml", "yml"):
-        return _parse_json(yaml.safe_load(path.read_text(encoding="utf-8")))
+        return _parse_json(strict_json.check_numbers(yaml.safe_load(path.read_text(encoding="utf-8"))))
     if fmt == "txt":
         return _parse_txt(path)
     raise SpecError(f"unsupported fold-file format: {fmt!r}")
@@ -42,8 +42,8 @@ def parse_fold_file(path: str | Path, fmt: str = "auto") -> list[Fold]:
 
 def _parse_csv(path: Path) -> list[Fold]:
     with path.open(newline="", encoding="utf-8") as fh:
-        reader = csv.reader(fh)
-        headers = next(reader)
+        reader = csv.reader(fh, strict=True)
+        headers = next(reader, [])
         rows = list(reader)
     if all(h.startswith("fold_") for h in headers):
         return _csv_nirs4all(headers, rows)
@@ -60,10 +60,10 @@ def _csv_nirs4all(headers: list[str], rows: list[list[str]]) -> list[Fold]:
             if i < n_folds and value.strip():
                 try:
                     fold_train[i].append(int(value.strip()))
-                except ValueError:
-                    pass
+                except ValueError as error:
+                    raise SpecError(f"non-integer fold index: {value!r}") from error
     all_ids = sorted({sid for train in fold_train for sid in train})
-    return [(sorted(train), sorted([s for s in all_ids if s not in set(train)])) for train in fold_train]
+    return [(list(train), sorted([s for s in all_ids if s not in set(train)])) for train in fold_train]
 
 
 def _csv_assignment(headers: list[str], rows: list[list[str]]) -> list[Fold]:
@@ -76,7 +76,7 @@ def _csv_assignment(headers: list[str], rows: list[list[str]]) -> list[Fold]:
         sample_id = row_idx if sample_col is None else int(row[sample_col].strip())
         fold_to_samples.setdefault(fold_value, []).append(sample_id)
     all_samples = sorted({s for v in fold_to_samples.values() for s in v})
-    return [(sorted([s for s in all_samples if s not in set(fold_to_samples[f])]), sorted(fold_to_samples[f])) for f in sorted(fold_to_samples)]
+    return [(sorted([s for s in all_samples if s not in set(fold_to_samples[f])]), list(fold_to_samples[f])) for f in sorted(fold_to_samples)]
 
 
 def _parse_json(data: object) -> list[Fold]:
@@ -86,9 +86,15 @@ def _parse_json(data: object) -> list[Fold]:
     for obj in data:
         if not isinstance(obj, dict):
             raise SpecError("each fold entry must be a mapping with 'train' and 'val'/'test'")
-        train = obj.get("train") or []
-        val = obj.get("val") or obj.get("test") or []
-        folds.append((list(train), list(val)))
+        def indices(value: object) -> list[int]:
+            if not isinstance(value, list):
+                raise SpecError("fold sides must be arrays of integer indices")
+            if any(type(index) is not int for index in value):
+                raise SpecError("fold indices must be integers (not bool, float or string)")
+            return list(value)
+        train = indices(obj.get("train", []))
+        val = indices(obj.get("val", obj.get("test", [])))
+        folds.append((train, val))
     return folds
 
 

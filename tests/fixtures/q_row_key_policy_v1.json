@@ -1,0 +1,941 @@
+{
+  "schema_version": 1,
+  "owner": "nirs4all-io",
+  "profile": "qrow-qdec-owner-v1",
+  "provenance": {
+    "kind": "synthetic_literal",
+    "authority": "Root accepted Opus A1-A10",
+    "parent_map_sha256": "43fd7b6fbd917119b64e2a528de1f1e7975db07519d74c0755674e246d9fb5af",
+    "operation": "configure/materialize assembled and dataset_package",
+    "not_qualified": [
+      "Q-KEY-LEXEME explicit comma-decimal keys",
+      "Formats N2 integer lexemes"
+    ]
+  },
+  "rows": [
+    {
+      "id": "shuffled",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "id;Protein, %\ns3;14,2\ns1;12,5\ns2;13,1\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          12.5
+        ],
+        [
+          13.1
+        ],
+        [
+          14.2
+        ]
+      ],
+      "identity": [
+        "s1",
+        "s2",
+        "s3"
+      ],
+      "headers": [
+        "Protein, %"
+      ]
+    },
+    {
+      "id": "n1-integer",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %\n12,5\n13\n14,2\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "n1-lod",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %\n12,5\n<LOD\n14,2\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "n1-dash",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %\n12,5\n-\n14,2\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "n1-na",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %\n12,5\nna\n14,2\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "n1-three-part",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %, value\n12,5\n13\n14,2\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "c1-dot",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %\n12.5\n13.1\n14.2\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          12.5
+        ],
+        [
+          13.1
+        ],
+        [
+          14.2
+        ]
+      ],
+      "headers": [
+        "Protein, %"
+      ]
+    },
+    {
+      "id": "c1-integer",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %\n12\n13\n14\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          12
+        ],
+        [
+          13
+        ],
+        [
+          14
+        ]
+      ],
+      "headers": [
+        "Protein, %"
+      ]
+    },
+    {
+      "id": "c1-text",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %\na\nb\nc\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          0
+        ],
+        [
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "headers": [
+        "Protein, %"
+      ]
+    },
+    {
+      "id": "sole-Reference",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Reference\n10\n20\n30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          20
+        ],
+        [
+          30
+        ]
+      ],
+      "no_identity": true
+    },
+    {
+      "id": "sole-ref",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "ref\n10\n20\n30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          20
+        ],
+        [
+          30
+        ]
+      ],
+      "no_identity": true
+    },
+    {
+      "id": "sole-index",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "index\n10\n20\n30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          20
+        ],
+        [
+          30
+        ]
+      ],
+      "no_identity": true
+    },
+    {
+      "id": "sole-code",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "code\n10\n20\n30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          20
+        ],
+        [
+          30
+        ]
+      ],
+      "no_identity": true
+    },
+    {
+      "id": "nonunique-class_id",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "class_id;y\na;10\na;20\nb;30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          0,
+          10
+        ],
+        [
+          0,
+          20
+        ],
+        [
+          1,
+          30
+        ]
+      ],
+      "no_identity": true
+    },
+    {
+      "id": "nonunique-batch_id",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "batch_id;y\na;10\na;20\nb;30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          0,
+          10
+        ],
+        [
+          0,
+          20
+        ],
+        [
+          1,
+          30
+        ]
+      ],
+      "no_identity": true
+    },
+    {
+      "id": "float-id-evidence",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "id;y\n1.1;10\n1.2;20\n1.3;30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          1.1,
+          10
+        ],
+        [
+          1.2,
+          20
+        ],
+        [
+          1.3,
+          30
+        ]
+      ],
+      "no_identity": true
+    },
+    {
+      "id": "one-sided-y",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "code;y\ns1;10\ns2;20\ns3;30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null,
+      "provisional": true
+    },
+    {
+      "id": "one-sided-x",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "y\n10\n20\n30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null,
+      "provisional": true
+    },
+    {
+      "id": "missing",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "id;y\ns1;10\ns3;30\ns4;40\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "extra",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "id;y\ns3;30\ns1;10\ns2;20\ns4;40\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          20
+        ],
+        [
+          30
+        ]
+      ],
+      "identity": [
+        "s1",
+        "s2",
+        "s3"
+      ]
+    },
+    {
+      "id": "duplicate-y",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "id;y\ns1;10\ns1;99\ns3;30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "equal-duplicate-y",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "id;y\ns1;10\ns2;20\ns3;30\ns1;10\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "null-x",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\n;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "id;y\ns1;10\ns2;20\ns3;30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "automatic-leading-zero",
+      "files": {
+        "Xcal.csv": "id;400;500\n001;1.25;2.5\n01;2.25;3.5\n2;3.25;4.5\n",
+        "Ycal.csv": "id;y\n1;10\n2;30\n"
+      },
+      "methods": [
+        "auto"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "automatic-dot-lexemes",
+      "files": {
+        "Xcal.csv": "id;400;500\n1.1;1.25;2.5\n1.10;2.25;3.5\n2;3.25;4.5\n",
+        "Ycal.csv": "id;y\n1.1;10\n2;30\n"
+      },
+      "methods": [
+        "auto"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "automatic-comma-lexemes",
+      "files": {
+        "Xcal.csv": "id;400;500\n12,1;1.25;2.5\n12,10;2.25;3.5\n2;3.25;4.5\n",
+        "Ycal.csv": "id;y\n12,1;10\n2;30\n"
+      },
+      "methods": [
+        "auto"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "comma-keys-integer-y",
+      "files": {
+        "Xcal.csv": "id;400;500\n12,5;1.25;2.5\n13,1;3.25;4.5\n14,2;5.25;6.5\n",
+        "Ycal.csv": "id;y\n14,2;30\n12,5;10\n13,1;20\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          20
+        ],
+        [
+          30
+        ]
+      ],
+      "identity": [
+        "12,5",
+        "13,1",
+        "14,2"
+      ]
+    },
+    {
+      "id": "comma-keys-comma-y",
+      "files": {
+        "Xcal.csv": "id;400;500\n12,5;1.25;2.5\n13,1;3.25;4.5\n14,2;5.25;6.5\n",
+        "Ycal.csv": "id;y\n14,2;30,5\n12,5;10,5\n13,1;20,5\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "automatic-repeated",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns1;1.75;2.75\ns2;3.25;4.5\n",
+        "Ycal.csv": "id;y\ns2;20\ns1;10\n"
+      },
+      "methods": [
+        "auto"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "infer-repeated",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns1;1.75;2.75\ns2;3.25;4.5\n",
+        "Ycal.csv": "id;y\ns2;20\ns1;10\n"
+      },
+      "methods": [
+        "infer"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          10
+        ],
+        [
+          20
+        ]
+      ],
+      "identity": [
+        "s1",
+        "s1",
+        "s2"
+      ],
+      "repetition": true
+    },
+    {
+      "id": "sporadic-repeated",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns1;1.75;2.75\ns2;3.25;4.5\ns3;5.25;6.5\ns4;7.25;8.5\n",
+        "Ycal.csv": "id;y\ns1;10\ns2;20\ns3;30\ns4;40\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null
+    },
+    {
+      "id": "declared-n1",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "Protein, %\n12,5\n13\n14,2\n"
+      },
+      "methods": [
+        "explicit"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          12.5
+        ],
+        [
+          13
+        ],
+        [
+          14.2
+        ]
+      ],
+      "params": {
+        "delimiter": ";",
+        "decimal_separator": ","
+      }
+    },
+    {
+      "id": "source-none",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "label\na\nb\nc\n"
+      },
+      "methods": [
+        "explicit"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          null
+        ],
+        [
+          null
+        ],
+        [
+          null
+        ]
+      ],
+      "global_mode": "auto",
+      "source_mode": "none"
+    },
+    {
+      "id": "source-auto",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "label\na\nb\nc\n"
+      },
+      "methods": [
+        "explicit"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          0
+        ],
+        [
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "global_mode": "none",
+      "source_mode": "auto"
+    },
+    {
+      "id": "source-preserve",
+      "files": {
+        "Xcal.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Ycal.csv": "label\na\nb\nc\n"
+      },
+      "methods": [
+        "explicit"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          null
+        ],
+        [
+          null
+        ],
+        [
+          null
+        ]
+      ],
+      "global_mode": "none",
+      "source_mode": "preserve"
+    },
+    {
+      "id": "explicit-m1",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns1;1.75;2.75\ns2;3.25;4.5\n",
+        "Ycal.csv": "id;y\ns2;20\ns1;10\n"
+      },
+      "methods": [
+        "explicit-m1"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          10
+        ],
+        [
+          20
+        ]
+      ],
+      "identity": [
+        "s1",
+        "s1",
+        "s2"
+      ]
+    },
+    {
+      "id": "typed-integers",
+      "files": {
+        "Xcal.csv": "id;400;500\n9007199254740992;1.25;2.5\n9007199254740993;3.25;4.5\n3;5.25;6.5\n",
+        "Ycal.csv": "id;y\n3;30\n9007199254740993;20\n9007199254740992;10\n"
+      },
+      "methods": [
+        "auto"
+      ],
+      "status": "loaded",
+      "targets": [
+        [
+          10
+        ],
+        [
+          20
+        ],
+        [
+          30
+        ]
+      ]
+    },
+    {
+      "id": "mixed-partitions",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "id;y\ns1;10\ns2;20\ns3;30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null,
+      "provisional": true,
+      "extra": {
+        "Xval.csv": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "Yval.csv": "y\n10\n20\n30\n"
+      }
+    },
+    {
+      "id": "conflicting-partitions",
+      "files": {
+        "Xcal.csv": "id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Ycal.csv": "id;y\ns1;10\ns2;20\ns3;30\n"
+      },
+      "methods": [
+        "auto",
+        "infer"
+      ],
+      "status": "refused",
+      "targets": null,
+      "provisional": true,
+      "extra": {
+        "Xval.csv": "sample_id;400;500\ns1;1.25;2.5\ns2;3.25;4.5\ns3;5.25;6.5\n",
+        "Yval.csv": "sample_id;y\ns1;10\ns2;20\ns3;30\n"
+      }
+    }
+  ],
+  "controls": {
+    "limits": {
+      "operation": "load_assembled_with_limits",
+      "max_file_bytes": 8,
+      "max_total_bytes": 16,
+      "status": "refused_before_full_read",
+      "python_status": "UNAVAILABLE_NO_LIMITS_KWARG"
+    },
+    "bounded": {
+      "records": 50,
+      "bytes": 8388608,
+      "later_duplicate": {
+        "x": "id;400\n",
+        "y": "id;y\n",
+        "rows": 52,
+        "duplicate_row": 51,
+        "expected": "JoinError"
+      }
+    },
+    "multi_input": {
+      "inputs": [
+        "X1.csv",
+        "X2.csv"
+      ],
+      "first": "id;400\ns1;1.25\n",
+      "second": "400\n2.25\n",
+      "status": "no_partial_proposal"
+    },
+    "locks": [
+      {
+        "kind": "pairing",
+        "target": "train_x|train_y",
+        "value": {
+          "mode": "join_id",
+          "on": "id"
+        },
+        "target_values": [
+          12.5,
+          13.1,
+          14.2
+        ]
+      },
+      {
+        "kind": "pairing",
+        "target": "train_x|train_y",
+        "value": {
+          "mode": "row_order"
+        },
+        "target_values": [
+          14.2,
+          12.5,
+          13.1
+        ]
+      },
+      {
+        "kind": "identity",
+        "target": "dataset",
+        "value": {
+          "by": "id",
+          "key": "id"
+        },
+        "target_values": [
+          12.5,
+          13.1,
+          14.2
+        ]
+      }
+    ],
+    "explicit_identity_gap": {
+      "name": "Q-KEY-LEXEME",
+      "status": "OPEN",
+      "operation": "explicit text key under declared comma decimal",
+      "not_qualified": true
+    },
+    "positive_counterexamples": [
+      {
+        "id": "reference-is-data",
+        "x": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "y": "ref;y\n12,5;1\n13,1;2\n14,2;3\n",
+        "targets": [
+          [
+            12.5,
+            1
+          ],
+          [
+            13.1,
+            2
+          ],
+          [
+            14.2,
+            3
+          ]
+        ]
+      },
+      {
+        "id": "genuine-three-columns",
+        "x": "400;500\n1.25;2.5\n3.25;4.5\n5.25;6.5\n",
+        "y": "a,b,c\n1,2,3\n4,5,6\n7,8,9\n",
+        "targets": [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      }
+    ],
+    "identity_lock_change": {
+      "files": {
+        "Xcal.csv": "id;sample_alt;400\n1;a;1.25\n2;b;2.25\n3;c;3.25\n",
+        "Ycal.csv": "id;y\n3;30.5\n1;10.5\n2;20.5\n"
+      },
+      "kind": "identity",
+      "target": "dataset",
+      "value": {
+        "by": "id",
+        "key": "sample_alt"
+      },
+      "targets": [
+        10.5,
+        20.5,
+        30.5
+      ]
+    },
+    "lone_x": {
+      "files": {
+        "Xcal.csv": "id;400\ns1;1.25\ns2;2.25\n"
+      },
+      "identity": [
+        "s1",
+        "s2"
+      ],
+      "features": [
+        [
+          1.25
+        ],
+        [
+          2.25
+        ]
+      ]
+    }
+  }
+}

@@ -74,7 +74,7 @@ def test_to_dataset_package_exposes_manifest_and_summary(tmp_path):
     assert len(fallback.fingerprint) == 64
 
     summary = package.to_summary_dict()
-    assert summary["schema_version"] == 3
+    assert summary["schema_version"] == 4
     assert summary["partitions"] == {"train": {"n_samples": 3, "source_ids": ["data"]}}
     assert summary["manifest"]["root"] == manifest.root
     assert summary["identity"].keys() == {"provenance", "row_position_fallback"}
@@ -86,7 +86,7 @@ def test_to_dataset_package_exposes_manifest_and_summary(tmp_path):
 
     canonical = package.to_canonical_summary()
     assert canonical.endswith("\n")
-    assert '"schema_version": 3' in canonical
+    assert '"schema_version": 4' in canonical
     assert '"data": [' not in canonical, "summary must not embed raw matrix data"
 
 
@@ -282,8 +282,8 @@ def test_reference_dataset_adapter_accepts_bare_spec_with_absolute_paths(tmp_pat
     assert block.metadata["site"].tolist() == ["north", "south"]
 
 
-def test_v3_cross_language_canonical_wire_golden():
-    """The Python MVP must emit the same v3 wire as Rust and the binding."""
+def test_v4_cross_language_canonical_wire_golden():
+    """The Python MVP must emit the same v4 wire as Rust and the binding."""
     assembled = AssembledDataset(
         name="demo",
         task_type="regression",
@@ -327,6 +327,6 @@ def test_v3_cross_language_canonical_wire_golden():
     )
 
     expected = (
-        Path(__file__).parent / "goldens/dataset_package_v3.cross_language.canonical"
+        Path(__file__).parent / "goldens/dataset_package_v4.cross_language.canonical"
     ).read_text(encoding="utf-8")
     assert DatasetPackage.from_assembled(assembled).to_canonical_summary() == expected

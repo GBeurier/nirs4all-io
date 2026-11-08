@@ -4,14 +4,102 @@
 use std::collections::HashMap;
 
 use nirs4all_io_facade::core::materialize::{
-    assemble_in_memory_with_tabular_limits, Cell, Column, Frame, InMemorySource, SourcePayload,
+    assemble_in_memory_with_storage_and_tabular_limits, Cell, Column, Frame, InMemorySource,
+    Matrix, SourcePayload,
 };
 use nirs4all_io_facade::core::spec::{validate_spec, DatasetSpec};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyFloat, PyString};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyString};
 use pythonize::depythonize;
 use serde_json::Value;
+
+/// Bound Python transport duplication, then delegate decode and selection to IO.
+#[pyfunction]
+pub fn select_spectrodataset_features(
+    py: Python<'_>,
+    matrix: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let limits = super::parse_load_limits(None)?;
+    matrix.cast::<PyDict>()?;
+    if matrix.len()? != 6 {
+        return Err(PyValueError::new_err(
+            "numeric wire requires exactly six fields",
+        ));
+    }
+    let rows = matrix.get_item("n_rows")?.extract::<u64>()?;
+    let columns = matrix.get_item("n_cols")?.extract::<u64>()?;
+    limits
+        .tabular()
+        .check_shape(rows, columns)
+        .map_err(|e| PyValueError::new_err(e.message))?;
+    let cells = rows
+        .checked_mul(columns)
+        .ok_or_else(|| PyValueError::new_err("numeric wire cell count overflow"))?;
+    let ir_bytes = cells
+        .checked_mul(8)
+        .ok_or_else(|| PyValueError::new_err("numeric wire byte count overflow"))?;
+    if ir_bytes > limits.max_decoded_file_bytes || ir_bytes > limits.max_decoded_total_bytes {
+        return Err(PyValueError::new_err(
+            "numeric wire exceeds decoded byte limit",
+        ));
+    }
+    let encoded = matrix.get_item("data_bytes_hex")?;
+    encoded.cast::<PyString>()?;
+    if encoded.len()? as u64 > ir_bytes.saturating_mul(2) {
+        return Err(PyValueError::new_err(
+            "numeric wire exceeds encoded shape allowance",
+        ));
+    }
+    let validity = matrix.get_item("validity")?;
+    validity.cast::<PyList>()?;
+    if validity.len()? as u64 != cells {
+        return Err(PyValueError::new_err(
+            "numeric wire validity count mismatch",
+        ));
+    }
+    for flag in validity.try_iter()? {
+        flag?.cast::<PyBool>()?;
+    }
+    // No arbitrary Python object or nested value is copied by depythonize.
+    // These are transport size/type checks; wire semantics stay in Matrix.
+    let dtype = matrix.get_item("dtype")?;
+    dtype.cast::<PyString>()?;
+    if dtype.len()? as u64 > limits.max_field_bytes {
+        return Err(PyValueError::new_err(
+            "numeric wire dtype exceeds field limit",
+        ));
+    }
+    let precision = matrix.get_item("precision")?;
+    precision.cast::<PyDict>()?;
+    if precision.len()? != 5 {
+        return Err(PyValueError::new_err(
+            "numeric wire precision requires five fields",
+        ));
+    }
+    for name in [
+        "dtype",
+        "origin",
+        "source_dtype",
+        "requested_dtype",
+        "consumer",
+    ] {
+        let field = precision.get_item(name)?;
+        if !field.is_none() {
+            field.cast::<PyString>()?;
+            if field.len()? as u64 > limits.max_field_bytes {
+                return Err(PyValueError::new_err(
+                    "numeric wire precision exceeds field limit",
+                ));
+            }
+        }
+    }
+    let value: Value = depythonize(matrix).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let selected = Matrix::from_full_value(&value)
+        .and_then(|matrix| matrix.with_storage(None, Some("SpectroDataset"), true))
+        .map_err(PyValueError::new_err)?;
+    super::to_py(py, &selected.full_value())
+}
 
 #[pyfunction]
 #[pyo3(signature = (limits=None))]
@@ -27,15 +115,17 @@ pub fn resolved_load_limits(
 }
 
 #[pyfunction]
-#[pyo3(signature = (spec, frames, *, limits=None, summary=false))]
+#[pyo3(signature = (spec, frames, *, limits=None, summary=false, storage=None))]
 pub fn assemble_frames(
     py: Python<'_>,
     spec: &Bound<'_, PyAny>,
     frames: &Bound<'_, PyAny>,
     limits: Option<&Bound<'_, PyAny>>,
     summary: bool,
+    storage: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let limits = super::parse_load_limits(limits)?;
+    let options = super::parse_numeric_storage(storage)?;
     let spec: Value = depythonize(spec).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let spec = DatasetSpec::from_value(&spec).map_err(|e| PyValueError::new_err(e.message))?;
     validate_spec(&spec).map_err(|e| PyValueError::new_err(e.message))?;
@@ -166,20 +256,19 @@ pub fn assemble_frames(
             payload: SourcePayload::Frame(Frame::from_columns(columns, "index")),
         });
     }
-    let assembled = assemble_in_memory_with_tabular_limits(
+    let assembled = assemble_in_memory_with_storage_and_tabular_limits(
         &spec,
         &sources,
         &HashMap::new(),
         None,
         Some(limits.tabular()),
+        &options,
     )
     .map_err(|e| PyValueError::new_err(e.message))?;
-    super::to_py(
-        py,
-        &if summary {
-            assembled.to_summary_value()
-        } else {
-            assembled.to_full_value()
-        },
-    )
+    let value: Value = if summary {
+        assembled.to_summary_value()
+    } else {
+        assembled.to_full_value().map_err(PyValueError::new_err)?
+    };
+    super::to_py(py, &value)
 }

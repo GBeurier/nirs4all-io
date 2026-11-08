@@ -1,0 +1,1517 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "authority": "Opus 872 accepted Q-CSV PLAN Parts A and B",
+    "expected_values": "Literal file bytes; no generated numerical reference or fitted model",
+    "producer_run": "q-csv-source-20261105",
+    "native_execution": "UNRUN until compiler grant",
+    "b1_b2_correction": {
+      "authority": "Opus 872 WORK B1/B2 adopted by ROOT",
+      "review_sha256": "7ad7d6ad2d606af263a8c14955d43d28a8da0753e12b9e8b9161b606a9b8557f",
+      "producer_run": "q-csv-b1b2-20261105",
+      "parent_composed_map_sha256": "6de452a07c54d0cdaef00a822f5831eb8c2fe0e5be453186fbd8db48fff0e3af",
+      "native_execution": "UNRUN; source and literal expectations only"
+    }
+  },
+  "rows": [
+    {
+      "id": "comma-dir",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "dir",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n",
+        "Ycal.csv": "y\n1.5\n2.5\n3.5\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ],
+        "delimiter": ",",
+        "y": [
+          [
+            1.5
+          ],
+          [
+            2.5
+          ],
+          [
+            3.5
+          ]
+        ]
+      }
+    },
+    {
+      "id": "comma-list",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "list",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n",
+        "Ycal.csv": "y\n1.5\n2.5\n3.5\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ],
+        "delimiter": ",",
+        "y": [
+          [
+            1.5
+          ],
+          [
+            2.5
+          ],
+          [
+            3.5
+          ]
+        ]
+      }
+    },
+    {
+      "id": "comma-file",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "file",
+      "files": {
+        "data.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ],
+        "delimiter": ",",
+        "y": null
+      }
+    },
+    {
+      "id": "tab-dir",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "dir",
+      "files": {
+        "Xcal.csv": "1000\t1005\t1010\t1015\t1020\t1025\t1030\t1035\t1040\t1045\t1050\t1055\n0.25\t1.25\t2.25\t3.25\t4.25\t5.25\t6.25\t7.25\t8.25\t9.25\t10.25\t11.25\n1.25\t2.25\t3.25\t4.25\t5.25\t6.25\t7.25\t8.25\t9.25\t10.25\t11.25\t12.25\n2.25\t3.25\t4.25\t5.25\t6.25\t7.25\t8.25\t9.25\t10.25\t11.25\t12.25\t13.25\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ],
+        "delimiter": "\t"
+      }
+    },
+    {
+      "id": "pipe-dir",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "dir",
+      "files": {
+        "Xcal.csv": "1000|1005|1010|1015|1020|1025|1030|1035|1040|1045|1050|1055\n0.25|1.25|2.25|3.25|4.25|5.25|6.25|7.25|8.25|9.25|10.25|11.25\n1.25|2.25|3.25|4.25|5.25|6.25|7.25|8.25|9.25|10.25|11.25|12.25\n2.25|3.25|4.25|5.25|6.25|7.25|8.25|9.25|10.25|11.25|12.25|13.25\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ],
+        "delimiter": "|"
+      }
+    },
+    {
+      "id": "mixed-dir",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "dir",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n",
+        "Ycal.csv": "y;z\n1.5;4\n2.5;5\n3.5;6\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ],
+        "delimiter": ",",
+        "y": [
+          [
+            1.5,
+            4
+          ],
+          [
+            2.5,
+            5
+          ],
+          [
+            3.5,
+            6
+          ]
+        ],
+        "y_headers": [
+          "y",
+          "z"
+        ]
+      }
+    },
+    {
+      "id": "refuse-dict",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "refuse": "declare params.delimiter",
+        "file": "Xcal.csv",
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "refuse-legacy",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "legacy",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "refuse": "declare params.delimiter",
+        "file": "Xcal.csv",
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "refuse-config",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "config",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "refuse": "declare params.delimiter",
+        "file": "Xcal.csv",
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "refuse-spec",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "spec",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "refuse": "declare params.delimiter",
+        "file": "Xcal.csv",
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "refuse-variation",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "variation",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "refuse": "declare params.delimiter",
+        "file": "alternate.csv",
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "refuse-gzip",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "gzip",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "refuse": "declare params.delimiter",
+        "file": "Xcal.csv.gz",
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "refuse-zip",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "zip",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "refuse": "declare params.delimiter",
+        "file": "Xcal.csv.zip",
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "refuse-comma-pair",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "dir",
+      "files": {
+        "Xcal.csv": "1,5\n2,5\n"
+      },
+      "expected": {
+        "refuse": "ambiguous",
+        "file": "Xcal.csv"
+      }
+    },
+    {
+      "id": "refuse-two-candidates",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "regression",
+      "route": "dir",
+      "files": {
+        "Xcal.csv": "a,b|c\n1,2|3\n"
+      },
+      "expected": {
+        "refuse": "ambiguous",
+        "file": "Xcal.csv"
+      }
+    },
+    {
+      "id": "control-semicolon",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "1000;1005;1010;1015;1020;1025;1030;1035;1040;1045;1050;1055\n0.25;1.25;2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25\n1.25;2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25;12.25\n2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25;12.25;13.25\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-declared-comma",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ]
+      },
+      "params": {
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "control-declared-tab",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "1000\t1005\t1010\t1015\t1020\t1025\t1030\t1035\t1040\t1045\t1050\t1055\n0.25\t1.25\t2.25\t3.25\t4.25\t5.25\t6.25\t7.25\t8.25\t9.25\t10.25\t11.25\n1.25\t2.25\t3.25\t4.25\t5.25\t6.25\t7.25\t8.25\t9.25\t10.25\t11.25\t12.25\n2.25\t3.25\t4.25\t5.25\t6.25\t7.25\t8.25\t9.25\t10.25\t11.25\t12.25\t13.25\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ]
+      },
+      "params": {
+        "delimiter": "\t"
+      }
+    },
+    {
+      "id": "control-declared-semicolon-decimal",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "x;y\n1,5;2,5\n3,5;4,5\n"
+      },
+      "expected": {
+        "x": [
+          [
+            1.5,
+            2.5
+          ],
+          [
+            3.5,
+            4.5
+          ]
+        ],
+        "headers": [
+          "x",
+          "y"
+        ]
+      },
+      "params": {
+        "delimiter": ";",
+        "decimal_separator": ","
+      }
+    },
+    {
+      "id": "control-semicolon-decimal",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "1,5;2,5\n3,5;4,5\n"
+      },
+      "expected": {
+        "x": [
+          [
+            1.5,
+            2.5
+          ],
+          [
+            3.5,
+            4.5
+          ]
+        ],
+        "headers": [
+          "0",
+          "1"
+        ]
+      },
+      "params": {
+        "decimal_separator": ",",
+        "has_header": false
+      }
+    },
+    {
+      "id": "control-semicolon-quoted",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "\"a,b\";c\n1;2\n3;4\n"
+      },
+      "expected": {
+        "x": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "headers": [
+          "a,b",
+          "c"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-quoted-name",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "name\n\"Smith, J\"\n\"Doe, A\"\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "name"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-unquoted-name",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "name\nSmith, J\nDoe, A\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "name"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-decimal-target",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "y\n1,5\n2,5\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "y"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-space-name",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "Full Name\nJohn Smith\nAnn Lee\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "Full Name"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-all-missing",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "x;m\n1.5;\n2.5;\n"
+      },
+      "expected": {
+        "x": [
+          [
+            1.5,
+            null
+          ],
+          [
+            2.5,
+            null
+          ]
+        ],
+        "headers": [
+          "x",
+          "m"
+        ]
+      },
+      "params": {
+        "na": {
+          "policy": "ignore"
+        }
+      }
+    },
+    {
+      "id": "control-text",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "x\nabc\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "x"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-single-record",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "a,b\n"
+      },
+      "expected": {
+        "x": [],
+        "shape": [
+          0,
+          1
+        ],
+        "headers": [
+          "a,b"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-multiline-quoted",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "name\n\"Smith,\n J\"\n\"Doe,\n A\"\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "name"
+        ]
+      },
+      "params": {}
+    },
+    {
+      "id": "control-auto-onecolumn-dir",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dir",
+      "files": {
+        "Xcal.csv": "name\nSmith, J\nDoe, A\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "name"
+        ]
+      }
+    },
+    {
+      "id": "control-auto-onecolumn-list",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "list",
+      "files": {
+        "Xcal.csv": "name\nSmith, J\nDoe, A\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "name"
+        ]
+      }
+    },
+    {
+      "id": "named-bytes-comma",
+      "operation": "assemble-in-memory",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "native-unrun",
+      "route": "named-bytes",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.25,1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25\n1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25\n2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25,10.25,11.25,12.25,13.25\n"
+      },
+      "expected": {
+        "refuse": "declare params.delimiter",
+        "file": "Xcal.csv"
+      }
+    },
+    {
+      "id": "control-quoted-header",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "\"Last, First\"\n\"Smith, J\"\n\"Doe, A\"\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "Last, First"
+        ]
+      }
+    },
+    {
+      "id": "control-escaped-crlf",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "\"Last, \"\"First\"\"\"\r\n\"Smith, J\"\r\n\"Doe, A\"\r\n"
+      },
+      "expected": {
+        "x": [
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ],
+        "headers": [
+          "Last, \"First\""
+        ]
+      }
+    },
+    {
+      "id": "control-quoted-semicolon",
+      "operation": "load-assembled",
+      "profile": "q-csv-delimiter-v1",
+      "producer_run": "q-csv-source-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "\"a,b\";\"c|d\"\r\n1;2\r\n3;4\r\n"
+      },
+      "expected": {
+        "x": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "headers": [
+          "a,b",
+          "c|d"
+        ]
+      }
+    },
+    {
+      "id": "b2-protein-dir",
+      "operation": "load-assembled",
+      "profile": "q-csv-decimal-comma-b2-v1",
+      "producer_run": "q-csv-b1b2-20261105",
+      "status": "regression",
+      "route": "dir",
+      "files": {
+        "Xcal.csv": "1000;1005;1010;1015;1020;1025;1030;1035;1040;1045;1050;1055\n0.25;1.25;2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25\n1.25;2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25;12.25\n2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25;12.25;13.25\n",
+        "Ycal.csv": "Protein, %\n12,5\n13,1\n14,2\n"
+      },
+      "expected": {
+        "refuse": "ambiguous",
+        "file": "Ycal.csv",
+        "source": "train_y"
+      },
+      "scientific_target": {
+        "headers": [
+          "Protein, %"
+        ],
+        "values": [
+          [
+            12.5
+          ],
+          [
+            13.1
+          ],
+          [
+            14.2
+          ]
+        ],
+        "meaning": "One decimal-comma target, never two integer targets."
+      }
+    },
+    {
+      "id": "b2-protein-list",
+      "operation": "load-assembled",
+      "profile": "q-csv-decimal-comma-b2-v1",
+      "producer_run": "q-csv-b1b2-20261105",
+      "status": "regression",
+      "route": "list",
+      "files": {
+        "Xcal.csv": "1000;1005;1010;1015;1020;1025;1030;1035;1040;1045;1050;1055\n0.25;1.25;2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25\n1.25;2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25;12.25\n2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25;12.25;13.25\n",
+        "Ycal.csv": "Protein, %\n12,5\n13,1\n14,2\n"
+      },
+      "expected": {
+        "refuse": "ambiguous",
+        "file": "Ycal.csv",
+        "source": "train_y"
+      },
+      "scientific_target": {
+        "headers": [
+          "Protein, %"
+        ],
+        "values": [
+          [
+            12.5
+          ],
+          [
+            13.1
+          ],
+          [
+            14.2
+          ]
+        ],
+        "meaning": "One decimal-comma target, never two integer targets."
+      }
+    },
+    {
+      "id": "b2-integer-refusal",
+      "operation": "load-assembled",
+      "profile": "q-csv-decimal-comma-b2-v1",
+      "producer_run": "q-csv-b1b2-20261105",
+      "status": "regression",
+      "route": "file",
+      "files": {
+        "data.csv": "id,y\n1,5\n2,7\n"
+      },
+      "expected": {
+        "refuse": "ambiguous",
+        "file": "data.csv",
+        "source": "data"
+      }
+    },
+    {
+      "id": "b2-dot-positive",
+      "operation": "load-assembled",
+      "profile": "q-csv-decimal-comma-b2-v1",
+      "producer_run": "q-csv-b1b2-20261105",
+      "status": "control",
+      "route": "file",
+      "files": {
+        "data.csv": "x,y\n1.5,2.5\n3.5,4.5\n"
+      },
+      "expected": {
+        "x": [
+          [
+            1.5,
+            2.5
+          ],
+          [
+            3.5,
+            4.5
+          ]
+        ],
+        "headers": [
+          "x",
+          "y"
+        ],
+        "delimiter": ","
+      }
+    },
+    {
+      "id": "b2-trailing-pairs",
+      "operation": "load-assembled",
+      "profile": "q-csv-decimal-comma-b2-v1",
+      "producer_run": "q-csv-b1b2-20261105",
+      "status": "regression",
+      "route": "file",
+      "files": {
+        "data.csv": "1,5 \n2,5 \n3,5 "
+      },
+      "expected": {
+        "refuse": "ambiguous",
+        "file": "data.csv",
+        "source": "data"
+      }
+    },
+    {
+      "id": "b2-protein-declared",
+      "operation": "load-assembled",
+      "profile": "q-csv-decimal-comma-b2-v1",
+      "producer_run": "q-csv-b1b2-20261105",
+      "status": "control",
+      "route": "dict",
+      "files": {
+        "Xcal.csv": "1000;1005;1010;1015;1020;1025;1030;1035;1040;1045;1050;1055\n0.25;1.25;2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25\n1.25;2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25;12.25\n2.25;3.25;4.25;5.25;6.25;7.25;8.25;9.25;10.25;11.25;12.25;13.25\n",
+        "Ycal.csv": "Protein, %\n12,5\n13,1\n14,2\n"
+      },
+      "expected": {
+        "x": [
+          [
+            0.25,
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25
+          ],
+          [
+            1.25,
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25
+          ],
+          [
+            2.25,
+            3.25,
+            4.25,
+            5.25,
+            6.25,
+            7.25,
+            8.25,
+            9.25,
+            10.25,
+            11.25,
+            12.25,
+            13.25
+          ]
+        ],
+        "headers": [
+          "1000",
+          "1005",
+          "1010",
+          "1015",
+          "1020",
+          "1025",
+          "1030",
+          "1035",
+          "1040",
+          "1045",
+          "1050",
+          "1055"
+        ],
+        "y": [
+          [
+            12.5
+          ],
+          [
+            13.1
+          ],
+          [
+            14.2
+          ]
+        ],
+        "y_headers": [
+          "Protein, %"
+        ]
+      },
+      "spec": {
+        "sources": [
+          {
+            "id": "train_x",
+            "role": "features",
+            "input": "Xcal.csv"
+          },
+          {
+            "id": "train_y",
+            "role": "targets",
+            "input": "Ycal.csv",
+            "params": {
+              "delimiter": ";",
+              "decimal_separator": ","
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

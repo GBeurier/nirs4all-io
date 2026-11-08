@@ -1,0 +1,172 @@
+{
+  "files": [
+    {
+      "name": "X.csv",
+      "text": "Sample_ID;set;1100;1102.5;1105\nS10;cal;0.125;0.25;0.375\nS02;val;0.5;;0.75\nS7;cal;0.625;0.875;1\nS33;test;1.25;1.5;1.75\n"
+    },
+    {
+      "name": "Y.csv",
+      "text": "Sample_ID;protein;moisture\nS7;12.5;8.25\nS33;13.25;9\nS10;11;NA\nS02;10.5;7.5\n"
+    }
+  ],
+  "spec": {
+    "name": "wasm-qual",
+    "sample_index": {
+      "by": "id",
+      "key": "Sample_ID"
+    },
+    "params": {
+      "delimiter": ";",
+      "decimal": ".",
+      "has_header": true,
+      "na": {
+        "policy": "ignore"
+      }
+    },
+    "sources": [
+      {
+        "id": "x",
+        "role": "mixed",
+        "input": "X.csv",
+        "key": "Sample_ID",
+        "params": {
+          "header_unit": "nm"
+        },
+        "columns": {
+          "features": {
+            "regex": "^\\d"
+          },
+          "metadata": [
+            "set"
+          ]
+        }
+      },
+      {
+        "id": "y",
+        "role": "targets",
+        "input": "Y.csv",
+        "key": "Sample_ID",
+        "join": {
+          "to": "x",
+          "on": "Sample_ID",
+          "how": "1:1",
+          "coverage": "complete"
+        }
+      }
+    ],
+    "partitions": {
+      "by": "column",
+      "column": "set",
+      "train_values": [
+        "cal"
+      ],
+      "val_values": [
+        "val"
+      ],
+      "test_values": [
+        "test"
+      ],
+      "unknown_policy": "error"
+    }
+  },
+  "expected": {
+    "name": "wasm-qual",
+    "partition_order": [
+      "train",
+      "test",
+      "val"
+    ],
+    "sample_key": "Sample_ID",
+    "repetition": null,
+    "headers": [
+      "1100",
+      "1102.5",
+      "1105"
+    ],
+    "axis": [
+      1100,
+      1102.5,
+      1105
+    ],
+    "targets": [
+      "protein",
+      "moisture"
+    ],
+    "blocks": {
+      "train": {
+        "ids": [
+          "S10",
+          "S7"
+        ],
+        "x": [
+          0.125,
+          0.25,
+          0.375,
+          0.625,
+          0.875,
+          1
+        ],
+        "y": [
+          11,
+          null,
+          12.5,
+          8.25
+        ],
+        "metadata": {
+          "Sample_ID": [
+            "S10",
+            "S7"
+          ],
+          "set": [
+            "cal",
+            "cal"
+          ]
+        }
+      },
+      "test": {
+        "ids": [
+          "S33"
+        ],
+        "x": [
+          1.25,
+          1.5,
+          1.75
+        ],
+        "y": [
+          13.25,
+          9
+        ],
+        "metadata": {
+          "Sample_ID": [
+            "S33"
+          ],
+          "set": [
+            "test"
+          ]
+        }
+      },
+      "val": {
+        "ids": [
+          "S02"
+        ],
+        "x": [
+          0.5,
+          null,
+          0.75
+        ],
+        "y": [
+          10.5,
+          7.5
+        ],
+        "metadata": {
+          "Sample_ID": [
+            "S02"
+          ],
+          "set": [
+            "val"
+          ]
+        }
+      }
+    }
+  }
+}

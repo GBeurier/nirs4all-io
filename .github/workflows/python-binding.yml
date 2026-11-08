@@ -24,7 +24,9 @@ jobs:
         run: |
           # The optional nirs4all integration is exercised downstream; this
           # clean gate validates the self-contained wheel and its adapter seam.
-          pip install pytest pyarrow dist/*.whl
+          N4IO_TEST_WHEEL=$(python -c 'from pathlib import Path; wheels = list(Path("dist").glob("nirs4all_io-*.whl")); assert len(wheels) == 1, wheels; print(wheels[0].resolve().as_posix())')
+          export N4IO_TEST_WHEEL
+          pip install pytest pyarrow "$N4IO_TEST_WHEEL"
           python -m pytest bindings/python/tests -q
 
   candidate-wheels:
@@ -55,7 +57,9 @@ jobs:
       - name: Install and test candidate wheel
         shell: bash
         run: |
-          python -m pip install pytest pyarrow dist/*.whl
+          N4IO_TEST_WHEEL=$(python -c 'from pathlib import Path; wheels = list(Path("dist").glob("nirs4all_io-*.whl")); assert len(wheels) == 1, wheels; print(wheels[0].resolve().as_posix())')
+          export N4IO_TEST_WHEEL
+          python -m pip install pytest pyarrow "$N4IO_TEST_WHEEL"
           python -m pytest bindings/python/tests -q
       - uses: actions/upload-artifact@v7.0.1
         with:

@@ -2,13 +2,39 @@
 """Public dataset transport with explicit observation origins and fixed folds."""
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 
 from .dataset_facade import load_dataset_document, load_multimodal_definition, to_dense_regression
+from .materialize.numeric import integers_to_f64
 from .multimodal import MultimodalDataset, TensorSource
+
+# The closed dtype vocabulary of the public record (the Rust owner's `cell_with_storage` table): no NumPy alias, endian
+# spelling, float16, longdouble or other width is part of the public profile.
+_PUBLIC_DTYPES = frozenset({"object", "bool", "float64", "float32", "int64", "uint64", "int32", "uint32", "int16", "uint16", "int8", "uint8"})
+_PUBLIC_TEXT_DTYPE = re.compile(r"<U[0-9]+\Z")
+
+
+def _public_dtype_vocabulary(document: Any) -> None:
+    """Refuse every serialized array of a public record whose declared dtype is outside the closed vocabulary.
+
+    Independent of the low-level array reader (which accepts any NumPy spelling): it walks the record for array records
+    (``dtype`` / ``shape`` / ``values``) of sources, targets, groups, masks, partitions and ragged parts alike.
+    """
+    if isinstance(document, Mapping):
+        if set(document) == {"dtype", "shape", "values"}:
+            dtype = document["dtype"]
+            if not isinstance(dtype, str) or not (dtype in _PUBLIC_DTYPES or _PUBLIC_TEXT_DTYPE.fullmatch(dtype)):
+                raise ValueError(f"Unsupported public dataset dtype {dtype!r}: the public record accepts only the closed dtype vocabulary")
+            return
+        for item in document.values():
+            _public_dtype_vocabulary(item)
+    elif isinstance(document, list):
+        for item in document:
+            _public_dtype_vocabulary(item)
 
 
 def _portable_storage(values: np.ndarray, label: str) -> None:
@@ -16,8 +42,6 @@ def _portable_storage(values: np.ndarray, label: str) -> None:
         raise ValueError(f"Public dataset has unsupported {label} dtype")
     if values.dtype.kind == "f" and not np.isfinite(values).all():
         raise ValueError(f"Public dataset transport requires finite {label} values")
-    if values.dtype.kind in "iu" and np.any(np.abs(values.astype(object)) > 2**53 - 1):
-        raise ValueError("Public dataset integers must be exactly representable in JavaScript")
     if values.dtype.kind == "O":
         for cell in values.flat:
             if isinstance(cell, (float, np.floating)) and not np.isfinite(cell):
@@ -46,6 +70,8 @@ class Dataset:
             parsed = type(self).from_dict(definition)
             self.multimodal, self.origin_ids, self.fold_ids = parsed.multimodal, parsed.origin_ids, parsed.fold_ids
             return
+        if isinstance(definition, Mapping):
+            _public_dtype_vocabulary(definition)
         self.multimodal = load_multimodal_definition(definition)
         for source in self.multimodal.sources.values():
             if not isinstance(source, TensorSource):
@@ -58,6 +84,9 @@ class Dataset:
         for label, values in (("target", self.multimodal.y), ("group", self.multimodal.groups)):
             if values is not None:
                 _portable_storage(values, label)
+        groups = self.multimodal.groups
+        if groups is not None and groups.dtype.kind in "iu":
+            integers_to_f64(groups)  # an integer group F64 cannot hold (e.g. 2**53 + 1) refuses; exact 2**54 stays valid
         ids = self.multimodal.sample_ids
         self.origin_ids = tuple(ids if origin_ids is None else origin_ids)
         self.fold_ids = tuple([None] * len(ids) if fold_ids is None else fold_ids)

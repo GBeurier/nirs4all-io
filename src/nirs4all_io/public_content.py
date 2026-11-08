@@ -8,6 +8,7 @@ zero. This is a separate content contract, not the existing IR canonical JSON.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import re
@@ -15,16 +16,41 @@ import struct
 from collections.abc import Mapping
 from typing import Any
 
+from .strict_json import check_integer, decimal_float
+
 _DECIMAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z")
 
 
+class ContentNotRepresentableError(ValueError):
+    """The record is VALID but its whole-dataset identity cannot be expressed in the tagged-binary64 grammar.
+
+    Distinct from an invalid source (shape/cap/declaration errors): only an integer binary64 cannot hold exactly
+    raises it, and a caller may then report the optional whole link as unavailable. It is never a license to
+    compute an identity from a rounded stand-in.
+    """
+
+
 def metadata_number(value: Any) -> float:
-    """Read the profile's decimal numeric column, never hex or underscores."""
+    """Read the profile's explicit decimal numeric column, never hex or underscores.
+
+    Text goes through the SAME checked decimal primitive as every numeric text conversion
+    (``strict_json.decimal_float``): overflow and a nonzero mantissa that underflows to zero refuse, genuine zeros
+    keep their sign. An integer token binary64 cannot hold exactly also refuses. Ordinary metadata / class string
+    fields never reach this function: only the designated numeric column is converted.
+    """
     if isinstance(value, str):
         value = value.strip(" \t\n\r\v\f")
         if not _DECIMAL.fullmatch(value):
             raise ValueError("Metadata numeric column requires finite decimal numbers")
-    elif isinstance(value, bool) or not isinstance(value, (int, float)):
+        if re.fullmatch(r"[+-]?[0-9]+", value):
+            # an integer token stays an integer until the exact-F64 gate: it is never rounded to the nearest float
+            integer = check_integer(int(value))  # the shared integer domain [-2**63, 2**64 - 1]
+            exact = float(integer)
+            if int(exact) != integer:
+                raise ValueError("Metadata numeric column integers must be exactly representable in binary64")
+            return -0.0 if integer == 0 and value.startswith("-") else exact  # a true '-0' keeps its sign for the zero folding
+        return decimal_float(value)  # raises NumberDomainError (a ValueError) on overflow / underflow
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("Metadata numeric column requires finite decimal numbers")
     number = float(value)
     if not math.isfinite(number):
@@ -41,6 +67,8 @@ def canonical_content_tree(value: Any) -> list[Any]:
         number = float(value)
         if not math.isfinite(number):
             raise ValueError("Content numbers must be finite")
+        if type(value) is int and int(number) != value:
+            raise ContentNotRepresentableError("Content integers must be exactly representable in binary64")
         return ["number", struct.pack(">d", 0.0 if number == 0 else number).hex()]
     if isinstance(value, str):
         value.encode("utf-8")
@@ -69,6 +97,14 @@ def dataset_content_bytes(record: Mapping[str, Any]) -> bytes:
     from .public_dataset import dataset
     value = dataset(record).to_dict()
     raw = value["dataset"]
+    y = raw.get("y")
+    if raw.get("task_type") == "classification" and y is not None and y["dtype"] == "int64":
+        from .materialize.numeric import validate_label
+
+        # the owner's whole operation applies its label gate (no storage option) to every int64 class label,
+        # observed or withheld; regression targets and group/unit arrays are values, not labels
+        for label in _cells(y["values"]):
+            validate_label(label, "float64")
     u07 = [source["name"] for source in raw["sources"]] == ["nir", "image", "series", "metadata"]
     for source in raw["sources"]:
         source["axis_units"] = {key: unit for key, unit in source["axis_units"].items() if unit is not None}
@@ -82,6 +118,19 @@ def dataset_content_bytes(record: Mapping[str, Any]) -> bytes:
         if array is not None and (re.fullmatch(r"<U[0-9]+", array["dtype"]) or array["dtype"] == "object" and all(isinstance(cell, str) for cell in _cells(array["values"]))):
             array["dtype"] = "string"
     return canonical_content_bytes(value)
+
+
+DATASET_CONTENT_PROFILE = "nirs4all.io.dataset-content.v1"
+
+
+def labelled_dataset_content_bytes(value: Any) -> bytes:
+    """The whole-dataset tagged-binary64 bytes: no label prefix; framing, SHA-256 and zero folding are retained, and the corrected V1 normalization has documented pre-V1 behavior deltas (classes A-F in COPY_PROVENANCE.md)."""
+    return dataset_content_bytes(value)
+
+
+def labelled_dataset_content_identity(value: Any) -> dict[str, str]:
+    """Label the SHA-256 of the whole-dataset bytes (never a receipt, root or caller hash); framing, SHA-256 and zero folding are retained and the corrected V1 normalization has documented pre-V1 behavior deltas (classes A-F in COPY_PROVENANCE.md)."""
+    return {"profile": DATASET_CONTENT_PROFILE, "algorithm": "sha256", "fingerprint": hashlib.sha256(labelled_dataset_content_bytes(value)).hexdigest()}
 
 
 def canonical_source_schema(schema: Mapping[str, Any]) -> dict[str, Any]:

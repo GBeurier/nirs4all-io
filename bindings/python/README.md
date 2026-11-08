@@ -31,6 +31,7 @@ All functions are re-exported from `nirs4all_io`.
 
 | Function | Signature | Returns |
 |---|---|---|
+| `detect_task_type` | `detect_task_type(y, threshold=0.05)` | `(task_token: str, confidence: float)` |
 | `infer` | `infer(input, conventions=None)` | a `DatasetPlan` (data input only) |
 | `to_spec` | `to_spec(input, conventions=None, name=None)` | a `DatasetSpec` |
 | `validate` | `validate(spec)` | `None`; raises `ValueError` if invalid |
@@ -41,6 +42,30 @@ All functions are re-exported from `nirs4all_io`.
 
 **Inputs** (`input`) accept a `str` path, a `pathlib.Path`, a sequence of either
 (file list), or a `dict` (a spec). `validate` additionally accepts a JSON string.
+
+**Task detection (unreleased source candidate).** The new export delegates once
+through the native f64 owner and returns `regression`, `binary` or `multiclass`
+with its confidence. It is a scored pair, distinct from the SDK `TaskType` enum.
+Input is converted by `np.asarray(y).ravel().astype(float).tolist()` without
+mutation: scalars, rectangular lists, noncontiguous arrays, booleans and numeric
+strings are accepted; object `None` becomes NaN. Empty/all-NaN input returns
+`("regression", 0.0)`. Unconvertible labels and ragged inputs raise NumPy's
+conversion errors. Complex-to-real conversion warnings propagate.
+
+Thresholds use native f64 extraction with no clamp, including negative, infinite
+or NaN thresholds. For fractional values, a NumPy float32 threshold can differ
+from reference arithmetic because the owner compares in f64. Invalid threshold
+types raise native extraction errors even for integer observations. Infinities
+return `("regression", 0.8)`; reference-only NumPy arithmetic warnings for them
+are not reproduced. Conversion warnings remain observable. No NumPy dependency
+floor qualification is implied.
+
+This describes candidate source, not availability in a named released version.
+The delivery source map identifies the candidate. Native/wheel qualification is
+separate: the candidate wheel and native hashes must differ from the retained
+published artifact, with exactly one `_native.abi3.so` member, matching RECORD
+and installed bytes, strict isolated origins, and no eager SDK import. No
+consumer dependency or release is authorized by this source change.
 
 **Typed results.** `infer` returns a `DatasetPlan` and `to_spec` a `DatasetSpec`.
 Both subclass `dict` — they stay subscriptable, JSON-serializable, and valid
@@ -78,6 +103,8 @@ DatasetSpec(name='data', schema_version=1, sources=[data:mixed])
 from pathlib import Path
 import nirs4all_io as nio
 
+task, confidence = nio.detect_task_type([0, 1])  # ("binary", 0.9)
+
 plan = nio.infer(Path("/data/run"))            # DatasetPlan (typed dict)
 spec = nio.to_spec("/data/run")                # DatasetSpec (typed dict)
 nio.validate(spec)                             # raises ValueError if invalid
@@ -95,3 +122,10 @@ ds = nio.load("/data/run", target="spectrodataset")   # nirs4all SpectroDataset
 ```bash
 pytest bindings/python/tests
 ```
+
+The separate installed-candidate gate uses `N4IO_TEST_WHEEL` for the exact built
+wheel and `N4IO_TEST_SOURCE_MAP` for its gzipped delivery source map. Run the
+native tests and import-boundary test from an isolated working directory with
+`PYTHONPATH` unset, interpreter `-I -B`, an empty pytest configuration and
+`--import-mode=importlib`. The tests require real installed native origins;
+source-only static/marshalling checks cannot satisfy this gate.

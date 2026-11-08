@@ -63,6 +63,9 @@ try {
   await folderUploadFlow();
   await nonSpectralRefusalFlow();
   await formatRefusalFlow();
+  await sharedProposalListFlow();
+  await sharedPreviewCardFlow();
+  await inputChangeStaleFlow();
 
   if (errors.length) {
     throw new Error(`browser errors:\n${errors.join("\n")}`);
@@ -216,7 +219,7 @@ async function targetTableAuditFlow() {
     await page.click('#modeToggle [data-mode="builder"]');
     await page.waitForFunction(() => window.NIRS4ALL_APP.state.assembled || window.NIRS4ALL_APP.state.assembleError);
     const block = await page.evaluate(() => Object.values(window.NIRS4ALL_APP.state.assembled?.blocks || {})[0]);
-    assert(block?.y_headers?.includes(expected) && block.y.n_rows === 2, "target was not assembled");
+    assert(block?.y_headers?.includes(expected) && block.n_samples === 2 && block.y.columns.length === block.y_headers.length, "target was not assembled");
     if (expected === "class") assert(block.y_categorical.class.categories.join(",") === "red,blue", "categorical labels were lost");
     else assert(block.y.data.join(",") === "10,12", "numeric target values were lost");
     await page.close();
@@ -620,6 +623,317 @@ async function nonSpectralRefusalFlow() {
   assert(!result.probe.includes("does not support in-memory reads"), "generic in-memory fallback leaked");
   assert(result.specText.includes("Dataset properties appear after inference"), "non-spectral file created a spec");
   assert(result.decision.includes("non-spectral"), "non-spectral decision missing");
+  await page.close();
+}
+
+// Shared nirs4all-ui islands. Proposal fixtures below are hand-written display
+// inputs: they exercise the host's callback mapping, not any owner inference claim.
+// The component selectors (.n4ui-*) come from nirs4all-ui OwnerProposalList.
+async function seedProposals(page) {
+  await page.evaluate(() => {
+    const fixture = [
+      { id: "p-partition", kind: "partition", target: "Y.csv", value: "train", score: 0.5, status: "proposed" },
+      { id: "p-future", kind: "future_kind", target: "t", value: { by: "column", key: "k" }, status: "proposed" },
+      {
+        id: "p-role", kind: "role", target: "X.csv", value: "features", score: 0.91, ambiguous: true,
+        evidence: ["first clue", "second clue"], status: "proposed",
+        alternatives: [{ value: "metadata", score: 0.4 }, { value: { mode: "join_id", on: "id" } }],
+      },
+    ];
+    window.__fixture = fixture;
+    const { state } = window.NIRS4ALL_APP;
+    state.builderError = null;
+    state.confirmedEchoes = [];
+    state.proposals = fixture;
+    window.NIRS4ALL_BUILDER.render();
+  });
+  await page.waitForFunction(() => document.querySelectorAll("#proposalGroups .n4ui-proposal").length === 3);
+}
+
+function locks(page) {
+  return page.evaluate(() => JSON.parse(JSON.stringify(window.NIRS4ALL_APP.state.confirmed)));
+}
+
+async function sharedProposalListFlow() {
+  const page = await newStandalonePage({ width: 1440, height: 1200 });
+
+  // Bundle: local files only offline; staged files requested when served.
+  const tags = await page.evaluate(() => ({
+    loaded: typeof window.Nirs4allUIBrowser?.mountOwnerProposals === "function",
+    scripts: document.querySelectorAll('script[src*="vendor/ui"]').length,
+    links: document.querySelectorAll('link[href*="vendor/ui"]').length,
+    notices: !!document.getElementById("nirs4all-ui-notices"),
+  }));
+  assert(tags.loaded, "shared UI bundle is not loaded");
+  if (process.env.N4IO_PAGE_URL) assert(tags.scripts === 1 && tags.links === 1, "served page does not load the staged UI files");
+  else {
+    assert(tags.scripts === 0 && tags.links === 0 && tags.notices, "standalone page references UI files or lacks the embedded notices");
+    // The complete staged MIT texts (not just their headers) are embedded, each once.
+    const embedded = await page.evaluate(() => document.getElementById("nirs4all-ui-notices").textContent);
+    for (const name of ["react", "react-dom", "scheduler"]) {
+      const rel = `LICENSES/THIRD-PARTY/${name}.LICENSE.txt`;
+      const staged = (await readFile(path.join(root, "vendor", "ui", rel), "utf8")).replace(/\r\n?/g, "\n");
+      assert(embedded.split(`=== ${rel} ===`).length - 1 === 1, `${rel}: path header is not embedded exactly once`);
+      assert(embedded.split(`=== ${rel} ===\n${staged}`).length - 1 === 1, `${rel}: embedded text differs from the staged file or is repeated`);
+    }
+  }
+
+  await page.click('#modeToggle [data-mode="builder"]');
+  await page.waitForSelector("#proposalGroups [data-mount='owner-proposals'] section.n4ui-proposals");
+  assert((await page.textContent("#proposalGroups")).includes("Add files to see decisions to validate."), "empty builder state is not shown");
+
+  // Display rules: known kinds first, unknown kind appended (never dropped), missing score is a dash.
+  await seedProposals(page);
+  const kinds = await page.locator("#proposalGroups .n4ui-proposal").evaluateAll((items) => items.map((li) => li.dataset.kind));
+  assert(kinds.join(",") === "role,partition,future_kind", `proposal order wrong: ${kinds}`);
+  const future = page.locator('#proposalGroups .n4ui-proposal[data-kind="future_kind"]');
+  assert(await future.locator(".n4ui-proposal-score[data-missing]").count() === 1, "missing score is not shown as a dash");
+  assert(!(await future.innerText()).includes("0.00"), "missing score was shown as 0.00");
+  const role = page.locator('#proposalGroups .n4ui-proposal[data-kind="role"]');
+  const altScores = await role.locator(".n4ui-proposal-alternatives .n4ui-proposal-score").allInnerTexts();
+  assert(altScores.length === 2 && altScores[0].includes("0.40") && altScores[1].includes("—"), `alternative scores wrong: ${altScores}`);
+  assert((await role.locator(".n4ui-proposal-score-label").first().innerText()).toLowerCase().includes("uncalibrated"), "score is not labelled uncalibrated");
+  const tiers = await page.evaluate(() => [...document.querySelectorAll("#proposalGroups .n4ui-proposal > .n4ui-proposal-body .n4ui-proposal-score")].map((n) => n.className));
+  assert(tiers[0].includes(" ok") && tiers[1].includes("warn"), `host score tiers were not applied: ${tiers}`);
+
+  // Alternative: the host stores the ORIGINAL owner value object, not a copy of display text.
+  await role.locator(".n4ui-proposal-alternative").nth(1).click();
+  const alt = await page.evaluate(() => {
+    const lock = window.NIRS4ALL_APP.state.confirmed.at(-1);
+    return { kind: lock.kind, target: lock.target, status: lock.status, same: lock.value === window.__fixture[2].alternatives[1].value };
+  });
+  assert(alt.kind === "role" && alt.target === "X.csv" && alt.status === "overridden" && alt.same, `alternative lock is wrong: ${JSON.stringify(alt)}`);
+
+  // Confirm.
+  await seedProposals(page);
+  await page.locator('#proposalGroups .n4ui-proposal[data-kind="partition"] .n4ui-proposal-confirm').click();
+  let current = await locks(page);
+  assert(current.length === 2 && JSON.stringify(current[1]) === JSON.stringify({ kind: "partition", target: "Y.csv", value: "train", status: "confirmed" }), `confirm lock is wrong: ${JSON.stringify(current)}`);
+
+  // Override: the host vocabulary value replaces the earlier role lock.
+  await seedProposals(page);
+  await page.locator('#proposalGroups .n4ui-proposal[data-kind="role"] .n4ui-proposal-override select').selectOption("ignore");
+  current = await locks(page);
+  assert(current.length === 2 && current.some((l) => l.kind === "role" && l.value === "ignore" && l.status === "overridden"), `override lock is wrong: ${JSON.stringify(current)}`);
+
+  // Stale source: a newer s.proposals array that has not been shown yet must not be actionable.
+  await seedProposals(page);
+  await page.evaluate(() => { const { state } = window.NIRS4ALL_APP; state.proposals = [...state.proposals]; });
+  await page.locator('#proposalGroups .n4ui-proposal[data-kind="future_kind"] .n4ui-proposal-confirm').click();
+  assert((await locks(page)).length === 2, "a stale list action created a lock");
+  await page.evaluate(() => window.NIRS4ALL_BUILDER.render());
+  await page.locator('#proposalGroups .n4ui-proposal[data-kind="future_kind"] .n4ui-proposal-confirm').click();
+  const fresh = await page.evaluate(() => {
+    const lock = window.NIRS4ALL_APP.state.confirmed.at(-1);
+    return { kind: lock.kind, same: lock.value === window.__fixture[1].value };
+  });
+  assert(fresh.kind === "future_kind" && fresh.same, `unknown-kind lock is wrong: ${JSON.stringify(fresh)}`);
+
+  // Busy: no lock while an owner cycle is in flight, whether or not the DOM has caught up.
+  await seedProposals(page);
+  const busy = await page.evaluate(async () => {
+    const app = window.NIRS4ALL_APP;
+    app.state.confirmed = [];
+    const cycle = window.NIRS4ALL_BUILDER.runProposeCycle();
+    document.querySelector('#proposalGroups .n4ui-proposal[data-kind="partition"] .n4ui-proposal-confirm')?.click();
+    const during = app.state.confirmed.length;
+    await cycle;
+    return during;
+  });
+  assert(busy === 0, "a list action created a lock during an owner cycle");
+
+  // Confirmed echoes and undo stay host-owned.
+  await page.evaluate(() => {
+    const { state } = window.NIRS4ALL_APP;
+    state.confirmed = [{ kind: "role", target: "X.csv", value: "features", status: "confirmed" }];
+    state.confirmedEchoes = [{ id: "e1", kind: "role", target: "X.csv", value: "features", status: "confirmed" }];
+    state.proposals = [];
+    window.NIRS4ALL_BUILDER.render();
+  });
+  await page.locator("#proposalGroups .confirmed-list summary").click();
+  await page.locator('#proposalGroups .confirmed-row [data-action="undo"]').click();
+  assert((await locks(page)).length === 0, "undo did not remove the lock");
+
+  // Owner error is shown by the list; reset leaves no proposal nodes.
+  await page.evaluate(() => {
+    window.NIRS4ALL_APP.state.builderError = "owner refused";
+    window.NIRS4ALL_BUILDER.render();
+  });
+  await page.waitForFunction(() => document.querySelector("#proposalGroups .n4ui-proposals-error")?.textContent === "owner refused");
+  await seedProposals(page);
+  await page.click("#reset");
+  await page.waitForFunction(
+    () => document.querySelectorAll("#proposalGroups .n4ui-proposal").length === 0,
+    null,
+    { timeout: 5000 },
+  );
+  await page.close();
+}
+
+async function sharedPreviewCardFlow() {
+  const page = await newStandalonePage({ width: 1440, height: 1200 });
+  await page.click('#modeToggle [data-mode="builder"]');
+  await page.click("#loadSample");
+  await page.waitForFunction(
+    () => window.NIRS4ALL_APP.state.assembled || window.NIRS4ALL_APP.state.assembleError,
+    null,
+    { timeout: 20000 },
+  );
+  const real = await page.evaluate(() => {
+    const { state, fmtInt } = window.NIRS4ALL_APP;
+    if (!state.assembled) return { error: state.assembleError };
+    return { parts: Object.entries(state.assembled.blocks).map(([part, block]) => ({ part, rows: fmtInt(Number(block.n_samples)) })) };
+  });
+  assert(!real.error && real.parts.length, `sample did not assemble: ${real.error}`);
+  await page.waitForFunction((n) => document.querySelectorAll("#materializePreview article[data-dataset-id]").length === n, real.parts.length);
+
+  // Card stats are read from the DOM text (textContent): the shared CSS shows the labels
+  // uppercase (text-transform), so innerText would read ROWS / X COLUMNS / Y COLUMNS.
+  const cardStats = (card) => card.locator(".n4ui-b-stat").evaluateAll((items) => items.map((item) => ({
+    label: item.querySelector(".n4ui-b-stat-label")?.textContent,
+    value: item.querySelector(".n4ui-b-stat-value")?.textContent,
+    detail: item.querySelector(".n4ui-b-stat-detail")?.textContent ?? null,
+  })));
+
+  // One card per owner partition; rows (observations), never a "Samples" label.
+  for (const { part, rows } of real.parts) {
+    const stats = await cardStats(page.locator(`#materializePreview div[data-partition="${part}"] article`));
+    const labels = stats.map((stat) => stat.label);
+    assert(labels.includes("Rows") && !labels.includes("Samples"), `partition ${part}: card labels are wrong: ${labels}`);
+    assert(stats.find((stat) => stat.label === "Rows").value === rows, `partition ${part}: card does not show the owner's row count ${rows}`);
+  }
+
+  // Display fixture (not an owner result): one kept partition updates in place, one is added,
+  // the others are unmounted. Per-source n_cols and the host footers are shown.
+  const keep = real.parts[0].part;
+  await page.evaluate((keepPart) => {
+    window.__cards = Object.fromEntries([...document.querySelectorAll("#materializePreview [data-partition]")].map((el) => [el.dataset.partition, el]));
+    const { state } = window.NIRS4ALL_APP;
+    state.assembled = {
+      naAbort: "na_policy is 'abort'",
+      blocks: {
+        [keepPart]: { n_samples: 7, x: [{ n_cols: 3, n_rows: 7, data: [] }, { n_cols: 2, n_rows: 7, data: [] }], source_ids: ["a", "b"], y: { columns: [{ name: "protein", kind: "numeric" }], data: [] }, y_headers: ["protein"] },
+        zz_fixture: { n_samples: 2, x: [{ n_cols: 4, n_rows: 2, data: [] }], source_ids: ["c"] },
+      },
+    };
+    window.NIRS4ALL_BUILDER.render();
+  }, keep);
+  await page.waitForFunction(() => document.querySelectorAll("#materializePreview article[data-dataset-id]").length === 2);
+  const updated = await page.evaluate((keepPart) => ({
+    sameNode: window.__cards[keepPart] === document.querySelector(`#materializePreview [data-partition="${keepPart}"]`),
+    removedReleased: Object.entries(window.__cards).filter(([part]) => part !== keepPart).every(([, el]) => !el.isConnected && el.childElementCount === 0),
+    order: [...document.querySelectorAll("#materializePreview [data-partition]")].map((el) => el.dataset.partition),
+    foot: document.querySelector("#materializePreview .preview-foot")?.parentElement.textContent ?? "",
+  }), keep);
+  const keptStats = await cardStats(page.locator(`#materializePreview div[data-partition="${keep}"] article`));
+  const addedStats = await cardStats(page.locator('#materializePreview div[data-partition="zz_fixture"] article'));
+  assert(updated.sameNode, "an unchanged partition was remounted instead of updated");
+  assert(updated.removedReleased, "removed partitions left roots or nodes behind");
+  assert(updated.order.join(",") === `${keep},zz_fixture`, `card order wrong: ${updated.order}`);
+  // Owner counts of the fixture: 7 rows; X = 3 + 2 = 5 columns by source; 1 target column "protein"; 2 rows and 4 columns for the added partition.
+  const rowsDetail = "observations, not unique samples";
+  assert(JSON.stringify(keptStats) === JSON.stringify([
+    { label: "Rows", value: "7", detail: rowsDetail },
+    { label: "X columns", value: "5", detail: "a: 3 · b: 2" },
+    { label: "y columns", value: "1", detail: "protein" },
+  ]), `card does not show owner counts: ${JSON.stringify(keptStats)}`);
+  assert(JSON.stringify(addedStats) === JSON.stringify([
+    { label: "Rows", value: "2", detail: rowsDetail },
+    { label: "X columns", value: "4", detail: "c: 4" },
+  ]), `added partition card is wrong: ${JSON.stringify(addedStats)}`);
+  assert(updated.foot.includes("Missing values are kept for the preview"), "NA-refusal footer is no longer rendered by the host");
+
+  // Reset releases every card; the host message returns.
+  await page.evaluate(() => { window.__cards = [...document.querySelectorAll("#materializePreview [data-partition]")]; });
+  await page.click("#reset");
+  assert(await page.evaluate(() => window.__cards.every((el) => !el.isConnected && el.childElementCount === 0)), "reset left card roots or nodes behind");
+  assert(await page.locator("#materializePreview article").count() === 0, "reset left preview cards");
+  assert((await page.textContent("#materializePreview")).includes("Confirm the open decisions"), "preview message is missing after reset");
+  await page.close();
+}
+
+// A change of the bound input files must stop decision actions the moment it starts,
+// before any byte is read, and must not leave stale proposals/spec/assembly behind.
+// The read is held open with a gated File.arrayBuffer; the owner re-run is the real one.
+async function inputChangeStaleFlow() {
+  const page = await newStandalonePage({ width: 1440, height: 1200 });
+  await page.click('#modeToggle [data-mode="builder"]');
+  await page.click("#loadSample");
+  await page.waitForFunction(() => {
+    const s = window.NIRS4ALL_APP.state;
+    return s.inputBusy === 0 && (s.assembled || s.assembleError);
+  }, null, { timeout: 20000 });
+
+  const holdReads = () => page.evaluate(() => {
+    window.__readArrayBuffer = File.prototype.arrayBuffer;
+    const gate = new Promise((resolve) => { window.__openGate = resolve; });
+    File.prototype.arrayBuffer = async function () { await gate; return window.__readArrayBuffer.call(this); };
+  });
+  const releaseReads = () => page.evaluate(() => { window.__openGate(); File.prototype.arrayBuffer = window.__readArrayBuffer; });
+  const settled = () => page.waitForFunction(() => window.NIRS4ALL_APP.state.inputBusy === 0, null, { timeout: 20000 });
+  const extra = (text) => ({ name: "extra.csv", mimeType: "text/csv", buffer: Buffer.from(text) });
+  const lock = { kind: "role", target: "X.csv", value: "features", status: "confirmed" };
+
+  // New file name: decisions survive, everything derived from the old inputs is gone at once.
+  await page.evaluate((l) => { window.NIRS4ALL_APP.state.confirmed = [l]; }, lock);
+  await holdReads();
+  await page.setInputFiles("#fileInput", extra("id;1000;1010\na;1;2\nb;2;3\n"));
+  await page.waitForFunction(() => window.NIRS4ALL_APP.state.inputBusy === 1);
+  const during = await page.evaluate(() => {
+    const s = window.NIRS4ALL_APP.state;
+    return {
+      proposals: s.proposals.length, echoes: s.confirmedEchoes.length, spec: s.spec, working: s.workingSpec,
+      assembled: s.assembled, locks: s.confirmed.length, acceptAll: document.querySelector("#acceptAll").disabled,
+    };
+  });
+  assert(during.proposals === 0 && during.echoes === 0 && during.spec === null && during.working === null && during.assembled === null,
+    `derived state survived the start of an input change: ${JSON.stringify(during)}`);
+  assert(during.locks === 1, "an added file discarded unrelated confirmed decisions");
+  assert(during.acceptAll, "Accept All stayed enabled while the inputs were changing");
+
+  // Old proposal arrays that reach the screen in this window are shown but inert.
+  await seedProposals(page);
+  const inert = await page.evaluate(() => {
+    const controls = [...document.querySelectorAll("#proposalGroups .n4ui-proposals button, #proposalGroups .n4ui-proposals select")];
+    return { count: controls.length, enabled: controls.filter((el) => !el.disabled).length };
+  });
+  assert(inert.count > 0 && inert.enabled === 0, `decision controls are enabled during an input change: ${JSON.stringify(inert)}`);
+  await page.evaluate(() => {
+    for (const button of document.querySelectorAll("#proposalGroups .n4ui-proposals button, #acceptAll")) button.click();
+  });
+  assert(JSON.stringify(await locks(page)) === JSON.stringify([lock]), "a decision action changed the locks during an input change");
+
+  await releaseReads();
+  await settled();
+  await page.waitForFunction(() => !document.querySelector("#proposalGroups .n4ui-proposals")?.hasAttribute("aria-busy"));
+  const after = await page.evaluate(() => {
+    const s = window.NIRS4ALL_APP.state;
+    return {
+      bound: s.files.some((f) => f.name === "extra.csv"), staleFixture: s.proposals.some((p) => String(p.id).startsWith("p-")),
+      locks: s.confirmed.length, busyAttr: document.querySelector("#proposalGroups .n4ui-proposals")?.getAttribute("aria-busy"),
+      acceptAll: document.querySelector("#acceptAll").disabled,
+    };
+  });
+  assert(after.bound && !after.staleFixture, "the owner re-run did not replace the stale proposals");
+  assert(after.locks === 1 && !after.acceptAll && after.busyAttr === null, `actions were not restored after the re-run: ${JSON.stringify(after)}`);
+
+  // Same file name with new bytes: its decisions were validated against the old bytes.
+  await holdReads();
+  await page.setInputFiles("#fileInput", extra("id;1000;1010\nc;3;4\nd;4;5\n"));
+  await page.waitForFunction(() => window.NIRS4ALL_APP.state.inputBusy === 1);
+  await releaseReads();
+  await settled();
+  const replaced = await page.evaluate(() => ({ locks: window.NIRS4ALL_APP.state.confirmed.length, status: document.querySelector("#status").textContent }));
+  assert(replaced.locks === 0 && replaced.status.includes("must be confirmed again"), `replacement kept stale decisions or did not say so: ${JSON.stringify(replaced)}`);
+
+  // Reset while a read is in flight: the late files must not come back.
+  await holdReads();
+  await page.setInputFiles("#fileInput", { name: "late.csv", mimeType: "text/csv", buffer: Buffer.from("id;1000;1010\ne;5;6\n") });
+  await page.waitForFunction(() => window.NIRS4ALL_APP.state.inputBusy === 1);
+  await page.click("#reset");
+  await releaseReads();
+  await settled();
+  assert(await page.evaluate(() => window.NIRS4ALL_APP.state.files.length === 0), "a read that finished after reset restored its files");
   await page.close();
 }
 

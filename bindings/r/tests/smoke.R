@@ -92,6 +92,41 @@ bad2 <- tryCatch({
 }, error = function(e) TRUE)
 stopifnot(bad2)
 
+# InferOptions crosses the real C ABI, including a singleton conventions array.
+expect_error <- function(expr, text) {
+  message <- tryCatch({ force(expr); "" }, error = conditionMessage)
+  stopifnot(grepl(text, message, fixed = TRUE))
+}
+with_conventions <- nio_infer(c(xcsv, ycsv), conventions = "nirs4all-classic")
+stopifnot(identical(with_conventions$resolved_spec, fl_plan$resolved_spec))
+raw_options <- n4io_infer(flist_json, '{"conventions":["nirs4all-classic"]}')
+stopifnot(grepl('"resolved_spec"', raw_options, fixed = TRUE))
+expect_error(n4io_infer(flist_json, '["nirs4all-classic"]'), "invalid infer options")
+
+# An unnamed numeric table retains two features plus the existing last-column
+# target policy. Explicit file false wins over global true before the first read.
+noheader <- file.path(tmp, "noheader.csv")
+writeLines(c("0.0465041;0.05;0.06", "0.07;0.08;0.09", "0.10;0.11;0.12"), noheader)
+hp <- nio_infer(noheader, params = list(has_header = TRUE),
+                file_params = list("noheader.csv" = list(has_header = FALSE)))
+hs <- nio_resolved_spec(hp)
+stopifnot(identical(hs$sources[[1]]$params$has_header, FALSE))
+hb <- nio_load(hs)$blocks$train
+stopifnot(hb$n_samples == 3, identical(unlist(hb$x_shapes[[1]]), c(3L, 2L)))
+stopifnot(identical(unlist(hb$y_shape), c(3L, 1L)))
+# The summary exposes values rounded to four decimals, not full precision.
+stopifnot(hb$x[[1]][[1]][[1]] == 0.0465, hb$x[[1]][[3]][[1]] == 0.10,
+          hb$y[[1]][[1]] == 0.06, hb$y[[3]][[1]] == 0.12)
+auto_header <- nio_infer(noheader)
+stopifnot(isTRUE(auto_header$resolved_spec$sources[[1]]$params$has_header))
+stopifnot(any(grepl("header_ambiguous", unlist(auto_header$warnings), fixed = TRUE)))
+stopifnot(nio_load(nio_resolved_spec(auto_header))$blocks$train$n_samples == 2)
+expect_error(nio_infer(noheader, file_params = list("other.csv" = list(has_header = FALSE))),
+             "unknown input")
+expect_error(nio_infer(noheader, params = list(FALSE)), "named list")
+expect_error(nio_infer(noheader, file_params = list(list(has_header = FALSE))), "named list")
+expect_error(nio_infer(noheader, conventions = 1), "character vector")
+
 # --- corpus-backed checks (only when N4IO_CORPUS is set) ----------------------
 
 corpus <- Sys.getenv("N4IO_CORPUS")
@@ -113,6 +148,14 @@ if (nzchar(corpus)) {
   stopifnot(grepl("n4io_spec", format(sp), fixed = TRUE))
 
   pl <- nio_infer(file.path(corpus, "single_combined"))
+  explicit_pl <- nio_infer(file.path(corpus, "single_combined"),
+                           conventions = "nirs4all-classic")
+  stopifnot(identical(pl$resolved_spec, explicit_pl$resolved_spec))
+  mixed <- nio_load(nio_resolved_spec(explicit_pl))$blocks$train
+  stopifnot(mixed$n_samples == 6, identical(unlist(mixed$x_shapes[[1]]), c(6L, 12L)))
+  stopifnot(identical(unlist(mixed$feature_headers[[1]]), as.character(seq(1000, 1055, 5))))
+  stopifnot(identical(unlist(mixed$y_headers), "protein"))
+  stopifnot(identical(unlist(mixed$y), c(12.5, 8.3, 15.1, 9.7, 11.2, 13.8)))
   cdf <- as.data.frame(pl)
   stopifnot("structure" %in% cdf$decision, "task_type" %in% cdf$decision)
 }

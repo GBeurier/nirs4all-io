@@ -11,12 +11,15 @@ per-source alignment keys (``SourceSpec.key``) and relational join keys (``JoinS
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .. import strict_json
 from .enums import (
     AggregateMethod,
     Cardinality,
@@ -390,35 +393,73 @@ class PartitionsSpec:
     column: str | None = None
     train_values: list[Any] = field(default_factory=list)
     test_values: list[Any] = field(default_factory=list)
+    val_values: list[Any] = field(default_factory=list)
     predict_values: list[Any] = field(default_factory=list)
     unknown_policy: UnknownPolicy = UnknownPolicy.TRAIN
     # For `by: index`: row-index lists per partition (deterministic by construction).
     train: Any = None
     test: Any = None
+    val: Any = None
     predict: Any = None
     # For `by: index_file`: paths to files containing one row-index per line (CSV/TXT/JSON).
     train_file: str | None = None
     test_file: str | None = None
+    val_file: str | None = None
     predict_file: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict | None) -> PartitionsSpec | None:
+        if d is None:
+            return None
+        if not isinstance(d, Mapping):
+            raise SpecError("partitions must be a mapping")
+        allowed = {"by", "column", "train_values", "test_values", "val_values", "predict_values", "unknown_policy",
+                   "train", "test", "val", "predict", "train_file", "test_file", "val_file", "predict_file"}
+        unknown = sorted(set(d) - allowed, key=str)
+        if unknown:
+            raise SpecError(f"partitions: unknown keys {unknown!r}")
+        for key in ("train_values", "test_values", "val_values", "predict_values"):
+            if key in d and not isinstance(d[key], list):
+                raise SpecError(f"partitions.{key} must be an array")
         if not d:
             return None
+        by = PartitionBy.coerce(d["by"], field="partitions.by") if d.get("by") else None
+        declarations = {
+            PartitionBy.COLUMN: {"column", "train_values", "test_values", "val_values", "predict_values", "unknown_policy"},
+            PartitionBy.INDEX: {"train", "test", "val", "predict"},
+            PartitionBy.INDEX_FILE: {"train_file", "test_file", "val_file", "predict_file"},
+        }.get(by or PartitionBy.FILES, set())
+        for key, value in d.items():
+            if key != "by" and key not in declarations and value is not None and value != "" and value != [] and value != {}:
+                raise SpecError(f"partitions.{key} is not applicable to by='{by.value if by else 'absent'}'")
         return cls(
-            by=PartitionBy.coerce(d["by"], field="partitions.by") if d.get("by") else None,
+            by=by,
             column=d.get("column"),
             train_values=list(d.get("train_values", [])),
             test_values=list(d.get("test_values", [])),
+            val_values=list(d.get("val_values", [])),
             predict_values=list(d.get("predict_values", [])),
             unknown_policy=UnknownPolicy.coerce(d.get("unknown_policy", "train"), field="partitions.unknown_policy"),
             train=d.get("train"),
             test=d.get("test"),
+            val=d.get("val"),
             predict=d.get("predict"),
             train_file=d.get("train_file"),
             test_file=d.get("test_file"),
+            val_file=d.get("val_file"),
             predict_file=d.get("predict_file"),
         )
+
+    def validate_column_values(self) -> None:
+        owners: dict[str, str] = {}
+        for name in ("train_values", "test_values", "val_values", "predict_values"):
+            for value in getattr(self, name):
+                if not isinstance(value, (str, int, float)) or (isinstance(value, float) and not math.isfinite(value)):
+                    raise SpecError(f"partitions.{name}: labels must be strings, finite numbers or bools")
+                normalized = str(value).lower()
+                first = owners.setdefault(normalized, name)
+                if first != name:
+                    raise SpecError(f"partitions: value {normalized!r} appears in both '{first}' and '{name}'")
 
     def to_dict(self) -> dict:
         return _drop_none(
@@ -427,13 +468,16 @@ class PartitionsSpec:
                 "column": self.column,
                 "train_values": self.train_values,
                 "test_values": self.test_values,
+                "val_values": self.val_values,
                 "predict_values": self.predict_values,
                 "unknown_policy": self.unknown_policy.value if self.unknown_policy != UnknownPolicy.TRAIN else None,
                 "train": self.train,
                 "test": self.test,
+                "val": self.val,
                 "predict": self.predict,
                 "train_file": self.train_file,
                 "test_file": self.test_file,
+                "val_file": self.val_file,
                 "predict_file": self.predict_file,
             }
         )
@@ -450,6 +494,8 @@ class FoldsSpec:
     def from_dict(cls, d: dict | None) -> FoldsSpec | None:
         if not d:
             return None
+        if "inline" in d and not isinstance(d["inline"], list):
+            raise SpecError("folds.inline must be an array")
         return cls(
             inline=list(d.get("inline", [])),
             file=d.get("file"),
@@ -464,6 +510,23 @@ class FoldsSpec:
         return out
 
 
+def outlier_threshold_number(value: Any) -> float:
+    """A PRESENT ``aggregate.outlier_threshold``: a finite JSON number (bool, string, null and nonfinite refuse).
+
+    The one validation seam shared by the typed spec reader and the package wire reader; no range or
+    scientific policy is added.
+    """
+    if type(value) not in (int, float):
+        raise SpecError("aggregate.outlier_threshold must be a finite JSON number")
+    try:
+        number = float(value)
+    except OverflowError:
+        number = math.inf
+    if not math.isfinite(number):
+        raise SpecError("aggregate.outlier_threshold must be a finite JSON number")
+    return number
+
+
 @dataclass
 class AggregateSpec:
     by: str | None = None
@@ -473,13 +536,15 @@ class AggregateSpec:
 
     @classmethod
     def from_dict(cls, d: dict | None) -> AggregateSpec | None:
-        if not d:
-            return None
+        if d is None:
+            return None  # only an absent/null block is "no aggregation"; an empty object is a present block with the defaults
+        if not isinstance(d, dict):
+            raise SpecError("aggregate must be an object")
         return cls(
             by=str(d["by"]) if d.get("by") is not None else None,
             method=AggregateMethod.coerce(d.get("method", "mean"), field="aggregate.method"),
             exclude_outliers=bool(d.get("exclude_outliers", False)),
-            outlier_threshold=float(d.get("outlier_threshold", 0.95)),
+            outlier_threshold=outlier_threshold_number(d["outlier_threshold"]) if "outlier_threshold" in d else 0.95,
         )
 
     def to_dict(self) -> dict:
@@ -562,12 +627,12 @@ class DatasetSpec:
     @classmethod
     def from_yaml(cls, source: str | Path) -> DatasetSpec:
         text = Path(source).read_text(encoding="utf-8") if _looks_like_path(source) else str(source)
-        return cls.from_dict(yaml.safe_load(text))
+        return cls.from_dict(strict_json.check_numbers(yaml.safe_load(text)))
 
     @classmethod
     def from_json(cls, source: str | Path) -> DatasetSpec:
         text = Path(source).read_text(encoding="utf-8") if _looks_like_path(source) else str(source)
-        return cls.from_dict(json.loads(text))
+        return cls.from_dict(strict_json.loads(text))
 
     # -- serialization ------------------------------------------------------ #
     def to_dict(self) -> dict:

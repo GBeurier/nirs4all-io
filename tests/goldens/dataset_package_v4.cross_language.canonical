@@ -46,10 +46,10 @@
           "sample",
           "wavelength"
         ],
-        "byte_len": 38,
+        "byte_len": 314,
         "codec": null,
-        "content_hash": "ff3c34858383e3403d5218a4c6e8e1e77739f26bbe78afa4960d82bc420bb205",
-        "dtype": "float32",
+        "content_hash": "3c7d266e990b2f8d9b4ab93deb9eb8e11616213ab5cc7082158023dba431c2ec",
+        "dtype": "float64",
         "id": "train/x0",
         "partition": "train",
         "payload_kind": "feature_matrix",
@@ -66,10 +66,10 @@
         "axes": [
           "sample"
         ],
-        "byte_len": 19,
+        "byte_len": 137,
         "codec": null,
-        "content_hash": "a27c7f5d1f23900be61fce4440ea6b6da306d4cfc21f2ac4ae490ef3d51f5b5b",
-        "dtype": "float32",
+        "content_hash": "fb2c16402d574787e929be963fb522341b6c6a5e9d7f318d4b1053028076ee88",
+        "dtype": "float64",
         "id": "train/y",
         "partition": "train",
         "payload_kind": "target_table",
@@ -107,10 +107,10 @@
         "axes": [
           "sample"
         ],
-        "byte_len": 10,
+        "byte_len": 113,
         "codec": null,
-        "content_hash": "37c976aa678a85fc8158180ee15c30c72595f810c3191969c325f924b45a8a33",
-        "dtype": "float32",
+        "content_hash": "31b56d06e18b900dfd8f407fbc336141257a3baa89e824fba18f601c764a556b",
+        "dtype": "float64",
         "id": "train/weights",
         "partition": "train",
         "payload_kind": "weights",
@@ -123,7 +123,7 @@
         "uri": null
       }
     ],
-    "root": "41e3deee56d5caa92557f23c90107cf64025c0fe41824a4608f058cea8d5e275"
+    "root": "f2557a1829519579df49a0ac602b6fe0a951bacda171faa648e3f2f705df0fb6"
   },
   "n_sources": 1,
   "name": "demo",
@@ -136,7 +136,7 @@
     }
   },
   "repetition": null,
-  "schema_version": 3,
+  "schema_version": 4,
   "signal_type": "absorbance",
   "task_type": "regression"
 }

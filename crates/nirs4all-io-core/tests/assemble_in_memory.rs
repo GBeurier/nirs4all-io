@@ -5,7 +5,8 @@
 //!
 //! 1. `Bytes` payloads: the 3 contract corpus cases, inferred fs-free via
 //!    `infer_named_bytes`, assembled via `assemble_in_memory`, must reproduce the
-//!    blessed `*.assembled.canonical` goldens byte-for-byte. Those same goldens
+//!    blessed assembled goldens, with V1-RUST-MIXED-SPECTRAL-HEADER isolated.
+//!    Those same expectations
 //!    are what the facade's `assemble(spec, base_dir)` matches (the facade now
 //!    delegates to `assemble_in_memory`), so this is the "two paths agree" guard.
 //!
@@ -19,14 +20,19 @@ use std::path::{Path, PathBuf};
 
 use nirs4all_io_core::canonical_json;
 use nirs4all_io_core::infer::memory::{
-    infer_decoded_records, infer_named_bytes, DecodedRecordSet, NamedBytes,
+    describe_tables, infer_browser_dataset, infer_decoded_records, infer_named_bytes,
+    DecodedRecordSet, DescribeOptions, NamedBytes,
 };
+use nirs4all_io_core::infer::InferOptions;
 use nirs4all_io_core::materialize::{
     assemble_in_memory, Cell, Column, Frame, InMemorySource, SourcePayload,
     ASSEMBLED_DATASET_VERSION,
 };
 use nirs4all_io_core::spec::{validate_spec, DatasetSpec};
 use serde_json::{json, Value};
+
+#[path = "../../../tests/goldens/contract/rust_v1_exception.rs"]
+mod rust_v1_exception;
 
 fn contract_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -36,13 +42,13 @@ fn contract_dir() -> PathBuf {
         .join("tests/goldens/contract")
 }
 
-fn read_v2_golden(path: PathBuf) -> String {
+fn read_v3_golden(path: PathBuf) -> String {
     let value: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("read golden"))
         .expect("assembled golden must be JSON");
     assert_eq!(
         value["assembled_schema_version"],
         Value::from(ASSEMBLED_DATASET_VERSION),
-        "assembled golden uses the retired unversioned v1 wire; re-bless it as v2"
+        "assembled golden is not the current assembled3 wire; re-bless it from the producers"
     );
     canonical_json(&value).expect("canonical golden")
 }
@@ -82,7 +88,7 @@ fn bytes_path_reproduces_assembled_goldens() {
 
         // fs-free infer → resolved spec (the browser-native counterpart of the
         // facade's infer_path used by the assembled_goldens.rs reference test).
-        let plan = infer_named_bytes(&files, None).expect("infer_named_bytes");
+        let plan = infer_named_bytes(&files, &Default::default()).expect("infer_named_bytes");
         let spec = plan.resolved_spec.expect("resolved_spec");
         validate_spec(&spec).expect("valid spec");
 
@@ -90,12 +96,307 @@ fn bytes_path_reproduces_assembled_goldens() {
         let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None)
             .unwrap_or_else(|e| panic!("assemble_in_memory `{case}`: {}", e.message));
         let produced = canonical_json(&assembled.to_summary_value()).unwrap();
-        let golden = read_v2_golden(dir.join(format!("{case}.assembled.canonical")));
+        let golden = read_v3_golden(dir.join(format!("{case}.assembled.canonical")));
+        let golden = if case == "single_combined" {
+            let corrected = read_v3_golden(dir.join(format!("{case}.assembled.rust-v1.canonical")));
+            rust_v1_exception::assert_exception(
+                &serde_json::from_str(&golden).unwrap(),
+                &serde_json::from_str(&corrected).unwrap(),
+                "assembled",
+            );
+            corrected
+        } else {
+            golden
+        };
         assert_eq!(
             produced, golden,
             "in-memory assembled drift for `{case}` (Bytes path)"
         );
     }
+}
+
+#[test]
+fn unnamed_headerless_inference_and_inspection_keep_twenty_rows() {
+    let mut text = String::new();
+    for row in 0..20 {
+        text.push_str(&format!("0.{:07}", 465041 + row * 10000));
+        for _ in 1..700 {
+            text.push_str(";0.2");
+        }
+        text.push('\n');
+    }
+    for name in ["data.csv", "myspectra.csv"] {
+        let files = vec![NamedBytes {
+            name: name.into(),
+            bytes: text.as_bytes().to_vec(),
+        }];
+        let auto = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
+        assert_eq!(auto.params[name]["header_ambiguous"], json!(true));
+        assert_eq!(
+            auto.resolved_spec.unwrap().to_value()["sources"][0]["params"]["has_header"],
+            json!(true)
+        );
+        let auto_table = describe_tables(&files, &DescribeOptions::default()).remove(0);
+        assert!(auto_table.header_ambiguous);
+        assert_eq!(auto_table.n_rows, Some(19));
+        let choices = InferOptions {
+            params: json!({"has_header": true}),
+            file_params: [(name.into(), json!({"has_header": false}))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let plan = infer_browser_dataset(&files, &[], &choices).unwrap();
+        assert_eq!(plan.params[name]["has_header"]["value"], json!(false));
+        assert_eq!(
+            plan.warnings
+                .iter()
+                .filter(|w| w.contains(name) && w.contains("has_header=false"))
+                .count(),
+            0
+        );
+        let spec = plan.resolved_spec.unwrap();
+        assert_eq!(
+            spec.to_value()["sources"][0]["params"]["has_header"],
+            json!(false)
+        );
+        let data = assemble_in_memory(&spec, &to_sources(&files), &HashMap::new(), None).unwrap();
+        let block = &data.blocks["train"];
+        assert_eq!(block.source_ids, vec!["data"]);
+        assert_eq!(block.n_samples, 20);
+        assert_eq!(block.x[0].n_rows, 20);
+        assert_eq!(block.x[0].n_cols, 699); // Existing last-numeric target policy.
+        assert_eq!(block.x[0].data[0], 0.0465041);
+        assert_eq!(block.x[0].data[19 * 699], 0.0655041);
+        assert_eq!(block.y.as_ref().unwrap().n_rows, 20);
+        assert_eq!(block.y.as_ref().unwrap().data, vec![0.2; 20]);
+        assert!(data.identity.sample_id.is_none());
+
+        let inspect_choices = DescribeOptions {
+            params: [(name.into(), json!({"has_header": false}))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let inspected = describe_tables(&files, &inspect_choices).remove(0);
+        assert!(inspected.readable, "{:?}", inspected.refusal);
+        assert_eq!(inspected.params["has_header"], json!(false));
+        assert_eq!(inspected.n_rows, Some(20));
+        assert_eq!(inspected.n_cols, Some(700));
+        assert!(!inspected.header_ambiguous);
+        assert!(inspected.warnings.is_empty());
+        let options = DescribeOptions {
+            params: [(name.into(), json!({"has_header": true}))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let explicit = describe_tables(&files, &options).remove(0);
+        assert!(explicit.readable, "{:?}", explicit.refusal);
+        assert_eq!(explicit.n_rows, Some(19));
+        assert!(explicit.warnings.is_empty());
+
+        // User declarations are applied through the existing editable spec.
+        for (global, local, expected) in [
+            (true, None, 19),
+            (true, Some(false), 20),
+            (false, Some(true), 19),
+        ] {
+            let mut value = spec.to_value();
+            value["params"]["has_header"] = json!(global);
+            value["sources"][0]["params"]
+                .as_object_mut()
+                .unwrap()
+                .remove("has_header");
+            if let Some(local) = local {
+                value["sources"][0]["params"]["has_header"] = json!(local);
+            }
+            value["sources"][0]["role"] = json!("features");
+            value["sources"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("columns");
+            let explicit = DatasetSpec::from_value(&value).unwrap();
+            let assembled =
+                assemble_in_memory(&explicit, &to_sources(&files), &HashMap::new(), None).unwrap();
+            assert_eq!(assembled.blocks["train"].n_samples, expected);
+            assert!(!assembled
+                .warnings
+                .iter()
+                .any(|w| w.contains("has_header=false")));
+        }
+    }
+}
+
+#[test]
+fn unrecognized_index_header_is_warned_and_explicit_choice_wins() {
+    let files = vec![NamedBytes {
+        name: "data.csv".into(),
+        bytes: b"1;2;3;4;5;6;7;8;9;10;11;12\n0.1;0.2;0.1;0.2;0.1;0.2;0.1;0.2;0.1;0.2;0.1;0.2\n0.2;0.1;0.2;0.1;0.2;0.1;0.2;0.1;0.2;0.1;0.2;0.1\n".to_vec(),
+    }];
+    let plan = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|w| w.contains("data.csv") && w.contains("Declare params.has_header=true")));
+    let spec = plan.resolved_spec.unwrap();
+    let data = assemble_in_memory(&spec, &to_sources(&files), &HashMap::new(), None).unwrap();
+    assert_eq!(data.blocks["train"].n_samples, 2);
+    assert_eq!(data.blocks["train"].x[0].data[0], 0.1);
+    let options = DescribeOptions {
+        params: [("data.csv".into(), json!({"has_header": true}))]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let description = describe_tables(&files, &options).remove(0);
+    assert_eq!(description.n_rows, Some(2));
+    assert!(description.warnings.is_empty());
+}
+
+#[test]
+fn mixed_header_inference_preserves_six_observations_and_protein() {
+    let files = vec![NamedBytes {
+        name: "data.csv".into(),
+        bytes: include_bytes!("../../../tests/goldens/contract/corpus/single_combined/data.csv")
+            .to_vec(),
+    }];
+    let plan = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
+    assert_eq!(plan.params["data.csv"]["has_header"]["value"], json!(true));
+    assert!(!plan.warnings.iter().any(|w| w.contains("has_header=false")));
+    assert!(plan.axis.is_none());
+    let spec = plan.resolved_spec.unwrap();
+    assert_eq!(
+        spec.to_value()["sources"][0]["params"]["has_header"],
+        json!(true)
+    );
+    let data = assemble_in_memory(&spec, &to_sources(&files), &HashMap::new(), None).unwrap();
+    let block = &data.blocks["train"];
+    assert_eq!(block.n_samples, 6);
+    assert_eq!(block.x[0].n_cols, 12);
+    assert_eq!(
+        block.feature_headers[0],
+        (0..12)
+            .map(|i| (1000 + i * 5).to_string())
+            .collect::<Vec<_>>()
+    );
+    for row in block.x[0].data.chunks_exact(12) {
+        assert_eq!(
+            row,
+            &[0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3]
+        );
+    }
+    assert_eq!(block.y_headers, vec!["protein"]);
+    assert_eq!(
+        block.y.as_ref().unwrap().data,
+        vec![12.5, 8.3, 15.1, 9.7, 11.2, 13.8]
+    );
+    assert_eq!(block.header_units, vec!["nm"]);
+    assert!(data.identity.sample_id.is_none());
+}
+
+#[test]
+fn headerless_prediction_inference_keeps_all_twenty_rows() {
+    // Same convention and first value as the Corn prediction reproduction.
+    let mut text = String::new();
+    for row in 0..20 {
+        text.push_str(&format!("0.{:07}", 465041 + row * 10000));
+        for _ in 1..700 {
+            text.push_str(";0.2");
+        }
+        text.push('\n');
+    }
+    let files = vec![NamedBytes {
+        name: "Xtest-no-header.csv".into(),
+        bytes: text.into_bytes(),
+    }];
+    let choices = InferOptions {
+        params: json!({"has_header": false}),
+        ..Default::default()
+    };
+    let plan = infer_browser_dataset(&files, &[], &choices).expect("infer raw prediction bytes");
+    assert_eq!(
+        plan.params["Xtest-no-header.csv"]["has_header"]["value"],
+        json!(false)
+    );
+    let spec = plan.resolved_spec.expect("resolved spec");
+    assert_eq!(
+        spec.to_value()["sources"][0]["params"]["has_header"],
+        json!(false)
+    );
+    let sources = to_sources(&files);
+    let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap();
+    let block = &assembled.blocks["test"];
+    assert_eq!(assembled.n_sources, 1);
+    assert_eq!(block.source_ids, vec!["test_x"]);
+    assert_eq!(block.n_samples, 20);
+    assert_eq!(block.x[0].n_rows, 20);
+    assert_eq!(block.x[0].n_cols, 700);
+    assert_eq!(block.x[0].data.len(), 14000);
+    assert_eq!(block.x[0].data[0], 0.0465041);
+    assert_eq!(block.x[0].data[19 * 700], 0.0655041);
+    assert_eq!(block.header_units, vec!["index"]);
+    assert!(assembled.identity.sample_id.is_none());
+    assert!(block.y.is_none());
+
+    // An accepted spec remains editable: the caller's explicit header wins.
+    let mut explicit = spec.to_value();
+    explicit["sources"][0]["params"]["has_header"] = json!(true);
+    let explicit = DatasetSpec::from_value(&explicit).unwrap();
+    let assembled = assemble_in_memory(&explicit, &sources, &HashMap::new(), None).unwrap();
+    assert_eq!(assembled.blocks["test"].n_samples, 19);
+    assert_eq!(assembled.blocks["test"].x[0].data[0], 0.0475041);
+}
+
+#[test]
+fn headerless_inferred_spec_retains_twenty_declared_sample_ids() {
+    let mut text = String::new();
+    for row in 0..20 {
+        text.push_str(&format!("s{row:02};0.{:07};0.2\n", 465041 + row * 10000));
+    }
+    let files = vec![NamedBytes {
+        name: "Xtest-no-header.csv".into(),
+        bytes: text.into_bytes(),
+    }];
+    let choices = InferOptions {
+        params: json!({"has_header": false}),
+        ..Default::default()
+    };
+    let plan = infer_browser_dataset(&files, &[], &choices).unwrap();
+    let mut spec = plan.resolved_spec.unwrap().to_value();
+    assert_eq!(spec["sources"][0]["params"]["has_header"], json!(false));
+    // Headerless columns have positional names; identity is an explicit choice.
+    spec["sample_index"] = json!({"by": "id", "key": "0"});
+    spec["sources"][0]["key"] = json!("0");
+    spec["sources"][0]["columns"] = json!([{"role": "features", "select": ["1", "2"]}]);
+    let spec = DatasetSpec::from_value(&spec).unwrap();
+    let assembled = assemble_in_memory(&spec, &to_sources(&files), &HashMap::new(), None).unwrap();
+    let block = &assembled.blocks["test"];
+    let ids = block.metadata.as_ref().unwrap().str_column("0");
+    assert_eq!(assembled.identity.sample_id.as_deref(), Some("0"));
+    assert_eq!(
+        ids,
+        (0..20).map(|row| format!("s{row:02}")).collect::<Vec<_>>()
+    );
+    assert_eq!(ids.len(), 20);
+    assert_eq!(block.n_samples, 20);
+    assert_eq!(block.x[0].n_rows, 20);
+    assert_eq!(block.x[0].n_cols, 2);
+    assert_eq!(block.x[0].data[0], 0.0465041);
+}
+
+#[test]
+fn unresolved_delimiter_inference_still_refuses_assembly() {
+    let files = vec![NamedBytes {
+        name: "Xtest.csv".into(),
+        bytes: b"id,y\n1,2\n3,4\n".to_vec(),
+    }];
+    let plan = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
+    assert!(plan.params["Xtest.csv"]["delimiter"]["value"].is_null());
+    let spec = plan.resolved_spec.unwrap();
+    assert!(spec.to_value()["sources"][0]["params"]["delimiter"].is_null());
+    let error = assemble_in_memory(&spec, &to_sources(&files), &HashMap::new(), None).unwrap_err();
+    assert!(error.message.contains("delimiter"), "{}", error.message);
 }
 
 /// `;`-CSV from `(header, column-of-strings)` pairs.
@@ -511,7 +812,7 @@ fn folds_capture_observation_ids_before_partition_reorders_rows() {
             ],
         }],
         "partitions": {"by": "column", "column": "set", "train_values": ["cal"], "test_values": ["val"]},
-        "folds": {"inline": [{"train": [0, 2], "val": [1]}]},
+        "folds": {"inline": [{"train": [0], "val": [2]}]},
     }))
     .expect("spec");
     validate_spec(&spec).expect("valid spec");
@@ -533,17 +834,16 @@ fn folds_capture_observation_ids_before_partition_reorders_rows() {
 
     let assembled = assemble_in_memory(&spec, &sources, &HashMap::new(), None)
         .expect("assemble identity folds");
-    // The train/test partition is [0, 2] / [1], so block row order no longer
-    // matches the original frame. Fold membership must remain in pre-split
-    // observation identity, not be interpreted as post-split row positions.
-    assert_eq!(assembled.folds, vec![(vec![0, 2], vec![1])]);
+    // Declared frame rows [0] / [2] are both train rows. Provenance is captured
+    // before translating them to train-block positions [0] / [1].
+    assert_eq!(assembled.folds, vec![(vec![0], vec![1])]);
     assert_eq!(
         assembled.fold_provenance[0].train_observation_ids,
-        vec!["O0", "O2"]
+        vec!["O0"]
     );
     assert_eq!(
         assembled.fold_provenance[0].validation_observation_ids,
-        vec!["O1"]
+        vec!["O2"]
     );
     for block in assembled.blocks.values() {
         assert_eq!(block.x[0].n_cols, 1, "identity fields cannot enter X");

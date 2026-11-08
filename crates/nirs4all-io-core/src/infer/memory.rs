@@ -6,17 +6,22 @@
 //! identity, signal/task detectors) and only replaces `Path` reads by named
 //! in-memory payloads.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::conventions::{assignments_to_spec_dict, match_items, resolve_profiles};
 use crate::infer::column_roles::{infer_column_roles, structure_kind};
-use crate::infer::describe::{describe_text, FileDescription};
+use crate::infer::describe::{
+    describe_text, record_description, select_description_params, warn_inferred_header,
+    FileDescription,
+};
 use crate::infer::detectors::{detect_signal_type, detect_task_type};
-use crate::infer::identity::{detect_sample_id, key_sources_by_id, repetition_profile};
+use crate::infer::identity::{configure_generated_keys, detect_sample_id, repetition_profile};
 use crate::infer::plan::{DatasetPlan, Decision};
 use crate::infer::table::{ColDtype, ColumnProfile, NumericKind, TableProfile};
+use crate::infer::InferOptions;
 use crate::pyfmt::{py_round, py_str_scalar};
 use crate::spec::dataset_spec::LoadingParams;
 use crate::spec::selectors::Selector;
@@ -30,6 +35,184 @@ pub struct NamedBytes {
     pub bytes: Vec<u8>,
 }
 
+/// Per-file parsing parameters and explicitly requested distinct-value columns.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DescribeOptions {
+    #[serde(default)]
+    pub params: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub distinct: Vec<(String, String)>,
+}
+
+/// An uncalibrated owner role guess and the assembler's column profile.
+#[derive(Debug, Clone, Serialize)]
+pub struct TableColumnDescription {
+    pub name: String,
+    pub dtype: String,
+    pub numeric_kind: String,
+    pub nunique_with_na: usize,
+    pub is_unique: bool,
+    pub preview: Option<String>,
+    pub role: Value,
+}
+
+/// Independent inspection of one input, without joins or role-specific NA policy.
+#[derive(Debug, Clone, Serialize)]
+pub struct TableDescription {
+    pub header_ambiguous: bool,
+    pub name: String,
+    pub readable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delimiter_unresolved: Option<Value>,
+    pub params: Value,
+    pub n_rows: Option<usize>,
+    pub n_cols: Option<usize>,
+    pub columns: Vec<TableColumnDescription>,
+    pub identity: Value,
+    pub distinct: BTreeMap<String, Vec<String>>,
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignored_input_na_report: Option<Value>,
+}
+
+/// Describe original tabular bytes with the assembler's reader, keeping NA.
+///
+/// Results follow input order; a per-file refusal does not suppress other files.
+/// An undeclared ambiguous delimiter refuses before table decoding. No assembly,
+/// selector resolution, row/column ceiling or scientific transformation is added.
+pub fn describe_tables(files: &[NamedBytes], options: &DescribeOptions) -> Vec<TableDescription> {
+    use crate::materialize::loaders;
+    use crate::spec::enums::NaPolicy;
+
+    files
+        .iter()
+        .map(|file| {
+            let mut result = TableDescription {
+                header_ambiguous: false,
+                name: file.name.clone(),
+                readable: false,
+                refusal: None,
+                delimiter_unresolved: None,
+                params: options.params.get(&file.name).cloned().unwrap_or(json!({})),
+                n_rows: None,
+                n_cols: None,
+                columns: vec![],
+                identity: Value::Null,
+                distinct: BTreeMap::new(),
+                warnings: vec![],
+                ignored_input_na_report: None,
+            };
+            let Some(selected) = result.params.as_object_mut() else {
+                result.refusal = Some("table inspection params must be a mapping".into());
+                return result;
+            };
+            // Inspection never executes the caller's NA strategy or fill.
+            selected.insert("na".into(), json!({"policy": "ignore"}));
+            for (canonical, alias) in [("has_header", "header"), ("decimal_separator", "decimal")] {
+                if !selected.contains_key(canonical) {
+                    if let Some(value) = selected.get(alias).cloned() {
+                        selected.insert(canonical.into(), value);
+                    }
+                }
+            }
+            let mut desc = describe_bytes(file);
+            let declared_delimiter = selected
+                .get("delimiter")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty());
+            if !declared_delimiter {
+                // Empty/null declarations must not suppress owner discovery.
+                selected.remove("delimiter");
+            }
+            warn_inferred_header(&desc, selected, None, &file.name, &mut result.warnings);
+            result.header_ambiguous = result.warnings.iter().any(|w| w.contains("header_ambiguous:"));
+            if !select_description_params(&desc, selected, true, None) && !declared_delimiter {
+                result.delimiter_unresolved = Some(json!({
+                    "candidates": desc.delimiter_candidates.iter().map(char::to_string).collect::<Vec<_>>()
+                }));
+                result.refusal = Some("table delimiter is unresolved; declare params.delimiter".into());
+                return result;
+            }
+            let mut params = match LoadingParams::from_value(Some(&result.params)) {
+                Ok(params) => params,
+                Err(error) => {
+                    result.refusal = Some(error.message);
+                    return result;
+                }
+            };
+            params.na.policy = NaPolicy::Ignore;
+            if params.has_header == Some(false) { desc.is_wavelength_header = false; }
+            // Expose exactly the defaults the reader uses so hosts can carry
+            // them into DatasetSpec without repeating dialect discovery.
+            params.decimal_separator = Some(
+                params.decimal_separator.filter(|value| !value.is_empty()).unwrap_or(".".into()),
+            );
+            params.has_header = Some(params.has_header.unwrap_or(true));
+            let selected = result.params.as_object_mut().unwrap();
+            selected.insert("delimiter".into(), json!(params.delimiter));
+            selected.insert("decimal_separator".into(), json!(params.decimal_separator));
+            selected.insert("has_header".into(), json!(params.has_header));
+            let frame = match loaders::read_table_bytes(&file.bytes, &params) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    result.refusal = Some(error.message);
+                    return result;
+                }
+            };
+            let profile = frame.to_table_profile();
+            let roles = infer_column_roles(&desc, &profile);
+            let identity = detect_sample_id(&profile);
+            result.columns = profile
+                .columns
+                .iter()
+                .zip(&frame.columns)
+                .zip(roles)
+                .map(|((column, loaded), mut role)| {
+                    role.as_object_mut().unwrap().remove("col");
+                    if let Some(guess) = identity.as_ref().filter(|guess| guess.column == column.name) {
+                        role = json!({"role": "id", "score": guess.score, "evidence": guess.evidence});
+                    }
+                    TableColumnDescription {
+                        name: column.name.clone(),
+                        dtype: column.dtype.label().into(),
+                        numeric_kind: format!("{:?}", column.numeric_kind),
+                        nunique_with_na: column.nunique_with_na,
+                        is_unique: column.is_unique,
+                        // Existing cell keys exclude missing values; no local
+                        // NA predicate, counts or positions are introduced.
+                        preview: loaded.values.iter().zip(&column.str_values)
+                            .find(|(cell, _)| cell.join_key().is_some())
+                            .map(|(_, value)| value.clone()),
+                        role,
+                    }
+                })
+                .collect();
+            result.identity = identity.map_or(Value::Null, |guess| json!({
+                "column": guess.column, "score": guess.score,
+                "unique": guess.unique, "evidence": guess.evidence,
+            }));
+            for (_, name) in options.distinct.iter().filter(|(name, _)| name == &file.name) {
+                let Some(column) = profile.column(name) else {
+                    result.warnings.push(format!("distinct column '{name}' is not present in table '{}'", file.name));
+                    continue;
+                };
+                let mut seen = BTreeSet::new();
+                let values = column.str_values.iter()
+                    .filter(|value| seen.insert(value.as_str()))
+                    .cloned().collect();
+                result.distinct.insert(name.clone(), values);
+            }
+            result.n_rows = Some(frame.n_rows);
+            result.n_cols = Some(frame.columns.len());
+            result.ignored_input_na_report = loaders::ignored_input_na_report(&frame);
+            result.readable = true;
+            result
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct DecodedRecordSet {
     pub source: String,
@@ -39,14 +222,16 @@ pub struct DecodedRecordSet {
 
 pub fn infer_named_bytes(
     files: &[NamedBytes],
-    conventions: Option<&[String]>,
+    options: &InferOptions,
 ) -> Result<DatasetPlan, SpecError> {
-    let conv: Vec<&str> = match conventions {
-        Some(c) if !c.is_empty() => c.iter().map(String::as_str).collect(),
-        _ => DEFAULT_CONVENTIONS.to_vec(),
+    let conv: Vec<&str> = if options.conventions.is_empty() {
+        DEFAULT_CONVENTIONS.to_vec()
+    } else {
+        options.conventions.iter().map(String::as_str).collect()
     };
     let profiles = resolve_profiles(&conv)?;
     let names = files.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    options.validate(&names)?;
     let result = match_items(&names, &profiles, None, None);
     let by_name = files
         .iter()
@@ -105,7 +290,7 @@ pub fn infer_named_bytes(
             0.7,
             vec!["one tabular file; column roles inferred".into()],
         ));
-        infer_single_file(files.first().unwrap(), &mut plan)?
+        infer_single_file(files.first().unwrap(), options, &mut plan)?
     } else {
         plan.structure = Some(Decision::new(
             "unknown",
@@ -117,6 +302,7 @@ pub fn infer_named_bytes(
         json!({"name": "dataset", "sources": []})
     };
 
+    options.apply_to_spec(&mut spec_dict)?;
     enrich_params(&mut spec_dict, &by_name, &mut plan);
     let mut tables = TableCache::default();
     infer_identity_and_alignment(&mut spec_dict, &by_name, &mut tables, &mut plan);
@@ -487,14 +673,24 @@ pub fn infer_decoded_records(record_sets: &[DecodedRecordSet]) -> Result<Dataset
 pub fn infer_browser_dataset(
     files: &[NamedBytes],
     record_sets: &[DecodedRecordSet],
-    conventions: Option<&[String]>,
+    options: &InferOptions,
 ) -> Result<DatasetPlan, SpecError> {
+    options.validate(&files.iter().map(|f| f.name.clone()).collect::<Vec<_>>())?;
     let mut errors = Vec::new();
     let mut file_plan = if files.is_empty() {
         None
     } else {
-        match infer_named_bytes(files, conventions) {
+        match infer_named_bytes(files, options) {
             Ok(plan) => Some(plan),
+            Err(err)
+                if !options.file_params.is_empty()
+                    || options
+                        .params
+                        .as_object()
+                        .is_some_and(|params| !params.is_empty()) =>
+            {
+                return Err(err);
+            }
             Err(err) => {
                 errors.push(("files", err.message));
                 None
@@ -550,13 +746,20 @@ pub fn infer_browser_dataset(
     Ok(plan)
 }
 
-fn infer_single_file(file: &NamedBytes, plan: &mut DatasetPlan) -> Result<Value, SpecError> {
-    let desc = describe_bytes(file);
-    let params = LoadingParams {
-        delimiter: Some(desc.delimiter.to_string()),
-        has_header: Some(true),
-        ..Default::default()
-    };
+fn infer_single_file(
+    file: &NamedBytes,
+    options: &InferOptions,
+    plan: &mut DatasetPlan,
+) -> Result<Value, SpecError> {
+    let mut desc = describe_bytes(file);
+    let mut selected = options.effective_file_params(&file.name)?;
+    warn_inferred_header(&desc, &selected, None, &file.name, &mut plan.warnings);
+    select_description_params(&desc, &mut selected, true, None);
+    record_description(&desc, &selected, "data", &file.name.clone(), plan);
+    let params = LoadingParams::from_value(Some(&Value::Object(selected.clone())))?;
+    if params.has_header == Some(false) {
+        desc.is_wavelength_header = false;
+    }
     let Some(table) = read_table_bytes(&file.bytes, &params) else {
         return Ok(json!({
             "name": file_stem(&file.name),
@@ -600,10 +803,7 @@ fn infer_single_file(file: &NamedBytes, plan: &mut DatasetPlan) -> Result<Value,
     source.insert("role".into(), json!("mixed"));
     source.insert("input".into(), json!(file.name));
     source.insert("columns".into(), Value::Array(columns));
-    source.insert(
-        "params".into(),
-        json!({"delimiter": desc.delimiter.to_string(), "has_header": true}),
-    );
+    source.insert("params".into(), Value::Object(selected));
 
     let mut spec = Map::new();
     spec.insert("name".into(), json!(file_stem(&file.name)));
@@ -950,6 +1150,7 @@ fn merge_decoded_roles_into_file_sources(
         return Ok(());
     };
     let mut spec = primary_spec.to_value();
+    let global = spec.get("params").cloned();
     let Some(sources) = spec.get_mut("sources").and_then(Value::as_array_mut) else {
         return Ok(());
     };
@@ -966,7 +1167,8 @@ fn merge_decoded_roles_into_file_sources(
         let Some(file) = find_named_file(files, &input) else {
             continue;
         };
-        let Some(table) = read_table_bytes(&file.bytes, &params_from(source)) else {
+        let Some(table) = read_table_bytes(&file.bytes, &params_from(source, global.as_ref()))
+        else {
             continue;
         };
         let headers = table.column_names();
@@ -1379,8 +1581,11 @@ fn normalized_key(key: &str) -> String {
         .collect()
 }
 
-pub(crate) fn params_from(src: &Value) -> LoadingParams {
-    LoadingParams::from_value(src.get("params")).unwrap_or_default()
+pub(crate) fn params_from(src: &Value, global: Option<&Value>) -> LoadingParams {
+    crate::materialize::effective_params(
+        &LoadingParams::from_value(global).unwrap_or_default(),
+        &LoadingParams::from_value(src.get("params")).unwrap_or_default(),
+    )
 }
 
 fn enrich_params(
@@ -1388,6 +1593,7 @@ fn enrich_params(
     by_name: &HashMap<String, &NamedBytes>,
     plan: &mut DatasetPlan,
 ) {
+    let global = spec_dict.get("params").cloned();
     let Some(sources) = spec_dict.get_mut("sources").and_then(|v| v.as_array_mut()) else {
         return;
     };
@@ -1407,6 +1613,11 @@ fn enrich_params(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let single = src
+            .get("input")
+            .and_then(Value::as_array)
+            .is_none_or(|items| items.len() == 1);
+        let source_id = src["id"].as_str().unwrap().to_string();
         let params = src
             .as_object_mut()
             .unwrap()
@@ -1414,29 +1625,25 @@ fn enrich_params(
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
             .unwrap();
-        params
-            .entry("delimiter")
-            .or_insert_with(|| json!(desc.delimiter.to_string()));
-        if desc.has_header {
-            params.entry("has_header").or_insert_with(|| json!(true));
-        }
-        if matches!(role.as_str(), "features" | "mixed")
+        warn_inferred_header(
+            &desc,
+            params,
+            global.as_ref(),
+            &file.name,
+            &mut plan.warnings,
+        );
+        select_description_params(&desc, params, single, global.as_ref());
+        let header_enabled = params.get("has_header").and_then(Value::as_bool) != Some(false);
+        if header_enabled
+            && matches!(role.as_str(), "features" | "mixed")
             && matches!(desc.header_unit.as_str(), "nm" | "cm-1")
         {
             params
                 .entry("header_unit")
                 .or_insert_with(|| json!(desc.header_unit.clone()));
         }
-        let dconf = py_round(*desc.confidence.get("delimiter").unwrap_or(&0.5), 3);
-        let hconf = py_round(*desc.confidence.get("has_header").unwrap_or(&0.5), 3);
-        plan.params.as_object_mut().unwrap().insert(
-            file.name.clone(),
-            json!({
-                "delimiter": {"value": desc.delimiter.to_string(), "score": dconf},
-                "has_header": {"value": desc.has_header, "score": hconf},
-            }),
-        );
-        if desc.is_wavelength_header {
+        record_description(&desc, params, &source_id, &file.name, plan);
+        if header_enabled && desc.is_wavelength_header {
             if let Some((lo, hi)) = desc.axis_range {
                 let ascore = py_round(*desc.confidence.get("header_unit").unwrap_or(&0.8), 3);
                 plan.axis = Some(json!({
@@ -1458,8 +1665,14 @@ struct TableCache {
 }
 
 impl TableCache {
-    fn read(&mut self, file: &NamedBytes, source: &Value) -> Option<&MemTable> {
-        let params = source.get("params").cloned().unwrap_or(Value::Null);
+    fn read(
+        &mut self,
+        file: &NamedBytes,
+        source: &Value,
+        global: Option<&Value>,
+    ) -> Option<&MemTable> {
+        let effective = params_from(source, global);
+        let params = effective.to_value();
         let index = match self
             .entries
             .iter()
@@ -1467,7 +1680,7 @@ impl TableCache {
         {
             Some(index) => index,
             None => {
-                let table = read_table_bytes(&file.bytes, &params_from(source));
+                let table = read_table_bytes(&file.bytes, &effective);
                 self.entries.push((file.name.clone(), params, table));
                 self.entries.len() - 1
             }
@@ -1479,7 +1692,7 @@ impl TableCache {
 fn infer_identity_and_alignment(
     spec_dict: &mut Value,
     by_name: &HashMap<String, &NamedBytes>,
-    tables: &mut TableCache,
+    _tables: &mut TableCache,
     plan: &mut DatasetPlan,
 ) {
     if plan.identity.is_some() {
@@ -1503,61 +1716,101 @@ fn infer_identity_and_alignment(
     };
     let is_multi = matches!(feature_src.get("input"), Some(Value::Array(a)) if a.len() > 1);
     if is_multi {
+        configure_generated_keys(
+            spec_dict,
+            plan,
+            |source| {
+                let names: Vec<&str> = match &source["input"] {
+                    Value::String(input) => vec![input],
+                    Value::Array(inputs) => inputs.iter().filter_map(Value::as_str).collect(),
+                    _ => return None,
+                };
+                names
+                    .into_iter()
+                    .map(|name| {
+                        by_name.get(name).map(|file| {
+                            file.bytes[..file
+                                .bytes
+                                .len()
+                                .min(crate::materialize::loaders::DELIMITER_SAMPLE_BYTES)]
+                                .to_vec()
+                        })
+                    })
+                    .collect()
+            },
+            true,
+        );
         return;
     }
     let Some(file) = by_name.get(&first) else {
         return;
     };
-    let Some(table) = tables.read(file, feature_src) else {
+    let Some(preview) = crate::materialize::loaders::discovery_prefix(
+        &file.bytes,
+        &params_from(feature_src, spec_dict.get("params")),
+    ) else {
+        return;
+    };
+    let Some(table) =
+        read_table_bytes(&preview, &params_from(feature_src, spec_dict.get("params")))
+    else {
         return;
     };
     let profile = table.to_table_profile();
-    let Some(id_guess) = detect_sample_id(&profile) else {
-        return;
-    };
-    plan.identity = Some(Decision {
-        value: json!(id_guess.column.clone()),
-        score: id_guess.score,
-        evidence: id_guess.evidence.clone(),
-        alternatives: vec![],
-        ambiguous: !id_guess.unique,
-    });
-    if let Some(spec) = spec_dict.as_object_mut() {
-        spec.insert(
-            "sample_index".into(),
-            json!({"by": "id", "key": id_guess.column.clone()}),
-        );
-        if let Some((observation_col, repetition_col, params)) =
-            infer_table_repetition(table, Some(id_guess.column.as_str()))
-        {
-            let repeats = !params["avg_reps"].is_null();
-            apply_repetition_fields(
-                spec,
-                observation_col.as_deref(),
-                repetition_col.as_deref(),
-                repeats,
+    let id_guess = detect_sample_id(&profile);
+    if let Some(id_guess) = &id_guess {
+        plan.identity = Some(Decision {
+            value: json!(id_guess.column.clone()),
+            score: id_guess.score,
+            evidence: id_guess.evidence.clone(),
+            alternatives: vec![],
+            ambiguous: !id_guess.unique,
+        });
+        if let Some(spec) = spec_dict.as_object_mut() {
+            spec.insert(
+                "sample_index".into(),
+                json!({"by": "id", "key": id_guess.column.clone()}),
             );
-            plan.params
-                .as_object_mut()
-                .unwrap()
-                .insert("repetition".into(), params);
+            if let Some((observation_col, repetition_col, params)) =
+                infer_table_repetition(&table, Some(id_guess.column.as_str()))
+            {
+                let repeats = !params["avg_reps"].is_null();
+                apply_repetition_fields(
+                    spec,
+                    observation_col.as_deref(),
+                    repetition_col.as_deref(),
+                    repeats,
+                );
+                plan.params
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("repetition".into(), params);
+            }
         }
     }
-    let feature_id = feature_src
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    key_sources_by_id(
+    configure_generated_keys(
         spec_dict,
         plan,
-        &id_guess.column,
-        &feature_id,
-        &profile,
         |source| {
-            let file = by_name.get(&source_first_input(source)?)?;
-            tables.read(file, source).map(MemTable::to_table_profile)
+            let names: Vec<&str> = match &source["input"] {
+                Value::String(input) => vec![input],
+                Value::Array(inputs) => inputs.iter().filter_map(Value::as_str).collect(),
+                _ => return None,
+            };
+            names
+                .into_iter()
+                .map(|name| {
+                    by_name.get(name).map(|file| {
+                        file.bytes[..file
+                            .bytes
+                            .len()
+                            .min(crate::materialize::loaders::DELIMITER_SAMPLE_BYTES)]
+                            .to_vec()
+                    })
+                })
+                .collect()
         },
+        true,
     );
 }
 
@@ -1586,7 +1839,7 @@ fn infer_signal_and_task(
     let Some(file) = by_name.get(&first) else {
         return;
     };
-    let Some(table) = tables.read(file, feature_src) else {
+    let Some(table) = tables.read(file, feature_src, spec_dict.get("params")) else {
         return;
     };
 
@@ -1629,7 +1882,13 @@ fn infer_signal_and_task(
         });
     }
 
-    if let Some((values, where_)) = first_target_values(&sources, feature_src, table, by_name) {
+    if let Some((values, where_)) = first_target_values(
+        &sources,
+        feature_src,
+        table,
+        by_name,
+        spec_dict.get("params"),
+    ) {
         if !values.is_empty() {
             let (task, tscore) = detect_task_type(&values, 0.05);
             plan.task_type = Some(Decision::new(
@@ -1646,6 +1905,7 @@ fn first_target_values(
     feature_src: &Value,
     feature_table: &MemTable,
     by_name: &HashMap<String, &NamedBytes>,
+    global: Option<&Value>,
 ) -> Option<(Vec<f64>, String)> {
     let in_feature = resolve_role_columns(feature_src, feature_table, "targets");
     if let Some(col) = in_feature.first() {
@@ -1675,7 +1935,7 @@ fn first_target_values(
         let Some(file) = by_name.get(&first) else {
             continue;
         };
-        let Some(tdf) = read_table_bytes(&file.bytes, &params_from(src)) else {
+        let Some(tdf) = read_table_bytes(&file.bytes, &params_from(src, global)) else {
             continue;
         };
         let cols = resolve_role_columns(src, &tdf, "targets");
@@ -2068,8 +2328,205 @@ fn parse_axis_header(name: &str) -> Option<f64> {
 }
 
 #[cfg(test)]
+mod describe_tables_tests {
+    use super::*;
+    use crate::materialize::{assemble_in_memory, loaders, InMemorySource, SourcePayload};
+
+    fn named(name: &str, text: &str) -> NamedBytes {
+        NamedBytes {
+            name: name.into(),
+            bytes: text.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn describe_tables_preserves_assembler_names_rows_and_original_bytes() {
+        let files = vec![named(
+            "odd.csv",
+            ";a;a;batch\ns1;1;2;train\n\ns3;3;4;test\ns4;5;6;train\n",
+        )];
+        let original = files[0].bytes.clone();
+        let descriptions = describe_tables(&files, &DescribeOptions::default());
+        let description = &descriptions[0];
+        assert!(description.readable, "{:?}", description.refusal);
+        let params = LoadingParams::from_value(Some(&description.params)).unwrap();
+        let frame = loaders::read_table_bytes(&files[0].bytes, &params).unwrap();
+        let names: Vec<_> = description
+            .columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect();
+        assert_eq!(names, frame.column_names());
+        assert_eq!(names, ["Unnamed: 0", "a", "a.1", "batch"]);
+        assert_eq!(description.n_rows, Some(frame.n_rows));
+        assert_eq!(description.n_rows, Some(4));
+        assert_eq!(description.n_cols, Some(4));
+        assert_eq!(description.params["na"], json!({"policy": "ignore"}));
+        assert_eq!(description.columns[3].preview.as_deref(), Some("train"));
+        assert_eq!(
+            description.ignored_input_na_report,
+            loaders::ignored_input_na_report(&frame)
+        );
+        assert!(description.distinct.is_empty());
+        assert_eq!(files[0].bytes, original);
+    }
+
+    #[test]
+    fn describe_tables_refuses_ambiguous_delimiter_until_explicitly_declared() {
+        let files = vec![named("ambiguous.csv", "a,b\tc\n1,2\t3\n4,5\t6\n")];
+        let description = describe_tables(&files, &DescribeOptions::default()).remove(0);
+        assert!(!description.readable);
+        assert_eq!(description.n_rows, None);
+        assert!(description.columns.is_empty());
+        assert_eq!(description.params.get("delimiter"), None);
+        let candidates = &description.delimiter_unresolved.as_ref().unwrap()["candidates"];
+        assert!(candidates.as_array().unwrap().contains(&json!(",")));
+        assert!(candidates.as_array().unwrap().contains(&json!("\t")));
+        assert!(description.ignored_input_na_report.is_none());
+
+        let options = DescribeOptions {
+            params: BTreeMap::from([("ambiguous.csv".into(), json!({"delimiter": "\t"}))]),
+            ..Default::default()
+        };
+        let explicit = describe_tables(&files, &options).remove(0);
+        assert!(explicit.readable, "{:?}", explicit.refusal);
+        assert!(explicit.delimiter_unresolved.is_none());
+        let params = LoadingParams::from_value(Some(&explicit.params)).unwrap();
+        let frame = loaders::read_table_bytes(&files[0].bytes, &params).unwrap();
+        assert_eq!(explicit.n_rows, Some(frame.n_rows));
+        assert_eq!(explicit.n_cols, Some(frame.columns.len()));
+        assert_eq!(
+            explicit
+                .columns
+                .iter()
+                .map(|column| &column.name)
+                .collect::<Vec<_>>(),
+            frame.column_names().iter().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn describe_tables_reports_read_errors_independently_and_requested_distinct_values() {
+        let files = vec![
+            named("broken.csv", "a;b\n1;2;3\n"),
+            named(
+                "valid.csv",
+                "sample_id;batch\ns1;train\ns2;test\ns3;train\n",
+            ),
+        ];
+        let options = DescribeOptions {
+            params: BTreeMap::from([("broken.csv".into(), json!({"delimiter": ";"}))]),
+            distinct: vec![
+                ("valid.csv".into(), "batch".into()),
+                ("valid.csv".into(), "absent".into()),
+            ],
+        };
+        let descriptions = describe_tables(&files, &options);
+        let params = LoadingParams::from_value(Some(&descriptions[0].params)).unwrap();
+        let error = loaders::read_table_bytes(&files[0].bytes, &params).unwrap_err();
+        assert_eq!(
+            descriptions[0].refusal.as_deref(),
+            Some(error.message.as_str())
+        );
+        assert!(!descriptions[0].readable);
+        assert!(descriptions[0].n_rows.is_none());
+        assert!(descriptions[1].readable);
+        assert_eq!(descriptions[1].distinct["batch"], ["train", "test"]);
+        assert_eq!(descriptions[1].distinct.len(), 1);
+        assert!(descriptions[1]
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("absent")));
+        assert_eq!(descriptions[1].identity["column"], "sample_id");
+        assert_eq!(descriptions[1].columns[0].role["role"], "id");
+        let wire = serde_json::to_value(&descriptions[1]).unwrap();
+        assert!(wire.get("ignored_input_na_report").is_none());
+    }
+
+    #[test]
+    fn describe_tables_keeps_input_na_even_when_assembly_and_join_fail() {
+        let files = vec![
+            named("x.csv", "sample_id;1000\ns1;1\ns2;\n"),
+            named("y.csv", "sample_id;protein\ns9;9\ns8;8\n"),
+        ];
+        let options = DescribeOptions {
+            params: BTreeMap::from([(
+                "x.csv".into(),
+                json!({
+                    "na": {"policy": "remove_sample"}
+                }),
+            )]),
+            ..Default::default()
+        };
+        let original_options = options.params.clone();
+        let descriptions = describe_tables(&files, &options);
+        assert!(descriptions.iter().all(|description| description.readable));
+        assert_eq!(descriptions[0].n_rows, Some(2));
+        assert_eq!(
+            descriptions[0].ignored_input_na_report.as_ref().unwrap()["na_count"],
+            1
+        );
+        assert_eq!(descriptions[0].params["na"], json!({"policy": "ignore"}));
+        assert_eq!(options.params, original_options);
+
+        let sources: Vec<_> = files
+            .iter()
+            .map(|file| InMemorySource {
+                name: file.name.clone(),
+                payload: SourcePayload::Bytes(file.bytes.clone()),
+            })
+            .collect();
+        let mut spec_value = json!({
+            "sample_index": {"by": "id", "key": "sample_id"},
+            "params": {"na": {"policy": "abort"}},
+            "sources": [
+                {"id": "x", "role": "features", "input": "x.csv", "key": "sample_id"},
+                {"id": "y", "role": "targets", "input": "y.csv", "join": {
+                    "to": "x", "left_on": "sample_id", "right_on": "sample_id",
+                    "cardinality": "1:1", "coverage": "complete"
+                }}
+            ]
+        });
+        let spec = DatasetSpec::from_value(&spec_value).unwrap();
+        let error = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap_err();
+        assert!(
+            error.message.contains("NA values detected"),
+            "{}",
+            error.message
+        );
+        spec_value["params"]["na"]["policy"] = json!("ignore");
+        let spec = DatasetSpec::from_value(&spec_value).unwrap();
+        let error = assemble_in_memory(&spec, &sources, &HashMap::new(), None).unwrap_err();
+        assert!(
+            error.message.contains("coverage 'complete'"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_cache_reads_and_keys_effective_global_header_choices() {
+        let mut text = String::new();
+        for row in 0..20 {
+            text.push_str(&format!("0.{:07};0.2\n", 465041 + row * 10000));
+        }
+        let file = named("data.csv", &text);
+        let source = json!({"params": {"delimiter": ";"}});
+        let mut cache = TableCache::default();
+        let without_header = json!({"has_header": false});
+        let table = cache.read(&file, &source, Some(&without_header)).unwrap();
+        assert_eq!(table.n_rows, 20);
+        assert_eq!(table.numeric_column_f64("0")[0], 0.0465041);
+        let with_header = json!({"has_header": true});
+        let table = cache.read(&file, &source, Some(&with_header)).unwrap();
+        assert_eq!(table.n_rows, 19);
+        assert_eq!(table.numeric_column_f64("0.0465041")[0], 0.0475041);
+    }
 
     fn named(name: &str, text: &str) -> NamedBytes {
         NamedBytes {
@@ -2097,7 +2554,7 @@ mod tests {
             ),
             named("Ytrain.csv", "sample_id;protein\ns2;12\ns1;11\ns3;13\n"),
         ];
-        let plan = infer_browser_dataset(&files, &[], None).unwrap();
+        let plan = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
         let spec = plan.resolved_spec.as_ref().unwrap().to_value();
         assert_eq!(spec["sample_index"]["key"], json!("sample_id"));
         assert_eq!(source(&spec, "train_x")["key"], json!("sample_id"));
@@ -2120,7 +2577,7 @@ mod tests {
             ),
             named("Ytrain.csv", "sample_id;protein\ns2;12\ns1;11\n"),
         ];
-        let plan = infer_browser_dataset(&files, &[], None).unwrap();
+        let plan = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
         let spec = plan.resolved_spec.as_ref().unwrap().to_value();
         let y = source(&spec, "train_y");
         assert_eq!(y["join"]["left_on"], json!("sample_id"));
@@ -2134,7 +2591,7 @@ mod tests {
             named("Ytrain.csv", "sample_id;protein\ns4;14\ns2;12\ns1;11\ns3;13\n"),
             named("Mtrain.csv", "site;altitude\nsouth;20\nnorth;300\n"),
         ];
-        let plan = infer_browser_dataset(&files, &[], None).unwrap();
+        let plan = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
         let spec = plan.resolved_spec.as_ref().unwrap().to_value();
         let m = source(&spec, "train_m");
         assert_eq!(m["key"], json!("site"));
@@ -2163,7 +2620,7 @@ mod tests {
             })],
         }];
 
-        let plan = infer_browser_dataset(&files, &record_sets, None).unwrap();
+        let plan = infer_browser_dataset(&files, &record_sets, &Default::default()).unwrap();
         assert_eq!(plan.input["selected_inference"], json!("files"));
         assert_eq!(
             plan.structure.as_ref().and_then(|d| d.value.as_str()),
@@ -2196,7 +2653,7 @@ mod tests {
             })],
         }];
 
-        let plan = infer_browser_dataset(&files, &record_sets, None).unwrap();
+        let plan = infer_browser_dataset(&files, &record_sets, &Default::default()).unwrap();
         assert_eq!(plan.input["selected_inference"], json!("decoded_records"));
         assert_eq!(
             plan.structure.as_ref().and_then(|d| d.value.as_str()),
@@ -2231,7 +2688,7 @@ mod tests {
             ],
         }];
 
-        let plan = infer_browser_dataset(&files, &record_sets, None).unwrap();
+        let plan = infer_browser_dataset(&files, &record_sets, &Default::default()).unwrap();
         assert_eq!(plan.input["selected_inference"], json!("files"));
         assert_eq!(
             plan.structure.as_ref().and_then(|d| d.value.as_str()),

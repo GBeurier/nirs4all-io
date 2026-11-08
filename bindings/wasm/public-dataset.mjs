@@ -32,7 +32,7 @@ function scalar(x,dtype) {
   if(dtype.includes('int')) {const bits=Number(dtype.match(/\d+/)[0]),unsigned=dtype.startsWith('u');if(!Number.isSafeInteger(x)||x<(unsigned?0:-(2**(bits-1)))||x>=(unsigned?2**bits:2**(bits-1)))error('Integer dtype overflow or precision loss');}
 }
 function nested(x,shape,dtype) {if(!shape.length){scalar(x,dtype);return;}if(!Array.isArray(x)||x.length!==shape[0])error('Array shape differs from nested values');x.forEach(v=>nested(v,shape.slice(1),dtype));}
-function array(x) {closed(x,['dtype','shape','values']);if(typeof x.dtype!=='string'||!Array.isArray(x.shape)||!x.shape.length||x.shape.length>8||x.shape.some(n=>!Number.isSafeInteger(n)||n<0)||x.shape.reduce((a,b)=>a*b,1)>16777216)error('Invalid dtype/shape');scalar(x.dtype==='object'?null:x.dtype==='bool'?false:x.dtype.startsWith('<U')?'':0,x.dtype);nested(x.values,x.shape,x.dtype);if(x.dtype==='float32'){const round=v=>Array.isArray(v)?v.map(round):Math.fround(v);x.values=round(x.values);}return x.shape;}
+function array(x) {closed(x,['dtype','shape','values']);if(typeof x.dtype!=='string'||!Array.isArray(x.shape)||!x.shape.length||x.shape.length>8||x.shape.some(n=>!Number.isSafeInteger(n)||n<0)||!Number.isSafeInteger(x.shape.reduce((a,b)=>a*b,1)))error('Invalid dtype/shape');scalar(x.dtype==='object'?null:x.dtype==='bool'?false:x.dtype.startsWith('<U')?'':0,x.dtype);nested(x.values,x.shape,x.dtype);if(x.dtype==='float32'){const round=v=>Array.isArray(v)?v.map(round):Math.fround(v);x.values=round(x.values);}return x.shape;}
 function placeholder(shape,dtype) {return shape.length?Array.from({length:shape[0]},()=>placeholder(shape.slice(1),dtype)):dtype==='object'?null:dtype==='bool'?false:dtype.startsWith('<U')?'':0;}
 const allTrue = shape => shape.length?Array.from({length:shape[0]},()=>allTrue(shape.slice(1))):true;
 function normalizeRagged(source,samples,alignment) {
@@ -210,12 +210,12 @@ export function projectedMatrixDataset(input,projections,digest) {
     const sampleIds=ids(projection.sample_ids),arrayRecord=structuredClone(projection.array),shape=array(arrayRecord);
     if(shape.length!==2||!shape[1]||shape[0]!==samples.length||sampleIds.length!==samples.length||sampleIds.some(id=>!samples.includes(id))||!['float32','float64'].includes(arrayRecord.dtype))error('Native projection requires a complete finite float matrix with exact sample identities');
     const columns=ids(projection.feature_names);if(columns.length!==shape[1])error('Projection feature names differ from matrix width');
-    if(features.length+columns.length>16777216||samples.length*(features.length+columns.length)>16777216)error('Projected matrix budget exceeded');
+    if(!Number.isSafeInteger(samples.length*(features.length+columns.length)))error('Projected matrix budget exceeded');
     for(const column of columns)features.push(`${source.name}:${column}`);
     const lookup=new Map(sampleIds.map((id,position)=>[id,position]));samples.forEach((id,position)=>{for(const value of arrayRecord.values[lookup.get(id)])rows[position].push(value);});
     contracts.push({source_id:source.name,source_schema:publicSourceSchema(record,source.name),input_presence_mask:source.presence_mask,presence_encoded:projection.presence_encoded,feature_names:columns,projection_content_fingerprint:digest(canonicalContentBytes(projection))});
   });
-  if(new Set(features).size!==features.length||samples.length*features.length>16777216)error('Projected feature inventory repeats names or exceeds matrix budget');
+  if(new Set(features).size!==features.length||!Number.isSafeInteger(samples.length*features.length))error('Projected feature inventory repeats names or exceeds matrix budget');
   const provenance={schema:'nirs4all.native-source-projections.v1',sample_ids:samples,source_projections:contracts,input_content_fingerprint:digest(datasetContentBytes(record))};
   record.schema='nirs4all.dataset.v2';record.schema_version=2;raw.source_alignment='strict';raw.sources=[{name:'native_features',sample_ids:samples,representation_id:'tabular_numeric',axes:['sample','feature'],feature_names:features,axis_units:{},axis_coordinates:{},array:{dtype:'float64',shape:[samples.length,features.length],values:rows},presence_mask:{dtype:'bool',shape:[samples.length],values:samples.map(()=>true)}}];
   return {record:normalizeDataset(record),provenance};

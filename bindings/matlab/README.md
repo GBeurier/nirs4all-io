@@ -32,6 +32,38 @@ The raw JSON surface stays reachable through the MEX dispatcher
 `n4io('load_summary', input_json)`, `n4io('validate', spec_json)`,
 `n4io('abi_version')`) — identical to the C ABI / other bindings.
 
+`nirs4all_io.infer(input, options)` accepts empty options or a scalar struct with
+optional `conventions` (cellstr), `params` (scalar struct), and `file_params`
+(`containers.Map` with char keys and scalar parameter structs as values).
+File choices override global parameters before the first read. Keys are exact
+input refs: basenames for files/file lists, relative paths for directory inputs.
+Unknown refs are refused.
+
+```matlab
+options = struct();
+options.conventions = {'nirs4all-classic'};
+options.params = struct('has_header', true);
+options.file_params = containers.Map({'noheader.csv'}, {struct('has_header', false)});
+plan = nirs4all_io.infer('/data/noheader.csv', options);
+loaded = nirs4all_io.load_summary(plan.resolved_spec);
+% Raw infer takes NULL (omitted/empty) or an InferOptions object, never an array:
+n4io('infer', '"/data/noheader.csv"', ...
+     '{"conventions":["nirs4all-classic"],"params":{"has_header":false}}');
+```
+
+`encode_infer_options` serializes each map key with `jsonencode` directly and
+assembles the object from these JSON pairs; it never converts refs into struct
+field names or relies on host-specific `jsonencode(containers.Map)` behavior.
+This preserves dotted and slash-containing keys on the wire. Decoding a returned
+plan into a struct may still normalize keys in its diagnostic maps, depending
+on the host; use the raw JSON surface when those exact keys are needed.
+MATLAB/Octave execution of this encoder remains a required smoke gate.
+
+`to_spec` and `load_summary` still accept convention arrays via their existing
+second arguments. An ambiguous unrecognized header defaults to true and emits
+`header_ambiguous`; declare false for headerless data. Summary values are rounded
+to four decimals rather than exposing original numeric precision.
+
 `jsonencode`/`jsondecode` exist in MATLAB and in Octave ≥ 7 (the CI runs Octave
 on `ubuntu-latest`, currently 8.x).
 

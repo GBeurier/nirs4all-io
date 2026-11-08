@@ -383,7 +383,7 @@ def validate_identity(summary: dict[str, object]) -> None:
     if provenance != expected:
         raise ValueError(f"identity provenance drift: {provenance!r}")
     folds = summary.get("fold_provenance")
-    if folds != [{"train_observation_ids": ["O0", "O2"], "validation_observation_ids": ["O1"]}]:
+    if folds != [{"train_observation_ids": ["O0"], "validation_observation_ids": ["O2"]}]:
         raise ValueError(f"fold provenance drift: {folds!r}")
 
 
@@ -393,7 +393,7 @@ def finalize_report(rows: list[dict[str, object]]) -> dict[str, object]:
     return {
         "schema_version": 1,
         "qualification": "IO-XLG-001",
-        "contract": "assembled_dataset_summary_v2",
+        "contract": "assembled_dataset_summary_v3",
         "overall_complete": complete,
         "rows": [by_surface[surface] for surface in SURFACES],
     }

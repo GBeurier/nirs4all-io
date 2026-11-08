@@ -6,6 +6,7 @@ import base64
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import nirs4all_io as nio
@@ -94,13 +95,13 @@ def test_dataset_package_target_exposes_manifest_summary_and_assembled_view():
     assert len(by_id["train/x0"].content_hash) == 64
 
     summary = nio.describe_dataset_package(package)
-    assert summary["schema_version"] == 3
+    assert summary["schema_version"] == 4
     assert summary["name"] == "pkg"
     assert summary["manifest"]["root"] == manifest.root
     canonical = nio.describe_dataset_package(package, canonical=True)
     assert isinstance(canonical, str)
     assert canonical.endswith("\n")
-    assert '"schema_version": 3' in canonical
+    assert '"schema_version": 4' in canonical
 
     assembled = package.to_assembled()
     block = assembled.blocks["train"]
@@ -133,11 +134,18 @@ def test_dataset_package_load_targets_are_coherent():
     assert assembled.blocks["train"].X[0].shape[0] == assembled.blocks["train"].n_samples
 
 
-def test_dataset_package_v3_cross_language_wire_golden():
-    """The binding wrapper stays byte-identical to the Rust/Python v3 wire."""
-    matrix = {"data": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], "n_rows": 2, "n_cols": 3}
+def test_dataset_package_v4_cross_language_wire_golden():
+    """The binding wrapper stays byte-identical to the Rust/Python v4 package wire."""
+    def numeric(values, rows, cols):
+        return {"dtype": "float64", "n_rows": rows, "n_cols": cols,
+                "data_bytes_hex": np.asarray(values, dtype="<f8").tobytes().hex(),
+                "validity": [True] * len(values),
+                "precision": {"dtype": "float64", "origin": "default", "source_dtype": None,
+                              "requested_dtype": None, "consumer": None}}
+    matrix = numeric([0., 1., 2., 3., 4., 5.], 2, 3)
     full = {
-        "assembled_schema_version": 2,
+        "assembled_schema_version": 3,
+        "partition_order": ["train"],
         "name": "demo",
         "task_type": "regression",
         "signal_type": "absorbance",
@@ -163,9 +171,14 @@ def test_dataset_package_v3_cross_language_wire_golden():
                 "source_ids": ["spectra"],
                 "x": [matrix],
                 "feature_headers": [["1000", "1010", "1020"]],
+                "feature_names": [["1000", "1010", "1020"]],
+                "representation_ids": ["signal_1d"],
+                "feature_axes": [[{"name": "wavelength", "unit": "nm", "coordinates": {
+                    "kind": "numeric", "count": 3,
+                    "data_bytes_hex": np.asarray([1000., 1010., 1020.], dtype="<f8").tobytes().hex()}}]],
                 "header_units": ["nm"],
                 "signal_types": ["absorbance"],
-                "y": {"data": [0.0, 1.0], "n_rows": 2, "n_cols": 1},
+                "y": {"columns": [{"name": "protein", "kind": "numeric", "block": numeric([0., 1.], 2, 1)}]},
                 "y_headers": ["protein"],
                 "y_categorical": {},
                 "metadata": {
@@ -177,7 +190,7 @@ def test_dataset_package_v3_cross_language_wire_golden():
                         {"name": "observation_id", "values": ["O1", "O2"]},
                     ],
                 },
-                "weights": [1.0, 2.0],
+                "weights": numeric([1., 2.], 2, 1),
                 "weights_header": "w",
                 "processings": [[]],
             }
@@ -185,13 +198,13 @@ def test_dataset_package_v3_cross_language_wire_golden():
     }
     expected = (
         Path(__file__).resolve().parents[3]
-        / "tests/goldens/dataset_package_v3.cross_language.canonical"
+        / "tests/goldens/dataset_package_v4.cross_language.canonical"
     ).read_text(encoding="utf-8")
     assert DatasetPackage(full).to_canonical_summary() == expected
 
 
 def test_dataset_package_rejects_retired_unversioned_assembled_wire():
-    with pytest.raises(ValueError, match="assembled_schema_version=2"):
+    with pytest.raises(ValueError, match="assembled_schema_version=3"):
         DatasetPackage({"name": "legacy"})
 
 
@@ -257,6 +270,29 @@ def test_to_io_spec_base_dir_applies_to_secondary_file_refs(tmp_path):
     assert set(assembled["blocks"]) == {"train", "test"}
 
 
+def test_relative_validation_file_uses_yaml_base(tmp_path, monkeypatch):
+    base = tmp_path / "source"
+    base.mkdir()
+    (base / "X.csv").write_text("x\n10.0\n11.0\n12.0\n13.0\n", encoding="utf-8")
+    (base / "val.txt").write_text("1\n3\n", encoding="utf-8")
+    (base / "spec.yaml").write_text('sources:\n  - id: x\n    role: features\n    input: X.csv\npartitions:\n  by: index_file\n  val_file: val.txt\n', encoding="utf-8")
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    (decoy / "val.txt").write_text("0\n", encoding="utf-8")
+    monkeypatch.chdir(decoy)
+    spec = nio.to_spec(base / "spec.yaml")
+    assert Path(spec["partitions"]["val_file"]).resolve() == (base / "val.txt").resolve()
+    for target in ("assembled", "dataset_package"):
+        result = nio.load(spec, target=target)
+        if target == "dataset_package":
+            assembled = result.to_assembled()
+            assert list(assembled.blocks) == ["val"]
+            assert assembled.blocks["val"].X[0].tolist() == [[11.0], [13.0]]
+        else:
+            assert list(result["blocks"]) == ["val"]
+            assert result["blocks"]["val"]["x"] == [[[11.0], [13.0]]]
+
+
 def test_load_parquet_reference_object_succeeds_with_native_loader(tmp_path):
     parquet_path = tmp_path / "X.parquet"
     # Generated with pyarrow from columns 400/410/y/sample/flag. Keeping bytes
@@ -310,8 +346,10 @@ def test_load_parquet_reference_object_succeeds_with_native_loader(tmp_path):
     assert block["y_shape"] == [3, 1]
     assert block["metadata_columns"] == ["sample", "flag"]
 
-    single_file = nio.load(tmp_path / "X.parquet", target="assembled")
-    assert single_file["blocks"]["train"]["x_shapes"] == [[3, 5]]
+    with pytest.raises(ValueError, match="Unsupported numeric source dtype"):
+        nio.load(tmp_path / "X.parquet", target="assembled")
+    with pytest.raises(ValueError, match="Unsupported numeric source dtype"):
+        nio.load(tmp_path / "X.parquet", target="dataset_package")
 
 
 def test_load_applies_native_na_policy_from_public_binding(tmp_path):
@@ -423,3 +461,30 @@ def test_public_surface_unchanged():
         assert name in nio.__all__
     assert "DatasetPlan" in nio.__all__ and "DatasetSpec" in nio.__all__
     assert "DatasetPackage" in nio.__all__
+
+
+@pytest.mark.parametrize("values,label", [
+    ([9007199254740993, None], "numeric"), ([9007199254740993, 1.5], "numeric"),
+    ([18446744073709551615, None], "numeric"), ([True, False], "bool"),
+    ([True, None], "string"), (["a", None], "string"), ([1.5, None], "numeric"),
+    ([None, None], "string"), ([9007199254740993, "x"], "string"), ([9007199254740993, 2], "numeric"),
+])
+def test_projection_metadata_package_exact_cells_and_separate_type_label(values, label):
+    """Literal metadata shapes qualified against the frozen oracle in the accepted plan."""
+    import json
+
+    from nirs4all_io._package import _frame, _frame_content
+
+    meta = {"n_rows": 2, "columns": [{"name": "m", "values": values}]}
+    frame = _frame(meta)
+    assert frame["m"].dtype == object
+    assert frame["m"].tolist() == values
+    content = json.loads(_frame_content(meta))
+    assert content == {"n_rows": 2, "columns": [{"name": "m", "dtype": label, "values": values}]}
+
+
+def test_projection_metadata_package_rejects_row_count_mismatch():
+    from nirs4all_io._package import _frame
+
+    with pytest.raises(ValueError, match="rows"):
+        _frame({"n_rows": 2, "columns": [{"name": "m", "values": [1]}]})

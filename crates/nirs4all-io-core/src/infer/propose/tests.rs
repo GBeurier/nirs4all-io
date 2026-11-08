@@ -28,6 +28,63 @@ fn named(name: &str, text: &str) -> NamedBytes {
     }
 }
 
+#[test]
+fn provisional_headerless_source_keeps_twenty_rows_and_warns() {
+    let mut text = String::new();
+    for row in 0..20 {
+        text.push_str(&format!("0.{:07}", 465041 + row * 10000));
+        for _ in 1..700 {
+            text.push_str(";0.2");
+        }
+        text.push('\n');
+    }
+    let files = vec![
+        named("data.csv", &text),
+        named("auxiliary.csv", "batch;value\na;1\nb;2\n"),
+    ];
+    let auto = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
+    assert!(auto
+        .plan
+        .warnings
+        .iter()
+        .any(|w| w.contains("data.csv") && w.contains("header_ambiguous")));
+    let choices = InferOptions {
+        file_params: [("data.csv".into(), json!({"has_header": false}))]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let result = propose_browser_dataset(&files, &[], &[], &choices).unwrap();
+    let value = result.spec.to_value();
+    let source = value["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["input"] == "data.csv")
+        .unwrap();
+    assert_eq!(source["params"]["has_header"], json!(false));
+    assert_eq!(
+        result
+            .plan
+            .warnings
+            .iter()
+            .filter(|w| w.contains("data.csv") && w.contains("has_header=false"))
+            .count(),
+        0
+    );
+    // Materialize the actual proposed source independently of unconfirmed joins.
+    let spec =
+        DatasetSpec::from_value(&json!({"name": "provisional", "sources": [source]})).unwrap();
+    let data = assemble(&spec, &files);
+    let block = &data.blocks["train"];
+    assert_eq!(block.n_samples, 20);
+    assert_eq!(block.x[0].n_rows, 20);
+    assert_eq!(block.x[0].n_cols, 699);
+    assert_eq!(block.x[0].data[0], 0.0465041);
+    assert_eq!(block.x[0].data[19 * 699], 0.0655041);
+    assert_eq!(block.y.as_ref().unwrap().data, vec![0.2; 20]);
+}
+
 fn lock(kind: &str, target: &str, value: Value) -> ConfirmedLock {
     ConfirmedLock {
         kind: kind.into(),
@@ -64,14 +121,14 @@ fn provisional_sources_created_for_unmatched_files() {
         named("alpha.csv", "sample_id;1000;1005\ns1;0.1;0.2\ns2;0.2;0.3\n"),
         named("beta.csv", "1000;1005\n0.1;0.2\n0.2;0.3\n"),
     ];
-    let plain = infer_browser_dataset(&files, &[], None).unwrap();
+    let plain = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
     let plain_sources = plain.resolved_spec.unwrap().to_value()["sources"]
         .as_array()
         .unwrap()
         .len();
     assert_eq!(plain_sources, 0, "plain inference drops unmatched files");
 
-    let r = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let inputs: Vec<String> = r.spec.to_value()["sources"]
         .as_array()
         .unwrap()
@@ -92,7 +149,7 @@ fn equal_count_join_pairing_when_shared_unique_id() {
         ),
         named("Ycal.csv", "sample_id;protein\ns1;11.0\ns2;12.0\ns3;13.0\n"),
     ];
-    let r = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let pairing = of_kind(&r, "pairing");
     assert!(!pairing.is_empty(), "a pairing decision is proposed");
     let p = pairing[0];
@@ -107,7 +164,7 @@ fn equal_count_row_order_low_score_when_no_shared_id() {
         named("Xcal.csv", "1000;1005\n0.1;0.2\n0.2;0.3\n0.3;0.4\n"),
         named("Ycal.csv", "protein\n11.0\n12.0\n13.0\n"),
     ];
-    let r = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let p = of_kind(&r, "pairing");
     assert!(!p.is_empty(), "row-count pairing is proposed");
     let row = p
@@ -131,7 +188,7 @@ fn confirmed_pairing_join_sets_source_join_and_suppresses_proposal() {
         ),
         named("Ycal.csv", "sample_id;protein\ns1;11.0\ns2;12.0\ns3;13.0\n"),
     ];
-    let r0 = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r0 = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let target = of_kind(&r0, "pairing")[0].target.clone();
 
     let r = propose_browser_dataset(
@@ -142,7 +199,7 @@ fn confirmed_pairing_join_sets_source_join_and_suppresses_proposal() {
             &target,
             json!({"mode": "join_id", "on": "sample_id"}),
         )],
-        None,
+        &Default::default(),
     )
     .unwrap();
 
@@ -169,11 +226,16 @@ fn confirmed_pairing_join_sets_source_join_and_suppresses_proposal() {
 #[test]
 fn confirmed_role_overrides_inferred_role() {
     let files = vec![named("alpha.csv", "1000;1005\n0.1;0.2\n0.2;0.3\n")];
-    let r0 = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r0 = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let id = source_id_for(&r0, "alpha.csv");
 
-    let r = propose_browser_dataset(&files, &[], &[lock("role", &id, json!("metadata"))], None)
-        .unwrap();
+    let r = propose_browser_dataset(
+        &files,
+        &[],
+        &[lock("role", &id, json!("metadata"))],
+        &Default::default(),
+    )
+    .unwrap();
     let spec = r.spec.to_value();
     let src = &spec["sources"][0];
     assert_eq!(src["role"], json!("metadata"));
@@ -198,12 +260,216 @@ fn confirmed_identity_sets_sample_index() {
             "dataset",
             json!({"by": "id", "key": "sample_id"}),
         )],
-        None,
+        &Default::default(),
     )
     .unwrap();
     let spec = r.spec.to_value();
     assert_eq!(spec["sample_index"]["by"], json!("id"));
     assert_eq!(spec["sample_index"]["key"], json!("sample_id"));
+}
+
+#[test]
+fn identity_lock_keys_only_proven_source_columns_and_preserves_materialized_ids() {
+    let files = vec![
+        named("Xcal.csv", "1000;1005\n0.1;0.2\n0.3;0.4\n"),
+        named("Ycal.csv", "protein\n11\n12\n"),
+        named("Mcal.csv", "sample_id;site\ns1;A\ns2;B\n"),
+    ];
+    let initial = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
+    let x = source_id_for(&initial, "Xcal.csv");
+    let y = source_id_for(&initial, "Ycal.csv");
+    let m = source_id_for(&initial, "Mcal.csv");
+    for identity in [json!("sample_id"), json!({"by": "id", "key": "sample_id"})] {
+        let result = propose_browser_dataset(
+            &files,
+            &[],
+            &[
+                lock("role", &x, json!("features")),
+                lock("role", &y, json!("targets")),
+                lock("role", &m, json!("metadata")),
+                lock("identity", "dataset", identity),
+                lock("pairing", &format!("{x}|{y}"), json!({"mode": "row_order"})),
+                lock("pairing", &format!("{x}|{m}"), json!({"mode": "row_order"})),
+            ],
+            &Default::default(),
+        )
+        .unwrap();
+        let spec = result.spec.to_value();
+        assert_eq!(spec["sample_index"]["key"], "sample_id");
+        let feature = spec["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["id"].as_str() == Some(x.as_str()))
+            .unwrap();
+        assert!(feature.get("key").is_none_or(Value::is_null));
+        assert!(of_kind(&result, "identity")
+            .iter()
+            .any(|proposal| proposal.status == ProposalStatus::Confirmed));
+        let assembled = assemble(&result.spec, &files);
+        let block = &assembled.blocks["train"];
+        assert_eq!(
+            block.metadata.as_ref().unwrap().str_column("sample_id"),
+            ["s1", "s2"]
+        );
+        assert_eq!(block.x[0].data, [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(block.y.as_ref().unwrap().data, [11.0, 12.0]);
+    }
+
+    // A real feature-table identity remains keyed and materializes unchanged.
+    let keyed = vec![named("alpha.csv", "sample_id;1000\ns1;0.1\ns2;0.3\n")];
+    let result = propose_browser_dataset(
+        &keyed,
+        &[],
+        &[lock("identity", "dataset", json!("sample_id"))],
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(result.spec.to_value()["sources"][0]["key"], "sample_id");
+    assert_eq!(
+        assemble(&result.spec, &keyed).blocks["train"]
+            .metadata
+            .as_ref()
+            .unwrap()
+            .str_column("sample_id"),
+        ["s1", "s2"]
+    );
+
+    // Both orders must inspect the id-free member, not only the first table.
+    let mut inputs = keyed.clone();
+    inputs.push(named("beta.csv", "1000\n0.2\n0.4\n"));
+    let by_name = inputs
+        .iter()
+        .map(|file| (file.name.clone(), file))
+        .collect();
+    for (names, expected) in [
+        (json!(["alpha.csv", "beta.csv"]), Value::Null),
+        (json!(["beta.csv", "alpha.csv"]), Value::Null),
+        (json!(["alpha.csv", "alpha.csv"]), json!("sample_id")),
+    ] {
+        let mut spec = json!({"sources": [{"id": "x", "role": "features", "input": names}]});
+        assert!(matches!(
+            apply_identity_lock(
+                &mut spec,
+                &lock("identity", "dataset", json!("sample_id")),
+                &by_name,
+                &[],
+                &[],
+            ),
+            LockOutcome::Applied
+        ));
+        assert_eq!(spec["sources"][0]["key"], expected);
+    }
+    let mut missing =
+        json!({"sources": [{"id": "x", "role": "features", "input": ["alpha.csv", "absent.csv"]}]});
+    let before = missing.clone();
+    assert!(matches!(
+        apply_identity_lock(
+            &mut missing,
+            &lock("identity", "dataset", json!("sample_id")),
+            &by_name,
+            &[],
+            &[],
+        ),
+        LockOutcome::Unresolved(message) if message.contains("absent.csv")
+    ));
+    assert_eq!(
+        missing, before,
+        "missing facts refuse without partial mutation"
+    );
+
+    // Existing decoded-record inference supplies bare metadata names, not
+    // dotted diagnostic hints. Its supported executable spec must stay intact.
+    let records = vec![DecodedRecordSet {
+        source: "spectra.spc".into(),
+        format: None,
+        records: vec![
+            json!({"signals": {"nir": {"values": [0.1, 0.2], "axis": {"values": [1000, 1005], "unit": "nm"}}}, "targets": {"protein": 11}, "metadata": {"sample_id": "s1", "row_index": 0}}),
+            json!({"signals": {"nir": {"values": [0.3, 0.4], "axis": {"values": [1000, 1005], "unit": "nm"}}}, "targets": {"protein": 12}, "metadata": {"sample_id": "s2", "row_index": 1}}),
+        ],
+    }];
+    let original = propose_browser_dataset(&[], &records, &[], &Default::default()).unwrap();
+    let confirmed = propose_browser_dataset(
+        &[],
+        &records,
+        &[lock("identity", "dataset", json!("sample_id"))],
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(confirmed.spec.to_value(), original.spec.to_value());
+    let payload = vec![InMemorySource {
+        name: records[0].source.clone(),
+        payload: SourcePayload::Records(records[0].records.clone()),
+    }];
+    let assembled = assemble_in_memory(&confirmed.spec, &payload, &HashMap::new(), None).unwrap();
+    assert_eq!(
+        assembled.blocks["train"]
+            .metadata
+            .as_ref()
+            .unwrap()
+            .str_column("sample_id"),
+        ["s1", "s2"]
+    );
+    assert_eq!(assembled.blocks["train"].x[0].data, [0.1, 0.2, 0.3, 0.4]);
+
+    // The main browser proposes with both representations, then materializes
+    // vendor Records only. Opaque raw bytes must never supply CSV column facts.
+    let raw = vec![NamedBytes {
+        name: records[0].source.clone(),
+        bytes: vec![0xff, 0x00, 0x1a, 0x01],
+    }];
+    let paired = propose_browser_dataset(
+        &raw,
+        &records,
+        &[lock("identity", "dataset", json!("sample_id"))],
+        &Default::default(),
+    )
+    .unwrap();
+    assert!(of_kind(&paired, "identity")
+        .iter()
+        .any(|proposal| proposal.status == ProposalStatus::Confirmed));
+    assert_eq!(paired.spec.to_value()["sources"][0]["key"], "sample_id");
+    let assembled = assemble_in_memory(&paired.spec, &payload, &HashMap::new(), None).unwrap();
+    assert_eq!(
+        assembled.blocks["train"]
+            .metadata
+            .as_ref()
+            .unwrap()
+            .str_column("sample_id"),
+        ["s1", "s2"]
+    );
+    assert_eq!(assembled.blocks["train"].x[0].data, [0.1, 0.2, 0.3, 0.4]);
+
+    // Delimited-text is the opposite selection: decoded-only target names
+    // cannot establish a column in the authoritative raw table.
+    let mut text_records = records.clone();
+    text_records[0].source = keyed[0].name.clone();
+    text_records[0].format = Some("delimited-text".into());
+    let text_plan = infer_browser_dataset(&keyed, &text_records, &Default::default()).unwrap();
+    let text_by_name = keyed.iter().map(|file| (file.name.clone(), file)).collect();
+    let mut text_spec = json!({"sources": [{"id": "x", "role": "features", "input": "alpha.csv"}]});
+    assert!(matches!(
+        apply_identity_lock(
+            &mut text_spec,
+            &lock("identity", "dataset", json!("protein")),
+            &text_by_name,
+            &text_plan.columns,
+            &text_records,
+        ),
+        LockOutcome::Applied
+    ));
+    assert!(text_spec["sources"][0].get("key").is_none());
+
+    // Raw WASM transport appends payloads without precedence; genuinely
+    // duplicated assembly inputs still refuse instead of silently winning.
+    let mut conflicting = mem_sources(&raw);
+    conflicting.extend(payload);
+    assert!(
+        assemble_in_memory(&paired.spec, &conflicting, &HashMap::new(), None)
+            .unwrap_err()
+            .message
+            .contains("ambiguous")
+    );
 }
 
 #[test]
@@ -219,7 +485,7 @@ fn confirmed_signal_and_task_override_detectors() {
             lock("signal_type", "dataset", json!("absorbance")),
             lock("task_type", "dataset", json!("regression")),
         ],
-        None,
+        &Default::default(),
     )
     .unwrap();
     let spec = r.spec.to_value();
@@ -238,8 +504,8 @@ fn no_locks_equals_plain_browser_inference() {
         ),
         named("Ycal.csv", "sample_id;protein\ns1;11.0\ns2;12.0\ns3;13.0\n"),
     ];
-    let proposed = propose_browser_dataset(&files, &[], &[], None).unwrap();
-    let plain = infer_browser_dataset(&files, &[], None).unwrap();
+    let proposed = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
+    let plain = infer_browser_dataset(&files, &[], &Default::default()).unwrap();
     assert_eq!(
         proposed.spec.to_value(),
         plain.resolved_spec.unwrap().to_value()
@@ -250,10 +516,15 @@ fn no_locks_equals_plain_browser_inference() {
 fn invalid_lock_surfaces_validation_error() {
     // Re-role the only feature source to metadata -> the spec has no features.
     let files = vec![named("alpha.csv", "1000;1005\n0.1;0.2\n0.2;0.3\n")];
-    let r0 = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r0 = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let id = source_id_for(&r0, "alpha.csv");
-    let r = propose_browser_dataset(&files, &[], &[lock("role", &id, json!("metadata"))], None)
-        .unwrap();
+    let r = propose_browser_dataset(
+        &files,
+        &[],
+        &[lock("role", &id, json!("metadata"))],
+        &Default::default(),
+    )
+    .unwrap();
     assert!(!r.valid, "validation runs and flags the invalid spec");
     assert!(!r.validation_errors.is_empty());
 }
@@ -265,11 +536,16 @@ fn sum_pairing_proposes_concat_samples() {
         named("part_b.csv", "1000;1005\n0.3;0.4\n"),
         named("whole_y.csv", "protein\n11\n12\n13\n"),
     ];
-    let r0 = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r0 = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let whole = source_id_for(&r0, "whole_y.csv");
     // Only once the whole is a target does summing X parts make sense.
-    let r = propose_browser_dataset(&files, &[], &[lock("role", &whole, json!("targets"))], None)
-        .unwrap();
+    let r = propose_browser_dataset(
+        &files,
+        &[],
+        &[lock("role", &whole, json!("targets"))],
+        &Default::default(),
+    )
+    .unwrap();
     let sum = of_kind(&r, "pairing")
         .into_iter()
         .find(|p| p.value["mode"] == json!("concat_samples"));
@@ -292,7 +568,7 @@ fn join_id_lock_materializes_y() {
         ),
         named("Ycal.csv", "sample_id;protein\ns1;11.0\ns2;12.0\ns3;13.0\n"),
     ];
-    let r0 = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r0 = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let target = of_kind(&r0, "pairing")[0].target.clone();
     let r = propose_browser_dataset(
         &files,
@@ -302,7 +578,7 @@ fn join_id_lock_materializes_y() {
             &target,
             json!({"mode": "join_id", "on": "sample_id"}),
         )],
-        None,
+        &Default::default(),
     )
     .unwrap();
     let a = assemble(&r.spec, &files);
@@ -317,13 +593,13 @@ fn row_order_lock_materializes_y() {
         named("Xcal.csv", "1000;1005\n0.1;0.2\n0.2;0.3\n0.3;0.4\n"),
         named("Ycal.csv", "protein\n11.0\n12.0\n13.0\n"),
     ];
-    let r0 = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r0 = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let target = of_kind(&r0, "pairing")[0].target.clone();
     let r = propose_browser_dataset(
         &files,
         &[],
         &[lock("pairing", &target, json!({"mode": "row_order"}))],
-        None,
+        &Default::default(),
     )
     .unwrap();
     let a = assemble(&r.spec, &files);
@@ -339,7 +615,7 @@ fn concat_samples_lock_materializes_full_x_and_y() {
         named("part_b.csv", "1000;1005\n0.3;0.4\n"),
         named("whole_y.csv", "protein\n11\n12\n13\n"),
     ];
-    let r0 = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r0 = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let a_id = source_id_for(&r0, "part_a.csv");
     let b_id = source_id_for(&r0, "part_b.csv");
     let y_id = source_id_for(&r0, "whole_y.csv");
@@ -354,7 +630,7 @@ fn concat_samples_lock_materializes_full_x_and_y() {
                 json!({"mode": "concat_samples", "parts": [a_id, b_id], "whole": y_id}),
             ),
         ],
-        None,
+        &Default::default(),
     )
     .unwrap();
     // The two feature files folded into one multi-input concat source; y remains.
@@ -381,7 +657,7 @@ fn concat_samples_keeps_shared_id_out_of_features() {
         ),
         named("whole_y.csv", "protein\n11\n12\n13\n14\n"),
     ];
-    let r0 = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let r0 = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let a_id = source_id_for(&r0, "part_a.csv");
     let b_id = source_id_for(&r0, "part_b.csv");
     let y_id = source_id_for(&r0, "whole_y.csv");
@@ -396,7 +672,7 @@ fn concat_samples_keeps_shared_id_out_of_features() {
                 json!({"mode": "concat_samples", "parts": [a_id, b_id], "whole": y_id}),
             ),
         ],
-        None,
+        &Default::default(),
     )
     .unwrap();
     let a = assemble(&r.spec, &files);
@@ -416,8 +692,8 @@ fn proposal_ids_are_stable_across_reinference() {
         named("alpha.csv", "sample_id;1000;1005\ns1;0.1;0.2\ns2;0.2;0.3\n"),
         named("beta.csv", "sample_id;protein\ns1;11.0\ns2;12.0\n"),
     ];
-    let a = propose_browser_dataset(&files, &[], &[], None).unwrap();
-    let b = propose_browser_dataset(&files, &[], &[], None).unwrap();
+    let a = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
+    let b = propose_browser_dataset(&files, &[], &[], &Default::default()).unwrap();
     let ids_a: Vec<&str> = a.proposals.iter().map(|p| p.id.as_str()).collect();
     let ids_b: Vec<&str> = b.proposals.iter().map(|p| p.id.as_str()).collect();
     assert_eq!(ids_a, ids_b);
