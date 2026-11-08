@@ -333,6 +333,7 @@
     },
     "partitions": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "by": {
           "enum": [
@@ -351,6 +352,9 @@
         "test_values": {
           "type": "array"
         },
+        "val_values": {
+          "type": "array"
+        },
         "predict_values": {
           "type": "array"
         },
@@ -364,11 +368,15 @@
         },
         "train": {},
         "test": {},
+        "val": {},
         "predict": {},
         "train_file": {
           "type": "string"
         },
         "test_file": {
+          "type": "string"
+        },
+        "val_file": {
           "type": "string"
         },
         "predict_file": {

@@ -1,0 +1,4794 @@
+{
+  "status": "DESIGN reference outputs; no owner/binding qualification",
+  "ieee_hex_convention": "hex integer bit pattern, most significant digit first; preimages store numeric bytes little-endian",
+  "primitives": [
+    {
+      "name": "u32_version_one",
+      "input": {
+        "literal_expected_hex": "01000000"
+      },
+      "preimage_hex": "01000000",
+      "sha256": "67abdd721024f0ff4e0b3f4c2fc13bc5bad42d0b7851d456d88d203d15aaa450"
+    },
+    {
+      "name": "mask_false_true",
+      "input": {
+        "literal_expected_hex": "0001"
+      },
+      "preimage_hex": "0001",
+      "sha256": "b413f47d13ee2fe6c845b2ee141af81de858df4ec549a58b7970bb96645bc8d2"
+    },
+    {
+      "name": "u64_258",
+      "input": {
+        "literal_expected_hex": "0201000000000000"
+      },
+      "preimage_hex": "0201000000000000",
+      "sha256": "fb59317b8103f19f3850f0be3fe62db1aa481a9a7b31c590e6d243e98eacd375"
+    },
+    {
+      "name": "empty_bytes",
+      "input": {
+        "literal_expected_hex": "0000000000000000"
+      },
+      "preimage_hex": "0000000000000000",
+      "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"
+    },
+    {
+      "name": "utf8_e_acute",
+      "input": {
+        "literal_expected_hex": "0200000000000000c3a9"
+      },
+      "preimage_hex": "0200000000000000c3a9",
+      "sha256": "065ba7d52bd28953872d7571d5849952b34f4b5409eb0a53ccbe8fc67c0ad68a"
+    },
+    {
+      "name": "decomposed_e_acute",
+      "input": {
+        "literal_expected_hex": "030000000000000065cc81"
+      },
+      "preimage_hex": "030000000000000065cc81",
+      "sha256": "361d3d84cf17bc4738b7b337e9b9a8e733134ee5bb8167e98a36b7dc12190f47"
+    },
+    {
+      "name": "embedded_separator",
+      "input": {
+        "literal_expected_hex": "0300000000000000611f62"
+      },
+      "preimage_hex": "0300000000000000611f62",
+      "sha256": "d7ac948c55512c10695c3909f547ff811e4602e56947b7609295c41a52ab4653"
+    },
+    {
+      "name": "absent_string",
+      "input": {
+        "literal_expected_hex": "00"
+      },
+      "preimage_hex": "00",
+      "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+    },
+    {
+      "name": "present_empty_string",
+      "input": {
+        "literal_expected_hex": "010000000000000000"
+      },
+      "preimage_hex": "010000000000000000",
+      "sha256": "a536aa3cede6ea3c1f3e0357c3c60e0f216a8c89b853df13b29daa8f85065dfb"
+    },
+    {
+      "name": "empty_string_list",
+      "input": {
+        "literal_expected_hex": "0000000000000000"
+      },
+      "preimage_hex": "0000000000000000",
+      "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"
+    },
+    {
+      "name": "one_empty_string",
+      "input": {
+        "literal_expected_hex": "01000000000000000000000000000000"
+      },
+      "preimage_hex": "01000000000000000000000000000000",
+      "sha256": "4cbbd8ca5215b8d161aec181a74b694f4e24b001d5b081dc0030ed797a8973e0"
+    },
+    {
+      "name": "default_f64_precision",
+      "input": {
+        "literal_expected_hex": "0200000000"
+      },
+      "preimage_hex": "0200000000",
+      "sha256": "395c2f5598a1643a205154c6f4c46ce36895b28e6c35660a95e5c6fd5ef9aeab"
+    },
+    {
+      "name": "f32_positive_zero_1x1",
+      "input": {
+        "literal_expected_hex": "0101000000000000000100000000000000040000000000000000000000010000000000000001"
+      },
+      "preimage_hex": "0101000000000000000100000000000000040000000000000000000000010000000000000001",
+      "sha256": "e7f457f8df915b331c0ce89788548ef89dfc383fe09ee267f41fd6701a51e5d9"
+    }
+  ],
+  "conversion_vectors": [
+    {
+      "name": "positive_zero",
+      "input_ieee_f64_hex": "0000000000000000",
+      "expected": "00000000",
+      "result": {
+        "value": "00000000"
+      },
+      "output_block": {
+        "name": "positive_zero",
+        "preimage_hex": "0101000000000000000100000000000000040000000000000000000000010000000000000001",
+        "sha256": "e7f457f8df915b331c0ce89788548ef89dfc383fe09ee267f41fd6701a51e5d9"
+      }
+    },
+    {
+      "name": "negative_zero",
+      "input_ieee_f64_hex": "8000000000000000",
+      "expected": "80000000",
+      "result": {
+        "value": "80000000"
+      },
+      "output_block": {
+        "name": "negative_zero",
+        "preimage_hex": "0101000000000000000100000000000000040000000000000000000080010000000000000001",
+        "sha256": "357083ebe8b3fa58244a5585260c5254f4fbea0e6b3674a872eac9e5d9d8e0c4"
+      }
+    },
+    {
+      "name": "ulp_at_one",
+      "input_ieee_f64_hex": "3ff0000000000001",
+      "expected": "3f800000",
+      "result": {
+        "value": "3f800000"
+      },
+      "output_block": {
+        "name": "ulp_at_one",
+        "preimage_hex": "010100000000000000010000000000000004000000000000000000803f010000000000000001",
+        "sha256": "2848bede440e224869630545dc1c5e972241fd3cb8234ffb16704cdfdb9c3016"
+      }
+    },
+    {
+      "name": "half_even_lower",
+      "input_ieee_f64_hex": "3ff0000010000000",
+      "expected": "3f800000",
+      "result": {
+        "value": "3f800000"
+      },
+      "output_block": {
+        "name": "half_even_lower",
+        "preimage_hex": "010100000000000000010000000000000004000000000000000000803f010000000000000001",
+        "sha256": "2848bede440e224869630545dc1c5e972241fd3cb8234ffb16704cdfdb9c3016"
+      }
+    },
+    {
+      "name": "above_half",
+      "input_ieee_f64_hex": "3ff0000010000001",
+      "expected": "3f800001",
+      "result": {
+        "value": "3f800001"
+      },
+      "output_block": {
+        "name": "above_half",
+        "preimage_hex": "010100000000000000010000000000000004000000000000000100803f010000000000000001",
+        "sha256": "3a53676f99b43553a66ce04c6ab907c2ad9500d9b85ef00f2444a27f80a7a73d"
+      }
+    },
+    {
+      "name": "half_even_upper",
+      "input_ieee_f64_hex": "3ff0000030000000",
+      "expected": "3f800002",
+      "result": {
+        "value": "3f800002"
+      },
+      "output_block": {
+        "name": "half_even_upper",
+        "preimage_hex": "010100000000000000010000000000000004000000000000000200803f010000000000000001",
+        "sha256": "a7e8915e6e0584dcedd926bc8b7b9a32042c48e452d93175d7f59ecb05abaed5"
+      }
+    },
+    {
+      "name": "negative_half_even",
+      "input_ieee_f64_hex": "bff0000030000000",
+      "expected": "bf800002",
+      "result": {
+        "value": "bf800002"
+      },
+      "output_block": {
+        "name": "negative_half_even",
+        "preimage_hex": "01010000000000000001000000000000000400000000000000020080bf010000000000000001",
+        "sha256": "c8e15e676e51fe0110d435b887a0ac90e0e1007f984ee706781d683ea8b1cb91"
+      }
+    },
+    {
+      "name": "decimal_point_one",
+      "input_ieee_f64_hex": "3fb999999999999a",
+      "expected": "3dcccccd",
+      "result": {
+        "value": "3dcccccd"
+      },
+      "output_block": {
+        "name": "decimal_point_one",
+        "preimage_hex": "01010000000000000001000000000000000400000000000000cdcccc3d010000000000000001",
+        "sha256": "c705c0184dfe2c420d4cbe95f3e23f88fb5421dd0f241bf1665f3536145c94bd"
+      }
+    },
+    {
+      "name": "min_subnormal",
+      "input_ieee_f64_hex": "36a0000000000000",
+      "expected": "00000001",
+      "result": {
+        "value": "00000001"
+      },
+      "output_block": {
+        "name": "min_subnormal",
+        "preimage_hex": "0101000000000000000100000000000000040000000000000001000000010000000000000001",
+        "sha256": "ad8147a228effc5366f9128746e7007b0362caeeca405bc2a5395e92d1a05cfc"
+      }
+    },
+    {
+      "name": "negative_min_subnormal",
+      "input_ieee_f64_hex": "b6a0000000000000",
+      "expected": "80000001",
+      "result": {
+        "value": "80000001"
+      },
+      "output_block": {
+        "name": "negative_min_subnormal",
+        "preimage_hex": "0101000000000000000100000000000000040000000000000001000080010000000000000001",
+        "sha256": "b4f6f1f39e4dc9b45748086f61857c698efc6c1bd62ab34ce8ff9ed05a92c010"
+      }
+    },
+    {
+      "name": "subnormal_half_even",
+      "input_ieee_f64_hex": "36a8000000000000",
+      "expected": "00000002",
+      "result": {
+        "value": "00000002"
+      },
+      "output_block": {
+        "name": "subnormal_half_even",
+        "preimage_hex": "0101000000000000000100000000000000040000000000000002000000010000000000000001",
+        "sha256": "d6615b8525f8b4382160b010279724ef2deb8a71c92197bdf287fc9504fadbe3"
+      }
+    },
+    {
+      "name": "subnormal_half_even_lower",
+      "input_ieee_f64_hex": "36b4000000000000",
+      "expected": "00000002",
+      "result": {
+        "value": "00000002"
+      },
+      "output_block": {
+        "name": "subnormal_half_even_lower",
+        "preimage_hex": "0101000000000000000100000000000000040000000000000002000000010000000000000001",
+        "sha256": "d6615b8525f8b4382160b010279724ef2deb8a71c92197bdf287fc9504fadbe3"
+      }
+    },
+    {
+      "name": "subnormal_to_normal_tie",
+      "input_ieee_f64_hex": "380fffffe0000000",
+      "expected": "00800000",
+      "result": {
+        "value": "00800000"
+      },
+      "output_block": {
+        "name": "subnormal_to_normal_tie",
+        "preimage_hex": "0101000000000000000100000000000000040000000000000000008000010000000000000001",
+        "sha256": "6826fc6db1cdb81bedffbbd0bb6a8f91d0e24b4b5f5423224b92a0e3f2bdc931"
+      }
+    },
+    {
+      "name": "min_normal",
+      "input_ieee_f64_hex": "3810000000000000",
+      "expected": "00800000",
+      "result": {
+        "value": "00800000"
+      },
+      "output_block": {
+        "name": "min_normal",
+        "preimage_hex": "0101000000000000000100000000000000040000000000000000008000010000000000000001",
+        "sha256": "6826fc6db1cdb81bedffbbd0bb6a8f91d0e24b4b5f5423224b92a0e3f2bdc931"
+      }
+    },
+    {
+      "name": "max_finite",
+      "input_ieee_f64_hex": "47efffffe0000000",
+      "expected": "7f7fffff",
+      "result": {
+        "value": "7f7fffff"
+      },
+      "output_block": {
+        "name": "max_finite",
+        "preimage_hex": "01010000000000000001000000000000000400000000000000ffff7f7f010000000000000001",
+        "sha256": "08aae9ea06eb51cea126cdcf924c382226f2987ecad5636c850a4f75d1a46cdf"
+      }
+    },
+    {
+      "name": "overflow_tie",
+      "input_ieee_f64_hex": "47effffff0000000",
+      "expected": "overflow",
+      "result": {
+        "refusal": "overflow"
+      },
+      "output_block": null
+    },
+    {
+      "name": "finite_1e40",
+      "input_ieee_f64_hex": "483d6329f1c35ca5",
+      "expected": "overflow",
+      "result": {
+        "refusal": "overflow"
+      },
+      "output_block": null
+    },
+    {
+      "name": "underflow_tie",
+      "input_ieee_f64_hex": "3690000000000000",
+      "expected": "nonzero-underflow",
+      "result": {
+        "refusal": "nonzero-underflow"
+      },
+      "output_block": null
+    },
+    {
+      "name": "negative_underflow",
+      "input_ieee_f64_hex": "b690000000000000",
+      "expected": "nonzero-underflow",
+      "result": {
+        "refusal": "nonzero-underflow"
+      },
+      "output_block": null
+    },
+    {
+      "name": "finite_1e_minus_50",
+      "input_ieee_f64_hex": "358dee7a4ad4b81f",
+      "expected": "nonzero-underflow",
+      "result": {
+        "refusal": "nonzero-underflow"
+      },
+      "output_block": null
+    },
+    {
+      "name": "f64_min_subnormal",
+      "input_ieee_f64_hex": "0000000000000001",
+      "expected": "nonzero-underflow",
+      "result": {
+        "refusal": "nonzero-underflow"
+      },
+      "output_block": null
+    },
+    {
+      "name": "nan",
+      "input_ieee_f64_hex": "7ff8000000000001",
+      "expected": "nonfinite",
+      "result": {
+        "refusal": "nonfinite"
+      },
+      "output_block": null
+    },
+    {
+      "name": "infinity",
+      "input_ieee_f64_hex": "7ff0000000000000",
+      "expected": "nonfinite",
+      "result": {
+        "refusal": "nonfinite"
+      },
+      "output_block": null
+    }
+  ],
+  "label_vectors": [
+    {
+      "integer_decimal": "0",
+      "dtype": 1,
+      "result": {
+        "value": "00000000"
+      }
+    },
+    {
+      "integer_decimal": "0",
+      "dtype": 2,
+      "result": {
+        "value": "0000000000000000"
+      }
+    },
+    {
+      "integer_decimal": "16777215",
+      "dtype": 1,
+      "result": {
+        "value": "4b7fffff"
+      }
+    },
+    {
+      "integer_decimal": "16777215",
+      "dtype": 2,
+      "result": {
+        "value": "416fffffe0000000"
+      }
+    },
+    {
+      "integer_decimal": "16777216",
+      "dtype": 1,
+      "result": {
+        "value": "4b800000"
+      }
+    },
+    {
+      "integer_decimal": "16777216",
+      "dtype": 2,
+      "result": {
+        "value": "4170000000000000"
+      }
+    },
+    {
+      "integer_decimal": "16777217",
+      "dtype": 1,
+      "result": {
+        "refusal": "inexact-f32-label"
+      }
+    },
+    {
+      "integer_decimal": "16777217",
+      "dtype": 2,
+      "result": {
+        "value": "4170000010000000"
+      }
+    },
+    {
+      "integer_decimal": "16777218",
+      "dtype": 1,
+      "result": {
+        "value": "4b800001"
+      }
+    },
+    {
+      "integer_decimal": "16777218",
+      "dtype": 2,
+      "result": {
+        "value": "4170000020000000"
+      }
+    },
+    {
+      "integer_decimal": "-16777218",
+      "dtype": 1,
+      "result": {
+        "value": "cb800001"
+      }
+    },
+    {
+      "integer_decimal": "-16777218",
+      "dtype": 2,
+      "result": {
+        "value": "c170000020000000"
+      }
+    },
+    {
+      "integer_decimal": "9007199254740991",
+      "dtype": 1,
+      "result": {
+        "refusal": "inexact-f32-label"
+      }
+    },
+    {
+      "integer_decimal": "9007199254740991",
+      "dtype": 2,
+      "result": {
+        "value": "433fffffffffffff"
+      }
+    },
+    {
+      "integer_decimal": "-9007199254740991",
+      "dtype": 1,
+      "result": {
+        "refusal": "inexact-f32-label"
+      }
+    },
+    {
+      "integer_decimal": "-9007199254740991",
+      "dtype": 2,
+      "result": {
+        "value": "c33fffffffffffff"
+      }
+    },
+    {
+      "integer_decimal": "9007199254740992",
+      "dtype": 1,
+      "result": {
+        "refusal": "public-integer-cap"
+      }
+    },
+    {
+      "integer_decimal": "9007199254740992",
+      "dtype": 2,
+      "result": {
+        "refusal": "public-integer-cap"
+      }
+    },
+    {
+      "integer_decimal": "-9007199254740992",
+      "dtype": 1,
+      "result": {
+        "refusal": "public-integer-cap"
+      }
+    },
+    {
+      "integer_decimal": "-9007199254740992",
+      "dtype": 2,
+      "result": {
+        "refusal": "public-integer-cap"
+      }
+    },
+    {
+      "integer_decimal": "9007199254740993",
+      "dtype": 1,
+      "result": {
+        "refusal": "public-integer-cap"
+      }
+    },
+    {
+      "integer_decimal": "9007199254740993",
+      "dtype": 2,
+      "result": {
+        "refusal": "public-integer-cap"
+      }
+    },
+    {
+      "integer_decimal": "9223372036854775807",
+      "dtype": 1,
+      "result": {
+        "refusal": "public-integer-cap"
+      }
+    },
+    {
+      "integer_decimal": "9223372036854775807",
+      "dtype": 2,
+      "result": {
+        "refusal": "public-integer-cap"
+      }
+    }
+  ],
+  "precision_vectors": [
+    {
+      "source_dtype": null,
+      "requested_dtype": null,
+      "consumer": null,
+      "target_kind": 0,
+      "result": {
+        "value": {
+          "dtype": 2,
+          "origin": 0,
+          "source_dtype": null,
+          "requested_dtype": null,
+          "consumer": null
+        }
+      }
+    },
+    {
+      "source_dtype": "float32",
+      "requested_dtype": null,
+      "consumer": null,
+      "target_kind": 0,
+      "result": {
+        "value": {
+          "dtype": 1,
+          "origin": 1,
+          "source_dtype": "float32",
+          "requested_dtype": null,
+          "consumer": null
+        }
+      }
+    },
+    {
+      "source_dtype": "float32",
+      "requested_dtype": 2,
+      "consumer": null,
+      "target_kind": 0,
+      "result": {
+        "value": {
+          "dtype": 2,
+          "origin": 2,
+          "source_dtype": "float32",
+          "requested_dtype": 2,
+          "consumer": null
+        }
+      }
+    },
+    {
+      "source_dtype": "float64",
+      "requested_dtype": 1,
+      "consumer": null,
+      "target_kind": 0,
+      "result": {
+        "value": {
+          "dtype": 1,
+          "origin": 2,
+          "source_dtype": "float64",
+          "requested_dtype": 1,
+          "consumer": null
+        }
+      }
+    },
+    {
+      "source_dtype": "float64",
+      "requested_dtype": null,
+      "consumer": "SpectroDataset",
+      "target_kind": 0,
+      "result": {
+        "value": {
+          "dtype": 1,
+          "origin": 3,
+          "source_dtype": "float64",
+          "requested_dtype": null,
+          "consumer": "SpectroDataset"
+        }
+      }
+    },
+    {
+      "source_dtype": null,
+      "requested_dtype": 2,
+      "consumer": "SpectroDataset",
+      "target_kind": 0,
+      "result": {
+        "refusal": "unsupported-requested-f64-consumer"
+      }
+    },
+    {
+      "source_dtype": null,
+      "requested_dtype": 1,
+      "consumer": "SpectroDataset",
+      "target_kind": 0,
+      "result": {
+        "value": {
+          "dtype": 1,
+          "origin": 2,
+          "source_dtype": null,
+          "requested_dtype": 1,
+          "consumer": "SpectroDataset"
+        }
+      }
+    },
+    {
+      "source_dtype": "string",
+      "requested_dtype": 2,
+      "consumer": null,
+      "target_kind": 2,
+      "result": {
+        "refusal": "unsupported-target-precision"
+      }
+    },
+    {
+      "source_dtype": null,
+      "requested_dtype": 9,
+      "consumer": null,
+      "target_kind": 0,
+      "result": {
+        "refusal": "unsupported-request"
+      }
+    }
+  ],
+  "projection_vectors": [
+    {
+      "name": "base",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "base:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "base:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "ulp_collapsed_to_one",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000000",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "ulp_collapsed_to_one:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f000000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "e7e9712af6788a50a12fd932023db500ccd861d5fce2bb94f8ba1f2deebf8988"
+      },
+      "targets": {
+        "name": "ulp_collapsed_to_one:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "missing_feature_zero",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                false,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "missing_feature_zero:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101000101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "5a18f270a0568f432c83b6836ef5a038f083531d4dd7bff3218dbbb8da9566ef"
+      },
+      "targets": {
+        "name": "missing_feature_zero:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "missing_feature_arbitrary_placeholder",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "405ec00000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                false,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "missing_feature_arbitrary_placeholder:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101000101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "5a18f270a0568f432c83b6836ef5a038f083531d4dd7bff3218dbbb8da9566ef"
+      },
+      "targets": {
+        "name": "missing_feature_arbitrary_placeholder:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "observed_negative_zero_to_positive",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "0000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "observed_negative_zero_to_positive:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000000004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "3a33cfb109ebf9f46e37e20255ca0404ba3460b31ca6dbc52ee07db6639559c3"
+      },
+      "targets": {
+        "name": "observed_negative_zero_to_positive:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "missing_target",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                false,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "missing_target:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "missing_target:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010100000000000000010000000000000079000200000000020200000000000000010000000000000010000000000000000000000000000000000000000000004002000000000000000001",
+        "sha256": "9ac2987744f5ba6efbb949dcda448ea0448ce74ecbfbafeede31b70bbf8f8884"
+      }
+    },
+    {
+      "name": "observed_target_zero",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "0000000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "observed_target_zero:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "observed_target_zero:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010100000000000000010000000000000079000200000000020200000000000000010000000000000010000000000000000000000000000000000000000000004002000000000000000101",
+        "sha256": "3bb9fb046a69225d7b9898aa5b31397578e8ce4e4bcc99ff0989dd63de81f8e6"
+      }
+    },
+    {
+      "name": "fold_reversed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o2"
+            ],
+            "validation": [
+              "o1"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "fold_reversed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f32010000000000000002000000000000006f3100010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "46fe1153cb6cb4ef68fae27f1510f8e2c34b34908a68576a3da2f93bde1cfea5"
+      },
+      "targets": {
+        "name": "fold_reversed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f32010000000000000002000000000000006f310001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "381623b0caf4e14da816a29fecec67128c02946d0c4776bc1aeeb2bbaa4bea74"
+      }
+    },
+    {
+      "name": "folds_absent",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": null,
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "folds_absent:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e01020000000000000067320102000000000000007332000000010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "2e766914891c29340b8a1bf26d26b73c58e24aecf8ad93d778b606ab17f423d7"
+      },
+      "targets": {
+        "name": "folds_absent:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200000001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "cff2050175ccc144f02a2f678b94f8d9fe5d897c8f4fd3dc45869be135780ed6"
+      }
+    },
+    {
+      "name": "folds_present_empty",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "folds_present_empty:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e010200000000000000673201020000000000000073320001000000000000000000010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "4623fa416749747e8def01c15d11a04e331cf03445438e129635df64f6f65ff6"
+      },
+      "targets": {
+        "name": "folds_present_empty:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e01020000000000000067320102000000000000007332000100000000000000000001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "182ac0cd52f8c774e5c53bb5f5fbd5fc37bdb3469b093585e65dbeef2e6b0ea3"
+      }
+    },
+    {
+      "name": "raw_fold_assignments",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": [
+          "fold0",
+          null
+        ],
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "raw_fold_assignments:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f32010200000000000000010500000000000000666f6c643000010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "967a0114b3f9873459b2e468c7961990fbc61f9f65d6337076125b7b57abab2e"
+      },
+      "targets": {
+        "name": "raw_fold_assignments:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f32010200000000000000010500000000000000666f6c64300001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "bcfe1231db9042e601e540a4e885377c6e04798dacbf556f47f5bc38ed725adf"
+      }
+    },
+    {
+      "name": "literal_nanometre",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nanometre",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "literal_nanometre:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680109000000000000006e616e6f6d6574726501010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "965e20d63f1e9d19471f5d558092c8e6b129bf4c8392af8ad5640cbbaff8f1e1"
+      },
+      "targets": {
+        "name": "literal_nanometre:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "coordinate_ulp",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000002"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "coordinate_ulp:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400200000000007940",
+        "sha256": "87689e407b22c919c8a4099f1ecda58e81831729b20993aaca0e78e22d3682f5"
+      },
+      "targets": {
+        "name": "coordinate_ulp:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "group_changed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "other",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "group_changed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e0105000000000000006f746865720102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "a3e9eb12e647ec9a8b791fd67b08183314c34283645bea44e506e3fb432aa14f"
+      },
+      "targets": {
+        "name": "group_changed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e0105000000000000006f746865720102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "61cd79013e50c28ec61a518928d06564a0968b1a3c1644b9998092c4f084708f"
+      }
+    },
+    {
+      "name": "origin_changed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "other",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "origin_changed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310105000000000000006f74686572000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "0f4c414a5b27f7412fd448518f0cf42aab6c4f69813b051f5c08cce57ec1411e"
+      },
+      "targets": {
+        "name": "origin_changed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310105000000000000006f74686572000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "3a285c0d1d39fde1cb12e485946db6c533996bcf4e9d15a5da69950a8b205ca6"
+      }
+    },
+    {
+      "name": "partition_changed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "test",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "partition_changed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f3104000000000000007465737401020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "b2b9e70635caddab04707b8bec62c47b78cbc692f90f7daf7ee0adaf16ab8b44"
+      },
+      "targets": {
+        "name": "partition_changed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f3104000000000000007465737401020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "02375822500a1ed89f994754f66b0781c2f8f9d31815c8aae33797559a0231f8"
+      }
+    },
+    {
+      "name": "observation_changed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "new",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "new"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "observation_changed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733103000000000000006e65770500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000003000000000000006e6577010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "80f738b8cabfb76c33b78a0c03b706df8f049673a367612f9eaceb185fc60c78"
+      },
+      "targets": {
+        "name": "observation_changed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733103000000000000006e65770500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000003000000000000006e6577010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "363a7ed545c94700788e068d48185eec2ed6aedf1fc17f73670e684dc0f8b44e"
+      }
+    },
+    {
+      "name": "sample_changed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "new",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "sample_changed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000800000000000000666561747572657300020000000000000003000000000000006e657702000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "d5a8d1be5830e555a4ebad3cbd8fc413757db247ba21ffa0fdfa476dc9809d88"
+      },
+      "targets": {
+        "name": "sample_changed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e76310100000007000000000000007461726765747300020000000000000003000000000000006e657702000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "b1775d8b31aa61ef9d7876fabcf5ac9332ee5e659825e23fd99ea04448c15e27"
+      }
+    },
+    {
+      "name": "source_changed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "other",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "source_changed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000005000000000000006f7468657209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f4d38e3a96acd9aef2df051dfe4d07b6ff1c6d3a8dc351c7cec0a1d25e58f1d4"
+      },
+      "targets": {
+        "name": "source_changed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "separator_headers_left",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a\u001fb",
+              "c"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "separator_headers_left:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f000000000000000000000000000000800400000000000000010101010102000000000000000300000000000000611f6201000000000000006301000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "e90aea39005d89dab5afd57a7ef0ed73b7acef00385cccb353c0dc4fbd740a66"
+      },
+      "targets": {
+        "name": "separator_headers_left:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "separator_headers_right",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b\u001fc"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "separator_headers_right:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f000000000000000000000000000000800400000000000000010101010102000000000000000100000000000000610300000000000000621f6301000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "4cc69cfdffd51c92857a0d433a977369ba19869f7d65addf1b75c43336bc6f48"
+      },
+      "targets": {
+        "name": "separator_headers_right:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "classification_integer",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 1,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            },
+            "integer_labels": [
+              1,
+              2
+            ]
+          }
+        ]
+      },
+      "features": {
+        "name": "classification_integer:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "classification_integer:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007901020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "222519bd58ea18c438fd76b0c1242a07597ed6c0cabb641840d6f655b7c4cbdf"
+      }
+    },
+    {
+      "name": "classification_string",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 2,
+            "precision": {
+              "dtype": 3,
+              "origin": 0,
+              "source_dtype": "string",
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 3,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "one",
+                "two"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "classification_string:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "classification_string:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010100000000000000010000000000000079020300010600000000000000737472696e6700000302000000000000000100000000000000160000000000000003000000000000006f6e65030000000000000074776f02000000000000000101",
+        "sha256": "523ea6ce870ea2d677ad81cb31009f65816e10c1f785c6506fd04e88930673ae"
+      }
+    },
+    {
+      "name": "absent_targets",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": null
+      },
+      "features": {
+        "name": "absent_targets:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "absent_targets:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320000",
+        "sha256": "429ca59dc2d8971cdfa1c1c380717c4f9f50db9933f2764c0355dccbd439cc8b"
+      }
+    },
+    {
+      "name": "present_empty_targets",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": []
+      },
+      "features": {
+        "name": "present_empty_targets:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "present_empty_targets:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000000",
+        "sha256": "6fbf6465c966129630f0e6e7de12ec9f575b32ea622702af82ec77c162c867d3"
+      }
+    },
+    {
+      "name": "two_targets_y_z",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          },
+          {
+            "name": "z",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "4000000000000000",
+                "4008000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "two_targets_y_z:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "two_targets_y_z:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001020000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f00000000000000400200000000000000010101000000000000007a000200000000020200000000000000010000000000000010000000000000000000000000000040000000000000084002000000000000000101",
+        "sha256": "2608b38e7d5bef2041f8feeee01246545d096c17ac4de39064cd9e0bb1f506ac"
+      }
+    },
+    {
+      "name": "two_targets_z_y",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3ff0000000000000",
+                "3ff0000000000001",
+                "0000000000000000",
+                "8000000000000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "z",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "4000000000000000",
+                "4008000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          },
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "two_targets_z_y:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "f7801539fa6846657fd51125ecd5d8f4520c2edbe6ef6862a04d406225f836ed"
+      },
+      "targets": {
+        "name": "two_targets_z_y:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001020000000000000001000000000000007a00020000000002020000000000000001000000000000001000000000000000000000000000004000000000000008400200000000000000010101000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "25e61181341408f5efad289465385a8d17c85fbfcae5ab3e0d647eb0322b892d"
+      }
+    },
+    {
+      "name": "requested_f32",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 1,
+              "origin": 2,
+              "source_dtype": "float64",
+              "requested_dtype": 1,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 1,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3f800000",
+                "3f800000",
+                "00000000",
+                "80000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "requested_f32:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f31640102010700000000000000666c6f61743634010100010200000000000000020000000000000010000000000000000000803f0000803f000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "7acc933c9a90680c74c02b7732cabbead66b416534c20cc4bb77c26b046d2d11"
+      },
+      "targets": {
+        "name": "requested_f32:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "declared_f32",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 1,
+              "origin": 1,
+              "source_dtype": "float32",
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 1,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3f800000",
+                "3f800000",
+                "00000000",
+                "80000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "declared_f32:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f31640101010700000000000000666c6f617433320000010200000000000000020000000000000010000000000000000000803f0000803f000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "06ab7ef562e6b34728d9d3ec74b034c581bd36d50cec2e803b5c9623454ef993"
+      },
+      "targets": {
+        "name": "declared_f32:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "consumer_f32",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 1,
+              "origin": 3,
+              "source_dtype": "float64",
+              "requested_dtype": null,
+              "consumer": "SpectroDataset"
+            },
+            "block": {
+              "dtype": 1,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3f800000",
+                "3f800000",
+                "00000000",
+                "80000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "consumer_f32:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f31640103010700000000000000666c6f6174363400010e000000000000005370656374726f44617461736574010200000000000000020000000000000010000000000000000000803f0000803f000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "daedfd969d38d4e0730d0fc381bc6ebbb65df2bd2ee03f7f8e262fb0f02861e2"
+      },
+      "targets": {
+        "name": "consumer_f32:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "requested_f32_ulp_collapsed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 1,
+              "origin": 2,
+              "source_dtype": "float64",
+              "requested_dtype": 1,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 1,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "3f800000",
+                "3f800000",
+                "00000000",
+                "80000000"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "3ff0000000000000",
+                "4000000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "requested_f32_ulp_collapsed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f31640102010700000000000000666c6f61743634010100010200000000000000020000000000000010000000000000000000803f0000803f000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "7acc933c9a90680c74c02b7732cabbead66b416534c20cc4bb77c26b046d2d11"
+      },
+      "targets": {
+        "name": "requested_f32_ulp_collapsed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733102000000000000006f310500000000000000747261696e01020000000000000067310102000000000000007331000200000000000000733202000000000000006f320500000000000000747261696e0102000000000000006732010200000000000000733200010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f320001010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+        "sha256": "70ab6b5ed1040ed0b8f56e6199d5412e531c5a7a904af688ce8ba2f48fe011db"
+      }
+    },
+    {
+      "name": "ordered_rows_reversed",
+      "input": {
+        "rows": [
+          {
+            "sample_id": "s2",
+            "observation_id": "o2",
+            "partition": "train",
+            "group_id": "g2",
+            "origin_id": "s2",
+            "repetition_id": null
+          },
+          {
+            "sample_id": "s1",
+            "observation_id": "o1",
+            "partition": "train",
+            "group_id": "g1",
+            "origin_id": "s1",
+            "repetition_id": null
+          }
+        ],
+        "folds": [
+          {
+            "train": [
+              "o1"
+            ],
+            "validation": [
+              "o2"
+            ]
+          }
+        ],
+        "fold_assignments": null,
+        "features": [
+          {
+            "source_id": "nir",
+            "representation_id": "signal_1d",
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 2,
+              "values": [
+                "0000000000000000",
+                "8000000000000000",
+                "3ff0000000000000",
+                "3ff0000000000001"
+              ],
+              "mask": [
+                true,
+                true,
+                true,
+                true
+              ]
+            },
+            "names": [
+              "a",
+              "b"
+            ],
+            "axes": [
+              {
+                "name": "wavelength",
+                "unit": "nm",
+                "coordinates": {
+                  "kind": 1,
+                  "values": [
+                    "4079000000000000",
+                    "4079000000000001"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "targets": [
+          {
+            "name": "y",
+            "kind": 0,
+            "precision": {
+              "dtype": 2,
+              "origin": 0,
+              "source_dtype": null,
+              "requested_dtype": null,
+              "consumer": null
+            },
+            "block": {
+              "dtype": 2,
+              "rows": 2,
+              "cols": 1,
+              "values": [
+                "4000000000000000",
+                "3ff0000000000000"
+              ],
+              "mask": [
+                true,
+                true
+              ]
+            }
+          }
+        ]
+      },
+      "features": {
+        "name": "ordered_rows_reversed:features",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e763101000000080000000000000066656174757265730002000000000000000200000000000000733202000000000000006f320500000000000000747261696e01020000000000000067320102000000000000007332000200000000000000733102000000000000006f310500000000000000747261696e0102000000000000006731010200000000000000733100010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010000000000000003000000000000006e697209000000000000007369676e616c5f316402000000000202000000000000000200000000000000200000000000000000000000000000000000000000000080000000000000f03f010000000000f03f04000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d01010200000000000000100000000000000000000000000079400100000000007940",
+        "sha256": "4909fcb4ed30dde94db14fd72ae946be2993acc146d0545480687dcdb2131fa0"
+      },
+      "targets": {
+        "name": "ordered_rows_reversed:targets",
+        "preimage_hex": "22000000000000006e69727334616c6c2e696f2e65786563757465642d70726f6a656374696f6e2e7631010000000700000000000000746172676574730002000000000000000200000000000000733202000000000000006f320500000000000000747261696e01020000000000000067320102000000000000007332000200000000000000733102000000000000006f310500000000000000747261696e0102000000000000006731010200000000000000733100010100000000000000010000000000000002000000000000006f31010000000000000002000000000000006f3200010100000000000000010000000000000079000200000000020200000000000000010000000000000010000000000000000000000000000040000000000000f03f02000000000000000101",
+        "sha256": "3f0feb7890d4061531ba6664f63ff34e05ca3ac4aec5fda8bbb8cd62524123b4"
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "left": "base",
+      "right": "ulp_collapsed_to_one",
+      "side": "features",
+      "equal": false
+    },
+    {
+      "left": "base",
+      "right": "ulp_collapsed_to_one",
+      "side": "targets",
+      "equal": true
+    },
+    {
+      "left": "base",
+      "right": "missing_feature_zero",
+      "side": "features",
+      "equal": false
+    },
+    {
+      "left": "missing_feature_zero",
+      "right": "missing_feature_arbitrary_placeholder",
+      "side": "features",
+      "equal": true
+    },
+    {
+      "left": "missing_target",
+      "right": "observed_target_zero",
+      "side": "targets",
+      "equal": false
+    },
+    {
+      "left": "base",
+      "right": "observed_negative_zero_to_positive",
+      "side": "features",
+      "equal": false
+    },
+    {
+      "left": "base",
+      "right": "fold_reversed",
+      "side": "features",
+      "equal": false
+    },
+    {
+      "left": "base",
+      "right": "fold_reversed",
+      "side": "targets",
+      "equal": false
+    },
+    {
+      "left": "folds_absent",
+      "right": "folds_present_empty",
+      "side": "targets",
+      "equal": false
+    },
+    {
+      "left": "base",
+      "right": "literal_nanometre",
+      "side": "features",
+      "equal": false
+    },
+    {
+      "left": "base",
+      "right": "classification_integer",
+      "side": "targets",
+      "equal": false
+    },
+    {
+      "left": "separator_headers_left",
+      "right": "separator_headers_right",
+      "side": "features",
+      "equal": false
+    },
+    {
+      "left": "requested_f32",
+      "right": "declared_f32",
+      "side": "features",
+      "equal": false
+    },
+    {
+      "left": "base",
+      "right": "requested_f32",
+      "side": "features",
+      "equal": false
+    },
+    {
+      "left": "requested_f32",
+      "right": "requested_f32_ulp_collapsed",
+      "side": "features",
+      "equal": true
+    },
+    {
+      "left": "absent_targets",
+      "right": "present_empty_targets",
+      "side": "targets",
+      "equal": false
+    },
+    {
+      "left": "two_targets_y_z",
+      "right": "two_targets_z_y",
+      "side": "targets",
+      "equal": false
+    },
+    {
+      "left": "base",
+      "right": "ordered_rows_reversed",
+      "side": "features",
+      "equal": false
+    }
+  ],
+  "package_vectors": [
+    {
+      "name": "feature_payload_v4",
+      "input": {
+        "source_id": "nir",
+        "representation_id": "signal_1d",
+        "precision": {
+          "dtype": 2,
+          "origin": 0,
+          "source_dtype": null,
+          "requested_dtype": null,
+          "consumer": null
+        },
+        "block": {
+          "dtype": 2,
+          "rows": 2,
+          "cols": 2,
+          "values": [
+            "3ff0000000000000",
+            "3ff0000000000001",
+            "0000000000000000",
+            "8000000000000000"
+          ],
+          "mask": [
+            true,
+            true,
+            true,
+            true
+          ]
+        },
+        "names": [
+          "a",
+          "b"
+        ],
+        "axes": [
+          {
+            "name": "wavelength",
+            "unit": "nm",
+            "coordinates": {
+              "kind": 1,
+              "values": [
+                "4079000000000000",
+                "4079000000000001"
+              ]
+            }
+          }
+        ]
+      },
+      "preimage_hex": "1e000000000000006e69727334616c6c2e696f2e7061636b6167652d7061796c6f61642e7634040000000800000000000000666561747572657303000000000000006e697209000000000000007369676e616c5f3164020000000002020000000000000002000000000000002000000000000000000000000000f03f010000000000f03f0000000000000000000000000000008004000000000000000101010101020000000000000001000000000000006101000000000000006201000000000000000a00000000000000776176656c656e6774680102000000000000006e6d010102000000000000001000000000000000000000000000794001000000000079400000000000000000",
+      "sha256": "033f0aac4005bbb3930fde6bcd5392f106e2a07280ede59561a2fd6ba1279db5"
+    },
+    {
+      "name": "target_payload_v4",
+      "input": [
+        {
+          "name": "y",
+          "kind": 0,
+          "precision": {
+            "dtype": 2,
+            "origin": 0,
+            "source_dtype": null,
+            "requested_dtype": null,
+            "consumer": null
+          },
+          "block": {
+            "dtype": 2,
+            "rows": 2,
+            "cols": 1,
+            "values": [
+              "3ff0000000000000",
+              "4000000000000000"
+            ],
+            "mask": [
+              true,
+              true
+            ]
+          }
+        }
+      ],
+      "preimage_hex": "1e000000000000006e69727334616c6c2e696f2e7061636b6167652d7061796c6f61642e763404000000070000000000000074617267657473010000000000000001000000000000007900020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+      "sha256": "35194a94d935d229d5279ad764383c1b9a1002298aa7511570ff90ba738343de"
+    },
+    {
+      "name": "weights_payload_v4",
+      "preimage_hex": "1e000000000000006e69727334616c6c2e696f2e7061636b6167652d7061796c6f61642e763404000000070000000000000077656967687473020000000002020000000000000001000000000000001000000000000000000000000000f03f000000000000004002000000000000000101",
+      "sha256": "31b56d06e18b900dfd8f407fbc336141257a3baa89e824fba18f601c764a556b"
+    }
+  ],
+  "dtype_framing": [
+    {
+      "name": "same_zero_f32",
+      "preimage_hex": "0101000000000000000100000000000000040000000000000000000000010000000000000001",
+      "sha256": "e7f457f8df915b331c0ce89788548ef89dfc383fe09ee267f41fd6701a51e5d9"
+    },
+    {
+      "name": "same_zero_f64",
+      "preimage_hex": "020100000000000000010000000000000008000000000000000000000000000000010000000000000001",
+      "sha256": "6c603af7790f94b3e52a1b53127728e09205524eb29ae3f537cc8c5546b1245f"
+    }
+  ],
+  "tabular_missingness": [
+    {
+      "name": "tabular_7ff8000000000001",
+      "input": {
+        "input_ieee_f64_hex": "7ff8000000000001",
+        "normalized_block": {
+          "dtype": 2,
+          "rows": 1,
+          "cols": 1,
+          "values": [
+            "0000000000000000"
+          ],
+          "mask": [
+            false
+          ]
+        }
+      },
+      "preimage_hex": "020100000000000000010000000000000008000000000000000000000000000000010000000000000000",
+      "sha256": "c29c03081030935039730f2ef7dbd3e80768da36c2e8072867062f490671db45"
+    },
+    {
+      "name": "tabular_fff8000000000002",
+      "input": {
+        "input_ieee_f64_hex": "fff8000000000002",
+        "normalized_block": {
+          "dtype": 2,
+          "rows": 1,
+          "cols": 1,
+          "values": [
+            "0000000000000000"
+          ],
+          "mask": [
+            false
+          ]
+        }
+      },
+      "preimage_hex": "020100000000000000010000000000000008000000000000000000000000000000010000000000000000",
+      "sha256": "c29c03081030935039730f2ef7dbd3e80768da36c2e8072867062f490671db45"
+    },
+    {
+      "name": "tabular_0000000000000000",
+      "input": {
+        "input_ieee_f64_hex": "0000000000000000",
+        "normalized_block": {
+          "dtype": 2,
+          "rows": 1,
+          "cols": 1,
+          "values": [
+            "0000000000000000"
+          ],
+          "mask": [
+            true
+          ]
+        }
+      },
+      "preimage_hex": "020100000000000000010000000000000008000000000000000000000000000000010000000000000001",
+      "sha256": "6c603af7790f94b3e52a1b53127728e09205524eb29ae3f537cc8c5546b1245f"
+    },
+    {
+      "name": "tabular_8000000000000000",
+      "input": {
+        "input_ieee_f64_hex": "8000000000000000",
+        "normalized_block": {
+          "dtype": 2,
+          "rows": 1,
+          "cols": 1,
+          "values": [
+            "8000000000000000"
+          ],
+          "mask": [
+            true
+          ]
+        }
+      },
+      "preimage_hex": "020100000000000000010000000000000008000000000000000000000000000080010000000000000001",
+      "sha256": "3c93a110f68bd16a6784873efd3dc6e3dd42ff3e98c357418ef12486228b0162"
+    }
+  ],
+  "malformed_frames": [
+    {
+      "name": "truncated_frame",
+      "input_frame_hex": "0201000000000000000100000000000000080000000000000000000000000000000100000000000000",
+      "result": {
+        "refusal": "truncated"
+      }
+    },
+    {
+      "name": "extra_frame_bytes",
+      "input_frame_hex": "02010000000000000001000000000000000800000000000000000000000000000001000000000000000100",
+      "result": {
+        "refusal": "extra-bytes"
+      }
+    },
+    {
+      "name": "unknown_dtype",
+      "input_frame_hex": "040100000000000000010000000000000008000000000000000000000000000000010000000000000001",
+      "result": {
+        "refusal": "dtype-tag"
+      }
+    },
+    {
+      "name": "invalid_mask_byte",
+      "input_frame_hex": "020100000000000000010000000000000008000000000000000000000000000000010000000000000002",
+      "result": {
+        "refusal": "nonboolean-mask"
+      }
+    },
+    {
+      "name": "shape_disagreement",
+      "input_frame_hex": "020200000000000000010000000000000008000000000000000000000000000000010000000000000001",
+      "result": {
+        "refusal": "block-length"
+      }
+    },
+    {
+      "name": "false_negative_zero",
+      "input_frame_hex": "020100000000000000010000000000000008000000000000000000000000000080010000000000000000",
+      "result": {
+        "refusal": "noncanonical-placeholder"
+      }
+    }
+  ],
+  "collision_vectors": [
+    {
+      "operation": "individual target IDs for mixed numeric/classification kinds",
+      "original_names": [
+        "a b",
+        "a?b"
+      ],
+      "sanitized": [
+        "a_b",
+        "a_b"
+      ],
+      "result": {
+        "refusal": "sanitized-target-id-collision"
+      }
+    },
+    {
+      "operation": "individual target IDs for mixed numeric/classification kinds",
+      "original_names": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxa",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxb"
+      ],
+      "sanitized": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "result": {
+        "refusal": "sanitized-target-id-collision"
+      }
+    },
+    {
+      "operation": "individual target IDs for mixed numeric/classification kinds",
+      "original_names": [
+        "target1",
+        "?"
+      ],
+      "sanitized": [
+        "target1",
+        "target1"
+      ],
+      "result": {
+        "refusal": "sanitized-target-id-collision"
+      }
+    },
+    {
+      "operation": "individual target IDs for mixed numeric/classification kinds",
+      "original_names": [
+        "a",
+        "b"
+      ],
+      "sanitized": [
+        "a",
+        "b"
+      ],
+      "result": {
+        "value": [
+          "a",
+          "b"
+        ]
+      }
+    }
+  ]
+}

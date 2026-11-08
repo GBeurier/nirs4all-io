@@ -11,7 +11,14 @@ use std::sync::LazyLock;
 use indexmap::IndexMap;
 use regex::{Regex, RegexBuilder};
 
+use crate::infer::plan::DatasetPlan;
+use crate::materialize::loaders::{
+    dialect_records, dialect_text, is_comma_pair, is_na_record, undeclared_delimiter,
+    DelimiterVerdict,
+};
 use crate::pyfmt::{nanmean, nanstd};
+use crate::spec::dataset_spec::LoadingParams;
+use serde_json::{json, Map, Value};
 
 const DELIMITERS: [char; 5] = [',', ';', '\t', '|', ' '];
 
@@ -40,7 +47,9 @@ static HEADER_PATTERNS: LazyLock<HeaderPatterns> = LazyLock::new(|| {
 /// Neutral structural evidence about a delimited text file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileDescription {
+    pub header_numeric_unrecognized: bool,
     pub delimiter: char,
+    pub delimiter_candidates: Vec<char>,
     pub decimal_separator: char,
     pub has_header: bool,
     pub header_unit: String,
@@ -55,7 +64,9 @@ pub struct FileDescription {
 impl Default for FileDescription {
     fn default() -> Self {
         Self {
+            header_numeric_unrecognized: false,
             delimiter: ';',
+            delimiter_candidates: Vec::new(),
             decimal_separator: '.',
             has_header: true,
             header_unit: "text".to_string(),
@@ -86,7 +97,7 @@ fn is_numeric(value: &str, decimal_sep: char) -> bool {
 
 /// Parse `text` into rows via the csv crate with a given delimiter; `Err` on a
 /// csv error (mirrors Python's `except csv.Error`).
-fn csv_rows(text: &str, delim: char) -> Result<Vec<Vec<String>>, ()> {
+pub(crate) fn csv_rows(text: &str, delim: char) -> Result<Vec<Vec<String>>, ()> {
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -132,7 +143,13 @@ fn score_delimiter(lines: &[String], delim: char) -> f64 {
     consistency * 5.0 + (most_common_count as f64 / 10.0).min(5.0)
 }
 
-fn detect_delimiter(lines: &[String]) -> (char, f64) {
+fn is_thousands(value: &str) -> bool {
+    static THOUSANDS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[+-]?[1-9][0-9]{0,2},[0-9]{3}$").unwrap());
+    THOUSANDS.is_match(value.trim())
+}
+
+fn detect_delimiter(lines: &[String]) -> (char, f64, Vec<char>) {
     let mut best = ';';
     let mut score = 0.0;
     for &delim in &DELIMITERS {
@@ -142,7 +159,46 @@ fn detect_delimiter(lines: &[String]) -> (char, f64) {
             score = s;
         }
     }
-    (best, (score / 10.0).min(1.0))
+    let joined = lines.join("\n");
+    let text = joined.trim_start_matches('\u{feff}');
+    let semi = dialect_records(text.as_bytes(), b';', false);
+    if semi.len() >= 2 && semi[0].0 >= 2 && semi.iter().all(|row| row.0 == semi[0].0) {
+        return (';', (score_delimiter(lines, ';') / 10.0).min(1.0), vec![]);
+    }
+    match undeclared_delimiter(text.as_bytes()) {
+        DelimiterVerdict::Ambiguous(candidates) => {
+            return (';', 0.0, candidates.into_iter().map(char::from).collect())
+        }
+        DelimiterVerdict::Detected(delimiter) => {
+            return (
+                delimiter as char,
+                (score_delimiter(lines, delimiter as char) / 10.0).min(1.0),
+                vec![],
+            )
+        }
+        DelimiterVerdict::Default => {}
+    }
+    if best == ',' {
+        let rows = dialect_records(text.as_bytes(), b',', false);
+        if rows.len() >= 2 && rows[0].0 >= 2 && rows.iter().skip(1).all(|row| row.0 == 1) {
+            return (';', (score_delimiter(lines, ';') / 10.0).min(1.0), vec![]);
+        }
+        if rows.len() >= 2 && rows[0].0 == 1 {
+            let data: Vec<_> = rows
+                .iter()
+                .skip(1)
+                .map(|row| dialect_text(row.1))
+                .filter(|cell| !is_na_record(cell))
+                .collect();
+            if !data.is_empty()
+                && data.iter().all(|cell| is_comma_pair(cell))
+                && !data.iter().all(|cell| is_thousands(cell))
+            {
+                return (';', (score_delimiter(lines, ';') / 10.0).min(1.0), vec![]);
+            }
+        }
+    }
+    (best, (score / 10.0).min(1.0), vec![])
 }
 
 fn detect_decimal(rows: &[Vec<String>]) -> (char, f64) {
@@ -165,7 +221,25 @@ fn detect_decimal(rows: &[Vec<String>]) -> (char, f64) {
     } else {
         let conf =
             ((comma_valid + 1) as f64 / (comma_count.max(1) + dot_count + 1) as f64).min(1.0);
-        (',', conf)
+        let cells: Vec<_> = rows
+            .iter()
+            .skip(1)
+            .flatten()
+            .map(|cell| cell.trim())
+            .filter(|cell| {
+                cell.contains(',')
+                    && !cell.contains('.')
+                    && is_numeric(&cell.replace(',', "."), '.')
+            })
+            .collect();
+        (
+            if !cells.is_empty() && cells.iter().all(|cell| is_thousands(cell)) {
+                '.'
+            } else {
+                ','
+            },
+            conf,
+        )
     }
 }
 
@@ -211,13 +285,10 @@ pub fn detect_wavelength_header(
     _data_rows: &[Vec<String>],
     decimal_sep: char,
 ) -> (bool, f64) {
-    let values: Result<Vec<f64>, _> = first_row
+    let values: Vec<f64> = first_row
         .iter()
-        .map(|c| c.trim().replace(decimal_sep, ".").parse::<f64>())
+        .filter_map(|c| c.trim().replace(decimal_sep, ".").parse::<f64>().ok())
         .collect();
-    let Ok(values) = values else {
-        return (false, 0.0);
-    };
     if values.len() < 10 {
         return (false, 0.0);
     }
@@ -309,6 +380,7 @@ pub fn detect_header_unit(header_row: &[String]) -> (String, f64) {
 /// the lines inspected (Python default 50).
 pub fn describe_text(text: &str, sample_lines: usize) -> FileDescription {
     let lines: Vec<String> = text
+        .trim_start_matches('\u{feff}')
         .split('\n')
         .take(sample_lines)
         .map(|l| l.trim().to_string())
@@ -318,7 +390,9 @@ pub fn describe_text(text: &str, sample_lines: usize) -> FileDescription {
     if lines.is_empty() {
         return desc;
     }
-    let (delim, dconf) = detect_delimiter(&lines);
+    let (delim, dconf, candidates) = detect_delimiter(&lines);
+    desc.delimiter_candidates = candidates;
+    desc.confidence.insert("delimiter".into(), dconf);
     desc.delimiter = delim;
     let joined = lines.join("\n");
     let rows: Vec<Vec<String>> = match csv_rows(&joined, delim) {
@@ -336,6 +410,11 @@ pub fn describe_text(text: &str, sample_lines: usize) -> FileDescription {
     let (decimal, decconf) = detect_decimal(&rows);
     desc.decimal_separator = decimal;
     let (has_header, hconf) = detect_header(&rows, decimal);
+    desc.header_numeric_unrecognized = !has_header
+        && rows
+            .iter()
+            .take(10)
+            .all(|row| !row.is_empty() && row.iter().all(|cell| is_numeric(cell, decimal)));
     desc.has_header = has_header;
     if has_header {
         desc.column_names = rows[0].iter().map(|c| c.trim().to_string()).collect();
@@ -368,6 +447,176 @@ pub fn describe_text(text: &str, sample_lines: usize) -> FileDescription {
     desc
 }
 
+/// Apply only resolved, source-local text parameters; explicit choices win.
+pub fn select_description_params(
+    desc: &FileDescription,
+    params: &mut Map<String, Value>,
+    single: bool,
+    global: Option<&Value>,
+) -> bool {
+    if !desc.delimiter_candidates.is_empty() {
+        return false;
+    }
+    if declared_header(params, global).is_none() {
+        params.insert("has_header".into(), json!(true));
+    }
+    params
+        .entry("delimiter")
+        .or_insert_with(|| json!(desc.delimiter.to_string()));
+    let delimiter = params
+        .get("delimiter")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            global
+                .and_then(|g| g.get("delimiter"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or(";");
+    let declared_decimal = params
+        .get("decimal_separator")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            global
+                .and_then(|g| g.get("decimal_separator"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        });
+    if single
+        && desc.decimal_separator == ','
+        && delimiter == desc.delimiter.to_string()
+        && declared_decimal.is_none()
+    {
+        params
+            .entry("decimal_separator")
+            .or_insert_with(|| json!(","));
+    }
+    true
+}
+
+pub(crate) fn declared_header(params: &Map<String, Value>, global: Option<&Value>) -> Option<bool> {
+    let declared = |value: &Map<String, Value>| {
+        value
+            .get("has_header")
+            .or_else(|| value.get("header"))
+            .and_then(Value::as_bool)
+    };
+    declared(params).or_else(|| global.and_then(Value::as_object).and_then(declared))
+}
+
+/// Warn only for an undeclared, unrecognized numeric header; declarations win.
+pub fn warn_inferred_header(
+    desc: &FileDescription,
+    params: &Map<String, Value>,
+    global: Option<&Value>,
+    file: &str,
+    warnings: &mut Vec<String>,
+) {
+    if desc.has_header
+        || !desc.header_numeric_unrecognized
+        || !desc.delimiter_candidates.is_empty()
+        || declared_header(params, global).is_some()
+    {
+        return;
+    }
+    let warning = format!("file '{file}': header_ambiguous: first row resembles the data rows and is not a recognized nm/cm-1 axis; default has_header=true. Declare params.has_header=true or params.has_header=false explicitly.");
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
+    }
+}
+
+/// Record an unresolved delimiter as null, never as a usable default proposal.
+pub fn record_description(
+    desc: &FileDescription,
+    params: &Map<String, Value>,
+    source: &str,
+    file: &str,
+    plan: &mut DatasetPlan,
+) {
+    let resolved = desc.delimiter_candidates.is_empty();
+    let mut entry = json!({"delimiter":{"value":if resolved {json!(desc.delimiter.to_string())} else {Value::Null},"score":crate::pyfmt::py_round(*desc.confidence.get("delimiter").unwrap_or(&0.5),3)},"has_header":{"value":desc.has_header,"score":crate::pyfmt::py_round(*desc.confidence.get("has_header").unwrap_or(&0.5),3)}});
+    if plan
+        .warnings
+        .iter()
+        .any(|w| w.contains(&format!("file '{file}': header_ambiguous:")))
+    {
+        entry["header_ambiguous"] = json!(true);
+    }
+    if resolved && params.get("decimal_separator").and_then(Value::as_str) == Some(",") {
+        entry["decimal_separator"] = json!({"value":",","score":crate::pyfmt::py_round(*desc.confidence.get("decimal_separator").unwrap_or(&0.5),3)});
+    }
+    plan.params
+        .as_object_mut()
+        .unwrap()
+        .insert(file.to_string(), entry);
+    if !resolved {
+        let candidates: Vec<String> = desc
+            .delimiter_candidates
+            .iter()
+            .map(char::to_string)
+            .collect();
+        let warning = format!("source '{source}': file '{file}' delimiter unresolved: candidates {candidates:?}; declare params.delimiter (and params.decimal_separator if ',' is the decimal mark)");
+        if !plan.warnings.contains(&warning) {
+            plan.warnings.push(warning);
+        }
+    }
+}
+
+/// Propose only a comma decimal, from the bounded prefix and effective delimiter.
+pub fn proposed_decimal(bytes: &[u8], params: &LoadingParams) -> Option<String> {
+    proposed_decimal_with_key(bytes, params, None)
+}
+
+/// The selected identity column is excluded from decimal evidence.
+pub fn proposed_decimal_with_key(
+    bytes: &[u8],
+    params: &LoadingParams,
+    key: Option<&str>,
+) -> Option<String> {
+    proposed_decimal_evidence(bytes, params, key).map(|(decimal, _)| decimal)
+}
+
+pub fn proposed_decimal_evidence(
+    bytes: &[u8],
+    params: &LoadingParams,
+    key: Option<&str>,
+) -> Option<(String, f64)> {
+    let prefix = crate::materialize::loaders::discovery_prefix(bytes, params)?;
+    let text = dialect_text(&prefix);
+    let lines: Vec<String> = text
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    if lines.is_empty() || !detect_delimiter(&lines).2.is_empty() {
+        return None;
+    }
+    let delimiter = params
+        .delimiter
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(";")
+        .chars()
+        .next()
+        .unwrap_or(';');
+    let mut rows = csv_rows(&text, delimiter).ok()?;
+    rows.retain(|row| row.iter().any(|cell| !cell.trim().is_empty()));
+    if let Some(index) = key.and_then(|key| rows.first()?.iter().position(|name| name == key)) {
+        for row in &mut rows {
+            if index < row.len() {
+                row.remove(index);
+            }
+        }
+    }
+    if !rows.is_empty() && detect_decimal(&rows).0 == ',' {
+        Some((",".into(), detect_decimal(&rows).1))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,8 +626,8 @@ mod tests {
     }
 
     #[test]
-    fn describe_combined_no_header_boundary() {
-        // data.csv: 12 wl headers + protein -> describe verdict has_header=false.
+    fn describe_combined_mixed_spectral_header() {
+        // V1-RUST-MIXED-SPECTRAL-HEADER: the Python oracle remains frozen.
         let mut text =
             String::from("1000;1005;1010;1015;1020;1025;1030;1035;1040;1045;1050;1055;protein\n");
         for y in ["12.5", "8.3", "15.1", "9.7", "11.2", "13.8"] {
@@ -388,13 +637,97 @@ mod tests {
         }
         let d = describe_text(&text, 50);
         assert_eq!(d.delimiter, ';');
-        assert!(!d.has_header);
-        assert_eq!(d.header_unit, "text");
-        assert!(!d.is_wavelength_header);
+        assert!(d.has_header);
+        assert_eq!(d.header_unit, "nm");
+        assert!(d.is_wavelength_header);
+        assert_eq!(d.axis_range, None);
         assert_eq!(d.n_cols, 13);
         assert!(approx(d.confidence["delimiter"], 0.63));
+        assert!(approx(d.confidence["has_header"], 0.85));
+        assert!(approx(d.confidence["header_unit"], 12.0 / 13.0));
+    }
+
+    #[test]
+    fn wavelength_numeric_subset_keeps_existing_thresholds() {
+        let mixed = (0..12)
+            .map(|i| (1000 + i * 5).to_string())
+            .chain(["protein".into()])
+            .collect::<Vec<_>>();
+        assert_eq!(detect_wavelength_header(&mixed, &[], '.'), (true, 0.85));
+        let corn = vec!["0.0465041".into(); 700];
+        assert_eq!(detect_wavelength_header(&corn, &[], '.'), (false, 0.0));
+        let short = (0..9)
+            .map(|i| (1000 + i * 5).to_string())
+            .chain(["protein".into()])
+            .collect::<Vec<_>>();
+        assert_eq!(detect_wavelength_header(&short, &[], '.'), (false, 0.0));
+        let mut nonmonotonic = mixed.clone();
+        nonmonotonic.swap(3, 4);
+        assert_eq!(
+            detect_wavelength_header(&nonmonotonic, &[], '.'),
+            (false, 0.0)
+        );
+        let out_of_range = (0..12)
+            .map(|i| (16000 + i * 5).to_string())
+            .chain(["protein".into()])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            detect_wavelength_header(&out_of_range, &[], '.'),
+            (false, 0.0)
+        );
+        let row = corn.join(";");
+        let d = describe_text(&format!("{row}\n{row}\n"), 50);
+        assert!(!d.has_header);
+        assert!(!d.is_wavelength_header);
         assert!(approx(d.confidence["has_header"], 0.7));
-        assert!(!d.confidence.contains_key("header_unit"));
+    }
+
+    #[test]
+    fn undeclared_header_warning_respects_real_user_settings() {
+        let mut desc = describe_text("0.0465041;0.2\n0.0475041;0.2\n", 50);
+        let mut warnings = vec![];
+        for _ in 0..2 {
+            warn_inferred_header(&desc, &Map::new(), None, "data.csv", &mut warnings);
+        }
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("data.csv"));
+        assert!(warnings[0].contains("Declare params.has_header=true"));
+        for key in ["has_header", "header"] {
+            for value in [true, false] {
+                let declared = json!({(key): value});
+                let mut warnings = vec![];
+                warn_inferred_header(
+                    &desc,
+                    declared.as_object().unwrap(),
+                    None,
+                    "data.csv",
+                    &mut warnings,
+                );
+                warn_inferred_header(
+                    &desc,
+                    &Map::new(),
+                    Some(&declared),
+                    "data.csv",
+                    &mut warnings,
+                );
+                assert!(warnings.is_empty());
+            }
+        }
+        desc.delimiter_candidates = vec![',', ';'];
+        let mut warnings = vec![];
+        warn_inferred_header(&desc, &Map::new(), None, "data.csv", &mut warnings);
+        assert!(warnings.is_empty());
+        for text in [
+            "sample_id;batch\ns1;train\ns2;test\n",
+            "sample_id;1000;1100;1200\ns1;0.1;0.2;0.3\ns2;0.4;0.5;0.6\n",
+        ] {
+            let desc = describe_text(text, 50);
+            assert!(desc.delimiter_candidates.is_empty());
+            assert!(!desc.has_header);
+            let mut warnings = vec![];
+            warn_inferred_header(&desc, &Map::new(), None, "named.csv", &mut warnings);
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
     }
 
     #[test]
@@ -422,6 +755,51 @@ mod tests {
         assert_eq!(d.n_cols, 1);
         assert!(approx(d.confidence["delimiter"], 0.01));
         assert!(approx(d.confidence["has_header"], 1.0));
+    }
+
+    #[test]
+    fn selected_header_preserves_declarations_and_unresolved_delimiters() {
+        let mut desc = describe_text("0.0465041;0.2\n0.0475041;0.2\n", 50);
+        assert!(!desc.has_header);
+        let mut params = Map::new();
+        assert!(select_description_params(&desc, &mut params, true, None));
+        assert_eq!(params["has_header"], json!(true));
+
+        for key in ["has_header", "header"] {
+            let mut params = json!({(key): true}).as_object().unwrap().clone();
+            select_description_params(&desc, &mut params, true, None);
+            assert!(LoadingParams::from_value(Some(&Value::Object(params)))
+                .unwrap()
+                .has_header
+                .unwrap());
+            let global = json!({(key): true});
+            let mut params = Map::new();
+            select_description_params(&desc, &mut params, true, Some(&global));
+            assert!(!params.contains_key("has_header"));
+
+            // A source declaration also wins over the global declaration.
+            let mut params = json!({(key): false}).as_object().unwrap().clone();
+            select_description_params(&desc, &mut params, true, Some(&global));
+            assert!(!LoadingParams::from_value(Some(&Value::Object(params)))
+                .unwrap()
+                .has_header
+                .unwrap());
+        }
+
+        desc.has_header = true;
+        let mut params = Map::new();
+        select_description_params(
+            &desc,
+            &mut params,
+            true,
+            Some(&json!({"has_header": false})),
+        );
+        assert!(!params.contains_key("has_header"));
+
+        desc.delimiter_candidates = vec![',', ';'];
+        let mut params = Map::new();
+        assert!(!select_description_params(&desc, &mut params, true, None));
+        assert!(params.is_empty());
     }
 
     #[test]

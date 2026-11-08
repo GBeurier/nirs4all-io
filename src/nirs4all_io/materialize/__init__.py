@@ -21,6 +21,13 @@ from .loaders import (
     infer_dtypes,
     read_table,
 )
+from .numeric import (
+    ExactBlock,
+    NumericContractError,
+    NumericStorage,
+    NumericStorageOptions,
+    PrecisionRecord,
+)
 from .package import (
     DATASET_PACKAGE_VERSION,
     DatasetPackage,
@@ -37,9 +44,12 @@ from .package import (
     RowPositionFallback,
     SequenceBlock,
     SpectralRecordSet,
+    TargetColumn,
     TargetTable,
     UriRef,
     WeightsVector,
+    assembled_from_full_dict,
+    assembled_to_full_dict,
     repr_ids,
 )
 
@@ -78,8 +88,17 @@ __all__ = [
     "RowPositionFallback",
     "SequenceBlock",
     "SpectralRecordSet",
+    "TargetColumn",
     "TargetTable",
     "UriRef",
     "WeightsVector",
+    "assembled_from_full_dict",
+    "assembled_to_full_dict",
     "repr_ids",
+    # exact numeric storage
+    "ExactBlock",
+    "NumericContractError",
+    "NumericStorage",
+    "NumericStorageOptions",
+    "PrecisionRecord",
 ]

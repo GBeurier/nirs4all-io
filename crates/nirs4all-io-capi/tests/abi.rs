@@ -171,6 +171,50 @@ fn infer_path_returns_plan() {
         assert_eq!(st, n4io_status_t::N4IO_OK, "err: {}", last_error(ctx));
         let plan = plan.expect("plan output");
         assert!(plan.contains("\"resolved_spec\""));
+
+        let input = CString::new(path_json).unwrap();
+        let options = CString::new(r#"{"conventions":["nirs4all-classic"]}"#).unwrap();
+        let mut out = std::ptr::null_mut();
+        let status = n4io_infer(ctx, input.as_ptr(), options.as_ptr(), &mut out);
+        assert_eq!(status, n4io_status_t::N4IO_OK, "{}", last_error(ctx));
+        let explicit: serde_json::Value =
+            serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap();
+        n4io_string_free(out);
+        let default: serde_json::Value = serde_json::from_str(&plan).unwrap();
+        assert_eq!(explicit["resolved_spec"], default["resolved_spec"]);
+
+        // Use the existing numeric-header fixture unchanged: explicit file
+        // choices must win in either direction over global loading choices.
+        let file_path = serde_json::to_string(&corpus_case("train_test/Xcal.csv")).unwrap();
+        let file = CString::new(file_path).unwrap();
+        for (global_header, file_header) in [(true, false), (false, true)] {
+            let options = CString::new(
+                serde_json::json!({
+                    "conventions": ["nirs4all-classic"],
+                    "params": {"has_header": global_header},
+                    "file_params": {"Xcal.csv": {"has_header": file_header}}
+                })
+                .to_string(),
+            )
+            .unwrap();
+            out = std::ptr::null_mut();
+            let status = n4io_infer(ctx, file.as_ptr(), options.as_ptr(), &mut out);
+            assert_eq!(status, n4io_status_t::N4IO_OK, "{}", last_error(ctx));
+            let plan: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap();
+            n4io_string_free(out);
+            assert_eq!(
+                plan["resolved_spec"]["sources"][0]["params"]["has_header"],
+                file_header
+            );
+        }
+
+        let legacy = CString::new(r#"["nirs4all-classic"]"#).unwrap();
+        out = std::ptr::null_mut();
+        let status = n4io_infer(ctx, input.as_ptr(), legacy.as_ptr(), &mut out);
+        assert_eq!(status, n4io_status_t::N4IO_ERR_INVALID_ARGUMENT);
+        assert!(out.is_null());
+        assert!(last_error(ctx).contains("invalid infer options"));
         n4io_context_destroy(ctx);
     }
 }
@@ -317,6 +361,66 @@ fn success_clears_stale_error() {
             "",
             "OK path must leave an empty error buffer"
         );
+        n4io_context_destroy(ctx);
+    }
+}
+
+#[test]
+fn json_text_entries_refuse_integer_loss_before_schema_conversion() {
+    unsafe {
+        let mut ctx = std::ptr::null_mut();
+        assert_eq!(n4io_context_create(&mut ctx), n4io_status_t::N4IO_OK);
+        for token in [
+            "18446744073709551616",
+            "-9223372036854775809",
+            "123456789012345678901234567890",
+        ] {
+            let input = format!("{{\"ignored\":{token}}}");
+            let (status, out) = call2(n4io_to_spec, ctx, &input);
+            assert_eq!(status, n4io_status_t::N4IO_ERR_INVALID_ARGUMENT);
+            assert!(out.is_none());
+            assert!(
+                last_error(ctx).contains("input JSON: JSON integer token outside i64/u64 range")
+            );
+            let input = CString::new(input).unwrap();
+            assert_eq!(
+                n4io_validate(ctx, input.as_ptr()),
+                n4io_status_t::N4IO_ERR_INVALID_ARGUMENT
+            );
+            assert!(last_error(ctx).contains("JSON integer token outside i64/u64 range"));
+        }
+        let input =
+            CString::new(serde_json::to_string(&corpus_case("train_test")).unwrap()).unwrap();
+        let mut out = std::ptr::null_mut();
+        let conventions = c"[18446744073709551616]";
+        assert_eq!(
+            n4io_to_spec(ctx, input.as_ptr(), conventions.as_ptr(), &mut out),
+            n4io_status_t::N4IO_ERR_INVALID_ARGUMENT
+        );
+        assert!(
+            last_error(ctx).contains("conventions JSON: JSON integer token outside i64/u64 range")
+        );
+        let limits = c"{\"max_rows\":18446744073709551616}";
+        assert_eq!(
+            n4io_load_summary_with_limits(
+                ctx,
+                input.as_ptr(),
+                std::ptr::null(),
+                limits.as_ptr(),
+                &mut out
+            ),
+            n4io_status_t::N4IO_ERR_INVALID_ARGUMENT
+        );
+        assert!(last_error(ctx)
+            .contains("invalid limits JSON: JSON integer token outside i64/u64 range"));
+        // Numeric-looking text is ordinary text, including in a legal dataset name.
+        let (status, spec) = call2(
+            n4io_to_spec,
+            ctx,
+            r#"{"name":"18446744073709551617","X":"x.csv"}"#,
+        );
+        assert_eq!(status, n4io_status_t::N4IO_OK, "{}", last_error(ctx));
+        assert!(spec.unwrap().contains("18446744073709551617"));
         n4io_context_destroy(ctx);
     }
 }

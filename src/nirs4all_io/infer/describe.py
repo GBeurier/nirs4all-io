@@ -21,6 +21,9 @@ from pathlib import Path
 
 import numpy as np
 
+from ..materialize.loaders import _COMMA_PAIR, _delimiter_sample, _dialect_records, _is_na_record, _undeclared_delimiter
+from ..spec.dataset_spec import LoadingParams
+
 DELIMITERS = [",", ";", "\t", "|", " "]
 
 HEADER_PATTERNS: dict[str, list[str]] = {
@@ -34,6 +37,7 @@ HEADER_PATTERNS: dict[str, list[str]] = {
 @dataclass
 class FileDescription:
     delimiter: str = ";"
+    delimiter_candidates: tuple[str, ...] = ()
     decimal_separator: str = "."
     has_header: bool = True
     header_unit: str = "text"
@@ -75,13 +79,33 @@ def _score_delimiter(lines: list[str], delim: str) -> float:
     return consistency * 5 + min(most_common_count / 10, 5)
 
 
-def _detect_delimiter(lines: list[str]) -> tuple[str, float]:
+_THOUSANDS = re.compile(r"[+-]?[1-9][0-9]{0,2},[0-9]{3}\Z")
+
+
+def _detect_delimiter(lines: list[str]) -> tuple[str, float, tuple[str, ...]]:
     best, score = ";", 0.0
     for delim in DELIMITERS:
-        s = _score_delimiter(lines, delim)
-        if s > score:
-            best, score = delim, s
-    return best, min(score / 10, 1.0)
+        candidate_score = _score_delimiter(lines, delim)
+        if candidate_score > score:
+            best, score = delim, candidate_score
+    text = "\n".join(lines).removeprefix("\ufeff")
+    semi = _dialect_records(text, ";")
+    if len(semi) >= 2 and semi[0][0] >= 2 and all(row[0] == semi[0][0] for row in semi):
+        return ";", min(_score_delimiter(lines, ";") / 10, 1.0), ()
+    verdict, candidates = _undeclared_delimiter(text)
+    if verdict == "ambiguous":
+        return ";", 0.0, candidates
+    if verdict == "detected":
+        return candidates[0], min(_score_delimiter(lines, candidates[0]) / 10, 1.0), ()
+    if best == ",":
+        rows = _dialect_records(text, ",")
+        if len(rows) >= 2 and rows[0][0] >= 2 and all(row[0] == 1 for row in rows[1:]):
+            return ";", min(_score_delimiter(lines, ";") / 10, 1.0), ()
+        if len(rows) >= 2 and rows[0][0] == 1:
+            data = [row[1].strip() for row in rows[1:] if not _is_na_record(row[1])]
+            if data and all(_COMMA_PAIR.fullmatch(cell) for cell in data) and not all(_THOUSANDS.fullmatch(cell) for cell in data):
+                return ";", min(_score_delimiter(lines, ";") / 10, 1.0), ()
+    return best, min(score / 10, 1.0), ()
 
 
 def _detect_decimal(rows: list[list[str]]) -> tuple[str, float]:
@@ -97,7 +121,9 @@ def _detect_decimal(rows: list[list[str]]) -> tuple[str, float]:
                 comma_valid += _is_numeric(cell.replace(",", "."))
     if dot_valid >= comma_valid:
         return ".", min((dot_valid + 1) / (max(dot_count, 1) + comma_count + 1), 1.0)
-    return ",", min((comma_valid + 1) / (max(comma_count, 1) + dot_count + 1), 1.0)
+    cells = [cell.strip() for row in rows[1:] for cell in row if "," in cell and "." not in cell and _is_numeric(cell.strip().replace(",", "."))]
+    separator = "." if cells and all(_THOUSANDS.fullmatch(cell) for cell in cells) else ","
+    return separator, min((comma_valid + 1) / (max(comma_count, 1) + dot_count + 1), 1.0)
 
 
 def _detect_header(rows: list[list[str]], decimal_sep: str) -> tuple[bool, float]:
@@ -174,12 +200,13 @@ def detect_header_unit(header_row: list[str]) -> tuple[str, float]:
 def describe(source: str | Path, *, sample_lines: int = 50) -> FileDescription:
     """Describe a delimited text file (neutral structural evidence)."""
     path = Path(source)
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace").removeprefix("\ufeff")
     lines = [ln.strip() for ln in text.split("\n")[:sample_lines] if ln.strip()]
     desc = FileDescription()
     if not lines:
         return desc
-    desc.delimiter, dconf = _detect_delimiter(lines)
+    desc.delimiter, dconf, desc.delimiter_candidates = _detect_delimiter(lines)
+    desc.confidence["delimiter"] = dconf
     rows = [row for row in csv.reader(io.StringIO("\n".join(lines)), delimiter=desc.delimiter) if any(c.strip() for c in row)]
     if not rows:
         return desc
@@ -201,3 +228,19 @@ def describe(source: str | Path, *, sample_lines: int = 50) -> FileDescription:
         desc.confidence["header_unit"] = uconf
     desc.confidence.update({"delimiter": dconf, "decimal_separator": decconf, "has_header": hconf})
     return desc
+
+def proposed_decimal(path: Path, params: LoadingParams, *, key: str | None = None) -> str | None:
+    """Propose comma decimals from resolved records, excluding the selected key."""
+    text, truncated = _delimiter_sample(path, params)
+    records = _dialect_records(text, params.delimiter or ";", truncated)
+    lines = [raw for _, raw in records]
+    if not lines or _detect_delimiter(lines)[2]:
+        return None
+    try:
+        rows = [row for row in csv.reader(io.StringIO("\n".join(lines)), delimiter=params.delimiter or ";") if any(cell.strip() for cell in row)]
+    except csv.Error:
+        return None
+    if key is not None and rows and key in rows[0]:
+        index = rows[0].index(key)
+        rows = [[cell for i, cell in enumerate(row) if i != index] for row in rows]
+    return "," if rows and _detect_decimal(rows)[0] == "," else None

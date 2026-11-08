@@ -206,12 +206,13 @@ str_enum! {
 str_enum! {
     FillMethod {
         Value => "value",
-        Mean => "mean",
-        Median => "median",
         ForwardFill => "forward_fill",
         BackwardFill => "backward_fill",
     }
 }
+
+/// Statistical fill tokens refused at spec admission, even under inactive policies.
+pub(crate) const REFUSED_STATISTICAL_FILL_METHODS: &[&str] = &["mean", "median"];
 
 str_enum! {
     CategoricalMode {

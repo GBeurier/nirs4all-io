@@ -28,6 +28,14 @@ const state = {
   assembled: null,
   assembleError: null,
   builderError: null,
+  // Input binding. `inputBusy` counts file-set changes in flight, from the moment a
+  // change starts (before any byte is read) until its re-run has finished; decision
+  // actions are refused meanwhile. `inputRevision` moves when a change starts and
+  // when it is committed, so a re-run overtaken by a newer change can tell and stop
+  // without publishing. `inputEpoch` moves on reset so a late read cannot restore files.
+  inputBusy: 0,
+  inputRevision: 0,
+  inputEpoch: 0,
 };
 
 const PALETTE = ["#0d9488", "#06b6d4", "#4f46e5", "#d97706", "#10b981", "#e11d48", "#7c3aed", "#0891b2"];
@@ -307,31 +315,79 @@ function listFrom(value) {
   }
 }
 
+// A change to the bound input files starts here, before any byte is read or fetched:
+// everything derived from the previous inputs (owner plan, proposals, working spec,
+// assembly) is dropped and decision actions are refused until the owner has re-run.
+// The confirmed locks are kept unless a file is replaced (see changeInputs).
+function beginInputChange() {
+  state.inputRevision += 1;
+  state.inputBusy += 1;
+  Object.assign(state, {
+    plan: null, tablePlan: null, proposals: [], confirmedEchoes: [], spec: null, workingSpec: null,
+    assembled: null, assembleError: null, auxiliaryAssembly: null, tableAssemblyError: null,
+    specEditError: null, validation: null, builderError: null,
+  });
+  renderAll();
+}
+
+function endInputChange() {
+  state.inputBusy -= 1;
+  window.NIRS4ALL_BUILDER?.render(); // re-enable the decision list once nothing is pending
+}
+
+// Bind `load()`'s files (read or fetch) into state.files and re-run the owner. A failed
+// read restores the derived state for the files that were already bound.
+async function changeInputs(load, onError) {
+  const epoch = state.inputEpoch;
+  beginInputChange();
+  let committed = false;
+  let failure = null;
+  try {
+    const loaded = await load();
+    if (epoch !== state.inputEpoch) { hideProgress(); return; } // reset() ran while reading
+    let replaced = false;
+    for (const file of loaded) {
+      const idx = state.files.findIndex((f) => f.name === file.name);
+      if (idx >= 0) { state.files[idx] = file; replaced = true; }
+      else state.files.push(file);
+    }
+    // Decisions were validated against the old bytes of a replaced file: start over.
+    const cleared = replaced && state.confirmed.length > 0;
+    if (cleared) state.confirmed = [];
+    state.inputRevision += 1;
+    committed = true;
+    await recompute();
+    if (cleared) setStatus(`Input files were replaced, so earlier confirmed decisions were cleared and must be confirmed again. ${$("#status").textContent}`);
+  } catch (err) {
+    failure = err;
+  } finally {
+    endInputChange();
+  }
+  if (!failure) return;
+  hideProgress();
+  if (!committed && state.files.length) await recompute().catch(() => {});
+  onError(failure);
+}
+
 async function addFiles(files) {
   if (!files.length) return;
   if (!await runtimeReady) return;
-  setStatus(`Reading ${files.length} file${files.length > 1 ? "s" : ""}...`);
-  try {
-    await showProgress(`Reading ${files.length} file${files.length > 1 ? "s" : ""}`, 0, 1);
-    const loaded = await Promise.all(files.map(async (file) => ({
+  const label = `${files.length} file${files.length > 1 ? "s" : ""}`;
+  await changeInputs(async () => {
+    setStatus(`Reading ${label}...`);
+    await showProgress(`Reading ${label}`, 0, 1);
+    return Promise.all(files.map(async (file) => ({
       name: browserFileName(file),
       size: file.size,
       lastModified: file.lastModified,
       bytes: new Uint8Array(await file.arrayBuffer()),
     })));
-    for (const file of loaded) {
-      const idx = state.files.findIndex((f) => f.name === file.name);
-      if (idx >= 0) state.files[idx] = file;
-      else state.files.push(file);
-    }
-    await recompute();
-  } catch (err) {
-    hideProgress();
+  }, (err) => {
     state.validation = { ok: false, message: err.message || String(err) };
     renderValidationBadge();
     renderSpecActions();
     setStatus(`Files could not be loaded: ${err.message || err}`);
-  }
+  });
 }
 
 function browserFileName(file) {
@@ -393,17 +449,9 @@ function withRelativePath(file, relativePath) {
 
 async function loadSampleDataset() {
   if (!await runtimeReady) return;
-  try {
-    const files = await loadSampleFiles();
-    for (const file of files) {
-      const idx = state.files.findIndex((f) => f.name === file.name);
-      if (idx >= 0) state.files[idx] = file;
-      else state.files.push(file);
-    }
-    await recompute();
-  } catch (err) {
+  await changeInputs(loadSampleFiles, (err) => {
     setStatus(`Sample dataset unavailable: ${err.message || err}`);
-  }
+  });
 }
 
 async function loadSampleFiles() {
@@ -431,6 +479,10 @@ function recompute() {
 }
 
 async function runRecompute() {
+  // A newer input change (started, committed or reset) makes this run's results
+  // stale: stop without publishing; that change queues its own run.
+  const revision = state.inputRevision;
+  const stale = () => revision !== state.inputRevision;
   state.specEditError = null;
   state.tableAssemblyError = null;
   state.auxiliaryAssembly = null;
@@ -449,15 +501,19 @@ async function runRecompute() {
     annotateProbes();
     annotateSidecars();
     await decodeFiles(step);
+    if (stale()) return;
     if (state.mode === "builder" && window.NIRS4ALL_BUILDER) {
       await step("Proposing dataset decisions with nirs4all-io", 6);
+      if (stale()) return;
       await window.NIRS4ALL_BUILDER.runProposeCycle();
       return;
     }
     await step("Inferring the dataset structure with nirs4all-io", 3);
+    if (stale()) return;
     await inferDataset();
     state.spec = state.plan?.resolved_spec ? structuredClone(state.plan.resolved_spec) : null;
     await step("Assembling tables and checking missing values with nirs4all-io", 3);
+    if (stale()) return;
     validateSpec();
     chooseDefaultSignal();
     chooseDefaultTarget();
@@ -620,6 +676,8 @@ function decodedFormat(records) {
 }
 
 function reset() {
+  state.inputEpoch += 1; // a read still in flight must not bring its files back
+  state.inputRevision += 1;
   state.files = [];
   state.decoded = [];
   state.plan = null;
@@ -1973,7 +2031,7 @@ function missingValueSummary(assembled) {
       }, matrix.n_rows);
     });
     (block.y_headers || []).forEach((header, col) => {
-      report(partition, `y '${header}'`, (row) => Number.isNaN(block.y.data[row * block.y.n_cols + col]), block.y.n_rows);
+      report(partition, `y '${header}'`, (row) => Number.isNaN(block.y.data[row * block.y_headers.length + col]), block.n_samples);
     });
     for (const column of block.metadata?.columns || []) {
       report(partition, `metadata '${column.name}'`, (row) => column.values[row] == null, column.values.length);
@@ -2120,8 +2178,8 @@ function targetPreview() {
     headers.forEach((key, column) => {
       if (!keys.includes(key)) keys.push(key);
       const categories = block.y_categorical?.[key]?.categories;
-      for (let rowIndex = 0; rowIndex < block.y.n_rows; rowIndex++) {
-        const raw = block.y.data[rowIndex * block.y.n_cols + column];
+      for (let rowIndex = 0; rowIndex < block.n_samples; rowIndex++) {
+        const raw = block.y.data[rowIndex * headers.length + column];
         if (Number.isNaN(raw)) continue;
         const value = categories ? categories[raw] : raw;
         if (value == null) continue;

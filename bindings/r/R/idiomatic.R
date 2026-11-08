@@ -47,6 +47,35 @@
   jsonlite::toJSON(conventions, auto_unbox = FALSE)
 }
 
+# Encode only declared inference options; to_spec/load keep conventions arrays.
+.nio_infer_options_json <- function(conventions, params, file_params) {
+  options <- list()
+  if (!is.null(conventions)) {
+    if (!is.character(conventions)) {
+      stop("conventions must be a character vector or NULL", call. = FALSE)
+    }
+    options$conventions <- I(conventions)
+  }
+  named_list <- function(x) {
+    is.list(x) && !is.null(names(x)) &&
+      all(!is.na(names(x)) & nzchar(names(x))) && !anyDuplicated(names(x))
+  }
+  if (!is.null(params)) {
+    if (!named_list(params)) {
+      stop("params must be a named list or NULL", call. = FALSE)
+    }
+    options$params <- params
+  }
+  if (!is.null(file_params)) {
+    if (!named_list(file_params) || !all(vapply(file_params, named_list, logical(1)))) {
+      stop("file_params must be a named list of named parameter lists or NULL", call. = FALSE)
+    }
+    options$file_params <- file_params
+  }
+  if (length(options) == 0L) return(NULL)
+  jsonlite::toJSON(options, auto_unbox = TRUE, null = "null")
+}
+
 # Parse a JSON string returned by the ABI into an R list, preserving the
 # original string so it can be re-marshalled byte-for-byte across the ABI.
 .nio_parse <- function(json) {
@@ -67,6 +96,11 @@
 #'   or a config \code{list}.
 #' @param conventions Optional character vector of convention names, or
 #'   \code{NULL} for the binding default.
+#' @param params Optional named list of global loading choices, such as
+#'   \code{list(has_header = FALSE)}, applied before inference reads.
+#' @param file_params Optional named list of named loading-parameter lists,
+#'   keyed by exact input refs (basename for files, relative path for directories).
+#'   File choices take precedence over \code{params}; unknown refs are refused.
 #' @return An object of class \code{n4io_plan}: the parsed plan (recommendations,
 #'   scored decisions, \code{resolved_spec}, \code{overall_score}). Use
 #'   \code{\link{as.data.frame.n4io_plan}} for the scored decisions as a
@@ -80,8 +114,9 @@
 #' spec <- nio_resolved_spec(plan)
 #' }
 #' @export
-nio_infer <- function(input, conventions = NULL) {
-  json <- n4io_infer(.nio_input_json(input), .nio_conventions_json(conventions))
+nio_infer <- function(input, conventions = NULL, params = NULL, file_params = NULL) {
+  json <- n4io_infer(.nio_input_json(input),
+                    .nio_infer_options_json(conventions, params, file_params))
   structure(.nio_parse(json), class = "n4io_plan")
 }
 

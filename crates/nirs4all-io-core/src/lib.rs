@@ -21,7 +21,10 @@ pub mod versions;
 pub use spec::SpecError;
 
 pub use canonical_json::{canonical_json, CanonicalJsonError};
-pub use materialize::ASSEMBLED_DATASET_VERSION;
+pub use materialize::{
+    ExecutedProjectionIdentityV1, NumericStorage, NumericStorageOptions, PrecisionRecord,
+    ASSEMBLED_DATASET_VERSION, DATASET_PACKAGE_VERSION,
+};
 pub use versions::{
     CANONICAL_JSON_VERSION, CONVENTION_PROFILE_VERSION, DATASET_SPEC_SCHEMA_VERSION,
 };

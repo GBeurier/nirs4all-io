@@ -41,7 +41,7 @@ fn main() -> Result<()> {
     };
     let assembled =
         load_assembled(&input, conv, cli.name.as_deref()).map_err(|e| anyhow!(e.message))?;
-    let package = to_dataset_package(&assembled);
+    let package = to_dataset_package(&assembled).map_err(|e| anyhow!(e.message))?;
     let provider = PackageProvider::from_package(&package).map_err(|e| anyhow!(e.message))?;
     println!("{}", serde_json::to_string_pretty(provider.envelope())?);
     Ok(())

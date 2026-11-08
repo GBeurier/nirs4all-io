@@ -126,31 +126,18 @@ pub fn effective_params(global: &LoadingParams, source: &LoadingParams) -> Loadi
 }
 
 /// pandas `keep_default_na=True` default set ∪ io's `_NA_VALUES`.
-static NA_TOKENS: LazyLock<std::collections::HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN",
-        "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null", "",
-    ]
-    .into_iter()
-    .collect()
-});
+pub(crate) static NA_TOKENS: LazyLock<std::collections::HashSet<&'static str>> =
+    LazyLock::new(|| {
+        [
+            "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN",
+            "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null", "",
+        ]
+        .into_iter()
+        .collect()
+    });
 
 fn is_na(cell: &str) -> bool {
     NA_TOKENS.contains(cell)
-}
-
-/// pandas integer-literal test: optional sign + ASCII digits (no `.`/`e`).
-fn parse_int_literal(s: &str) -> Option<i64> {
-    let t = s.trim();
-    if t.is_empty() {
-        return None;
-    }
-    let body = t.strip_prefix(['+', '-']).unwrap_or(t);
-    if !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit()) {
-        t.parse::<i64>().ok()
-    } else {
-        None
-    }
 }
 
 fn parse_float(s: &str) -> Option<f64> {
@@ -162,13 +149,7 @@ fn parse_float(s: &str) -> Option<f64> {
 }
 
 fn infer_column(name: &str, raw: &[String], decimal: char) -> Column {
-    let norm = |c: &str| -> String {
-        if decimal == ',' {
-            c.replace(',', ".")
-        } else {
-            c.to_string()
-        }
-    };
+    let norm = |c: &str| super::frame::numeric_view(c, decimal).into_owned();
     let mut has_na = false;
     let mut all_int = true;
     let mut all_numeric = true;
@@ -178,7 +159,8 @@ fn infer_column(name: &str, raw: &[String], decimal: char) -> Column {
             continue;
         }
         let n = norm(cell);
-        if parse_int_literal(&n).is_none() {
+        let body = n.trim().trim_start_matches(['+', '-']);
+        if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
             all_int = false;
         }
         if parse_float(&n).is_none() {
@@ -186,34 +168,97 @@ fn infer_column(name: &str, raw: &[String], decimal: char) -> Column {
         }
     }
 
-    if all_numeric && all_int && !has_na {
-        Column {
+    if raw.iter().any(|cell| !is_na(cell))
+        && raw
+            .iter()
+            .all(|cell| is_na(cell) || sheet_bool_word(cell).is_some())
+    {
+        return Column {
+            numeric_text: vec![],
+            source_dtype: None,
             name: name.into(),
-            dtype: ColDtype::Numeric,
-            numeric_kind: NumericKind::NonFloatNumeric,
+            dtype: if has_na {
+                ColDtype::String
+            } else {
+                ColDtype::Bool
+            },
+            numeric_kind: if has_na {
+                NumericKind::NonNumeric
+            } else {
+                NumericKind::NonFloatNumeric
+            },
             values: raw
                 .iter()
-                .map(|c| Cell::Int(parse_int_literal(&norm(c)).unwrap()))
+                .map(|cell| sheet_bool_word(cell).map(Cell::Bool).unwrap_or(Cell::Na))
                 .collect(),
-        }
-    } else if all_numeric {
+        };
+    }
+
+    if all_numeric {
+        let keep_integer_peers = raw.iter().filter(|c| !is_na(c)).any(|cell| {
+            let text = norm(cell);
+            let text = text.trim();
+            let body = text.trim_start_matches(['+', '-']);
+            !body.is_empty()
+                && body.bytes().all(|b| b.is_ascii_digit())
+                && (!super::numeric::integer_in_domain(text)
+                    || text
+                        .parse::<i128>()
+                        .map_or(true, |n| !super::numeric::integer_exact_f64(n)))
+        });
         Column {
+            numeric_text: vec![],
+            source_dtype: None,
             name: name.into(),
             dtype: ColDtype::Numeric,
-            numeric_kind: NumericKind::Float,
+            numeric_kind: if all_int && !has_na {
+                NumericKind::NonFloatNumeric
+            } else {
+                NumericKind::Float
+            },
             values: raw
                 .iter()
                 .map(|c| {
                     if is_na(c) {
                         Cell::Float(f64::NAN)
                     } else {
-                        Cell::Float(parse_float(&norm(c)).unwrap())
+                        let text = norm(c);
+                        let body = text.trim().trim_start_matches(['+', '-']);
+                        let integer_literal =
+                            !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit());
+                        if integer_literal && (keep_integer_peers || (all_int && !has_na)) {
+                            if let Ok(value) = text.trim().parse::<i64>() {
+                                if value == 0
+                                    && text.trim_start().starts_with('-')
+                                    && (!all_int || has_na)
+                                {
+                                    Cell::Float(-0.0)
+                                } else {
+                                    Cell::Int(value)
+                                }
+                            } else if super::numeric::integer_in_domain(&text) {
+                                let digits = body.trim_start_matches('0');
+                                Cell::Str(if digits.is_empty() {
+                                    "0".into()
+                                } else {
+                                    digits.into()
+                                })
+                            } else {
+                                Cell::Str(text)
+                            }
+                        } else if super::numeric::checked_decimal_f64(text.trim()).is_err() {
+                            Cell::Str(text)
+                        } else {
+                            Cell::Float(parse_float(&text).unwrap())
+                        }
                     }
                 })
                 .collect(),
         }
     } else {
         Column {
+            numeric_text: vec![],
+            source_dtype: None,
             name: name.into(),
             dtype: ColDtype::String,
             numeric_kind: NumericKind::NonNumeric,
@@ -240,6 +285,35 @@ fn header_unit(params: &LoadingParams, has_header: bool) -> String {
 
 fn cell_is_na(cell: &Cell) -> bool {
     matches!(cell, Cell::Na) || matches!(cell, Cell::Float(f) if f.is_nan())
+}
+
+/// Report missing input cells at the deferred-NA reader boundary, before joins
+/// or role-specific policies can introduce or remove cells.
+pub(crate) fn ignored_input_na_report(frame: &Frame) -> Option<Value> {
+    let mut samples = vec![false; frame.n_rows];
+    let mut count = 0_usize;
+    let mut features = 0_usize;
+    for column in &frame.columns {
+        let mut missing_column = false;
+        for (row, cell) in column.values.iter().enumerate() {
+            if cell_is_na(cell) {
+                count += 1;
+                missing_column = true;
+                if let Some(sample) = samples.get_mut(row) {
+                    *sample = true;
+                }
+            }
+        }
+        features += usize::from(missing_column);
+    }
+    (count != 0).then(|| {
+        serde_json::json!({
+            "strategy": "ignore", "na_detected": true, "na_count": count,
+            "na_samples": samples.iter().filter(|missing| **missing).count(),
+            "na_features": features, "removed_samples": [], "removed_features": [],
+            "fill_method": null, "na_preserved": true
+        })
+    })
 }
 
 fn first_na(frame: &Frame) -> Option<(usize, String)> {
@@ -269,7 +343,7 @@ fn frame_from_column_values(frame: &Frame, values_by_column: Vec<Vec<Cell>>) -> 
         .columns
         .iter()
         .zip(values_by_column)
-        .map(|(col, values)| Column::from_cells(&col.name, values))
+        .map(|(col, values)| col.aligned_cells(&col.name, values, col.numeric_text.clone()))
         .collect();
     Frame {
         columns,
@@ -288,7 +362,7 @@ fn fill_value_cell(fill_value: &Value) -> Result<Cell, SpecError> {
             } else if let Some(value) = value.as_u64() {
                 Ok(i64::try_from(value)
                     .map(Cell::Int)
-                    .unwrap_or_else(|_| Cell::Float(value as f64)))
+                    .unwrap_or_else(|_| Cell::Str(value.to_string())))
             } else if let Some(value) = value.as_f64() {
                 Ok(Cell::Float(value))
             } else {
@@ -323,93 +397,6 @@ fn replace_na_value(frame: &Frame, fill_value: &Value) -> Result<Frame, SpecErro
         })
         .collect();
     Ok(frame_from_column_values(frame, values_by_column))
-}
-
-fn sorted_numeric_values(col: &Column) -> Vec<f64> {
-    if col.dtype != ColDtype::Numeric {
-        return Vec::new();
-    }
-    let mut values: Vec<f64> = col
-        .values
-        .iter()
-        .map(Cell::to_numeric)
-        .filter(|value| !value.is_nan())
-        .collect();
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    values
-}
-
-fn mean(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        f64::NAN
-    } else {
-        values.iter().sum::<f64>() / values.len() as f64
-    }
-}
-
-fn median(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return f64::NAN;
-    }
-    let mid = values.len() / 2;
-    if values.len().is_multiple_of(2) {
-        (values[mid - 1] + values[mid]) / 2.0
-    } else {
-        values[mid]
-    }
-}
-
-fn replace_na_stat(frame: &Frame, per_column: bool, stat: fn(&[f64]) -> f64) -> Frame {
-    if per_column {
-        let values_by_column = frame
-            .columns
-            .iter()
-            .map(|col| {
-                if col.dtype != ColDtype::Numeric {
-                    return col.values.clone();
-                }
-                let values = sorted_numeric_values(col);
-                let replacement = Cell::Float(stat(&values));
-                col.values
-                    .iter()
-                    .map(|cell| {
-                        if cell_is_na(cell) {
-                            replacement.clone()
-                        } else {
-                            cell.clone()
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-        frame_from_column_values(frame, values_by_column)
-    } else {
-        let mut values = Vec::new();
-        for col in &frame.columns {
-            values.extend(sorted_numeric_values(col));
-        }
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        frame_from_column_values(
-            frame,
-            frame
-                .columns
-                .iter()
-                .map(|col| {
-                    let replacement = Cell::Float(stat(&values));
-                    col.values
-                        .iter()
-                        .map(|cell| {
-                            if cell_is_na(cell) {
-                                replacement.clone()
-                            } else {
-                                cell.clone()
-                            }
-                        })
-                        .collect()
-                })
-                .collect(),
-        )
-    }
 }
 
 fn fill_across_columns(frame: &Frame, forward: bool) -> Frame {
@@ -450,8 +437,6 @@ fn fill_across_columns(frame: &Frame, forward: bool) -> Frame {
 fn replace_na(frame: &Frame, na: &NaConfig, method: FillMethod) -> Result<Frame, SpecError> {
     match method {
         FillMethod::Value => replace_na_value(frame, &na.fill_value),
-        FillMethod::Mean => Ok(replace_na_stat(frame, na.fill_per_column, mean)),
-        FillMethod::Median => Ok(replace_na_stat(frame, na.fill_per_column, median)),
         FillMethod::ForwardFill => Ok(fill_across_columns(frame, true)),
         FillMethod::BackwardFill => Ok(fill_across_columns(frame, false)),
     }
@@ -518,17 +503,66 @@ fn mangle_dupes(header: &[String], ncols: usize) -> Vec<String> {
     out
 }
 
-/// One worksheet of a spreadsheet: its name and its rows of typed cells, with
-/// `Cell::Na` for an empty cell.
-pub type Sheet = (String, Vec<Vec<Cell>>);
+/// IO-owned spreadsheet values. Integer tokens retain physical numeric origin
+/// until role and survivor admission has taken place.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub enum SheetCell {
+    Cell(Cell),
+    IntegerLexeme(String),
+    Float64 { bits: u64, token: String },
+}
 
-fn sheet_cell_text(cell: &Cell) -> String {
+impl From<Cell> for SheetCell {
+    fn from(cell: Cell) -> Self { Self::Cell(cell) }
+}
+
+/// A worksheet, parameterized so existing callers can supply ordinary cells.
+pub type Sheet<C = SheetCell> = (String, Vec<Vec<C>>);
+
+fn canonical_integer(token: &str) -> String {
+    let negative = token.starts_with('-');
+    let digits = token.trim_start_matches(['+', '-']).trim_start_matches('0');
+    if digits.is_empty() { return "0".to_string(); }
+    if negative { format!("-{digits}") } else { digits.to_string() }
+}
+
+fn sheet_cell_text(cell: &SheetCell) -> String {
     match cell {
-        Cell::Str(text) => text.clone(),
-        Cell::Int(value) => value.to_string(),
-        Cell::Float(value) => value.to_string(),
-        Cell::Bool(value) => if *value { "True" } else { "False" }.to_string(),
-        Cell::Na => String::new(),
+        SheetCell::IntegerLexeme(token) => canonical_integer(token),
+        SheetCell::Float64 { bits, .. } => {
+            let value = f64::from_bits(*bits);
+            if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
+                (value as i64).to_string()
+            } else { value.to_string() }
+        }
+        SheetCell::Cell(cell) => match cell {
+            Cell::Str(text) => text.clone(),
+            Cell::Int(value) => value.to_string(),
+            Cell::Float(value) => value.to_string(),
+            Cell::Bool(value) => if *value { "True" } else { "False" }.to_string(),
+            Cell::Na => String::new(),
+        },
+    }
+}
+
+fn project_sheet_cell(cell: SheetCell) -> (Cell, bool) {
+    match cell {
+        SheetCell::Cell(Cell::Str(text)) if is_na(&text) => (Cell::Na, false),
+        SheetCell::Cell(cell) => (cell, false),
+        SheetCell::IntegerLexeme(token) => match token.parse::<i64>() {
+            Ok(value) => (Cell::Int(value), false),
+            Err(_) if super::numeric::integer_in_domain(&token) => {
+                (Cell::Str(canonical_integer(&token)), true)
+            }
+            Err(_) => (Cell::Str(token), true),
+        },
+        SheetCell::Float64 { bits, .. } => {
+            let value = f64::from_bits(bits);
+            if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
+                (Cell::Int(value as i64), false)
+            } else { (Cell::Float(value), false) }
+        }
     }
 }
 
@@ -543,11 +577,12 @@ fn sheet_bool_word(text: &str) -> Option<bool> {
 
 /// Bytes a cell counts against the record and field budgets: its text, or the
 /// width of an 8-byte value.
-fn sheet_cell_bytes(cell: &Cell) -> u64 {
+fn sheet_cell_bytes(cell: &SheetCell) -> u64 {
     match cell {
-        Cell::Str(text) => text.len() as u64,
-        Cell::Na => 0,
-        _ => 8,
+        SheetCell::IntegerLexeme(token) | SheetCell::Float64 { token, .. } => (token.len() as u64).max(8),
+        SheetCell::Cell(Cell::Str(text)) => text.len() as u64,
+        SheetCell::Cell(Cell::Na) => 0,
+        SheetCell::Cell(_) => 8,
     }
 }
 
@@ -560,8 +595,8 @@ fn sheet_cell_bytes(cell: &Cell) -> u64 {
 /// boolean.
 /// `usecols` and `skiprows` are refused rather than ignored: select columns
 /// with source column selectors instead.
-pub fn read_sheet(
-    sheets: &[Sheet],
+pub fn read_sheet<C: Clone + Into<SheetCell>>(
+    sheets: &[Sheet<C>],
     params: &LoadingParams,
     limits: Option<TabularReadLimits>,
 ) -> Result<Frame, SpecError> {
@@ -606,7 +641,7 @@ pub fn read_sheet(
     if let Some(limits) = limits {
         limits.check_shape(data.len() as u64, ncols as u64)?;
         for record in records {
-            if record.iter().map(sheet_cell_bytes).sum::<u64>() > limits.max_record_bytes {
+            if record.iter().map(|cell| sheet_cell_bytes(&cell.clone().into())).sum::<u64>() > limits.max_record_bytes {
                 return Err(SpecError::new(format!(
                     "tabular record exceeds the {}-byte record budget",
                     limits.max_record_bytes
@@ -614,7 +649,7 @@ pub fn read_sheet(
             }
             if record
                 .iter()
-                .any(|cell| sheet_cell_bytes(cell) > limits.max_field_bytes)
+                .any(|cell| sheet_cell_bytes(&cell.clone().into()) > limits.max_field_bytes)
             {
                 return Err(SpecError::new(format!(
                     "tabular field exceeds the {}-byte field budget",
@@ -627,7 +662,7 @@ pub fn read_sheet(
         records[0]
             .iter()
             .enumerate()
-            .map(|(j, cell)| match sheet_cell_text(cell) {
+            .map(|(j, cell)| match sheet_cell_text(&cell.clone().into()) {
                 text if text.is_empty() => format!("Unnamed: {j}"),
                 text => text,
             })
@@ -639,14 +674,15 @@ pub fn read_sheet(
         .iter()
         .enumerate()
         .map(|(j, name)| {
-            let mut cells: Vec<Cell> = data
+            let physical_text = data.iter().any(|record| {
+                matches!(record.get(j).cloned().map(Into::into), Some(SheetCell::Cell(Cell::Str(_))))
+            });
+            let projected: Vec<(Cell, bool)> = data
                 .iter()
-                .map(|record| match record.get(j) {
-                    Some(Cell::Str(text)) if is_na(text) => Cell::Na,
-                    Some(cell) => cell.clone(),
-                    None => Cell::Na,
-                })
+                .map(|record| record.get(j).cloned().map(Into::into)
+                    .map(project_sheet_cell).unwrap_or((Cell::Na, false)))
                 .collect();
+            let (mut cells, numeric_text): (Vec<Cell>, Vec<bool>) = projected.into_iter().unzip();
             // pandas reads a column of boolean words as booleans.
             if cells.iter().any(|cell| matches!(cell, Cell::Str(_)))
                 && cells.iter().all(|cell| match cell {
@@ -661,7 +697,19 @@ pub fn read_sheet(
                     }
                 }
             }
-            Column::from_cells(name, cells)
+            let mut column = Column::from_cells(name, cells);
+            if numeric_text.iter().any(|value| *value) {
+                if !physical_text {
+                    column.dtype = ColDtype::Numeric;
+                    column.numeric_kind = if column.values.iter().any(|cell| matches!(cell, Cell::Float(_) | Cell::Na)) {
+                        NumericKind::Float
+                    } else {
+                        NumericKind::NonFloatNumeric
+                    };
+                }
+                column.numeric_text = numeric_text;
+            }
+            column
         })
         .collect();
     apply_na_policy(
@@ -674,11 +722,201 @@ pub fn read_sheet(
     )
 }
 
+/// Maximum decoded prefix inspected for an undeclared CSV dialect.
+pub const DELIMITER_SAMPLE_BYTES: usize = 8 * 1024 * 1024;
+const DELIMITER_SAMPLE_RECORDS: usize = 50;
+
+/// Narrow evidence about alternatives to the intentional semicolon default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DelimiterVerdict {
+    Default,
+    Detected(u8),
+    Ambiguous(Vec<u8>),
+}
+
+/// Inspect at most 50 nonblank CSV records and 8 MiB, including the header.
+/// This is not the inference detector: single-column files retain the default.
+pub(crate) fn dialect_records(bytes: &[u8], delimiter: u8, truncated: bool) -> Vec<(usize, &[u8])> {
+    // Width evidence only: fields remain opaque to the scientific decoder.
+    let mut rows = Vec::new();
+    let (mut start, mut i, mut width) = (0, 0, 1);
+    let (mut quoted, mut field_start) = (false, true);
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if quoted {
+            if byte == b'"' {
+                if bytes.get(i + 1) == Some(&b'"') {
+                    i += 2;
+                    continue;
+                }
+                quoted = false;
+            }
+        } else if byte == b'"' && field_start {
+            quoted = true;
+            field_start = false;
+        } else if byte == delimiter {
+            width += 1;
+            field_start = true;
+        } else if matches!(byte, b'\r' | b'\n') {
+            let raw = &bytes[start..i];
+            if !raw.iter().all(u8::is_ascii_whitespace) {
+                rows.push((width, raw));
+                if rows.len() == DELIMITER_SAMPLE_RECORDS {
+                    return rows;
+                }
+            }
+            if byte == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                i += 1;
+            }
+            start = i + 1;
+            width = 1;
+            field_start = true;
+        } else {
+            field_start = false;
+        }
+        i += 1;
+    }
+    let raw = &bytes[start..];
+    // Keep complete records at the cap; only an unfinished tail is omitted.
+    if !truncated && !raw.iter().all(u8::is_ascii_whitespace) {
+        rows.push((width, raw));
+    }
+    rows
+}
+
+pub(crate) fn dialect_text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        Err(_) => std::borrow::Cow::Owned(bytes.iter().map(|&byte| byte as char).collect()),
+    }
+}
+
+pub(crate) fn is_na_record(raw: &str) -> bool {
+    let token = raw.trim();
+    NA_TOKENS.contains(token)
+        || token
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .is_some_and(|s| NA_TOKENS.contains(s))
+}
+
+pub(crate) fn is_comma_pair(value: &str) -> bool {
+    static PAIR: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^[+-]?[0-9]+,[0-9]+(?:[eE][+-]?[0-9]+)?$").unwrap());
+    PAIR.is_match(value.trim())
+}
+
+pub fn undeclared_delimiter(bytes: &[u8]) -> DelimiterVerdict {
+    let truncated = bytes.len() >= DELIMITER_SAMPLE_BYTES;
+    let bytes = &bytes[..bytes.len().min(DELIMITER_SAMPLE_BYTES)];
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+
+    let default_rows = dialect_records(bytes, b';', truncated);
+    if default_rows.len() < 2 || default_rows.iter().any(|row| row.0 > 1) {
+        return DelimiterVerdict::Default;
+    }
+    let candidates: Vec<u8> = [b',', b'\t', b'|']
+        .into_iter()
+        .filter(|&delimiter| {
+            let rows = dialect_records(bytes, delimiter, truncated);
+            rows.len() >= 2 && rows[0].0 >= 2 && rows.iter().all(|r| r.0 == rows[0].0)
+        })
+        .collect();
+    if candidates.is_empty() {
+        let rows = dialect_records(bytes, b',', truncated);
+        let data: Vec<_> = rows.iter().skip(1).filter(|row| row.0 != 1).collect();
+        if !rows.is_empty()
+            && rows[0].0 >= 2
+            && !data.is_empty()
+            && data
+                .iter()
+                .all(|row| row.0 == 2 && is_comma_pair(&dialect_text(row.1)))
+        {
+            return DelimiterVerdict::Ambiguous(vec![b',']);
+        }
+        return DelimiterVerdict::Default;
+    }
+    let comma_pair = candidates == [b',']
+        && default_rows
+            .iter()
+            .skip(1)
+            .all(|row| is_comma_pair(&dialect_text(row.1)));
+    if candidates.len() == 1 && !comma_pair {
+        DelimiterVerdict::Detected(candidates[0])
+    } else {
+        DelimiterVerdict::Ambiguous(candidates)
+    }
+}
+
+/// Assembly-only guard; raw read/inspection callers keep their own contracts.
+pub fn refuse_undeclared_delimiter(
+    bytes: &[u8],
+    params: &LoadingParams,
+    source_id: &str,
+    name: &str,
+) -> Result<(), SpecError> {
+    if params.delimiter.as_deref().is_some_and(|d| !d.is_empty()) {
+        return Ok(());
+    }
+    let detail = match undeclared_delimiter(bytes) {
+        DelimiterVerdict::Default => return Ok(()),
+        DelimiterVerdict::Detected(delimiter) => format!(
+            "splits consistently on {:?}",
+            (delimiter as char).to_string()
+        ),
+        DelimiterVerdict::Ambiguous(delimiters) => format!(
+            "has ambiguous delimiters {:?} (and params.decimal_separator if ',' is the decimal mark)",
+            delimiters
+                .iter()
+                .map(|&d| (d as char).to_string())
+                .collect::<Vec<_>>()
+        ),
+    };
+    Err(SpecError::new(format!(
+        "source '{source_id}': file '{name}' has no ';' but {detail}; declare params.delimiter"
+    )))
+}
+
 /// Decode already-read (and decompressed) tabular bytes into a [`Frame`].
 ///
 /// v0: the CSV family. UTF-8 with a latin-1 fallback, mirroring the native
 /// loader's decoding. The facade reads the file and handles gzip/zip before
 /// calling this so a single decoder backs both paths.
+pub fn discovery_prefix(bytes: &[u8], params: &LoadingParams) -> Option<Vec<u8>> {
+    let sample = &bytes[..bytes.len().min(DELIMITER_SAMPLE_BYTES)];
+    let verdict = undeclared_delimiter(sample);
+    let sample = sample.strip_prefix(b"\xef\xbb\xbf").unwrap_or(sample);
+    if params.delimiter.as_deref().is_none_or(str::is_empty)
+        && !matches!(verdict, DelimiterVerdict::Default)
+    {
+        return None;
+    }
+    let delimiter = params
+        .delimiter
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(";")
+        .as_bytes()[0];
+    let records = dialect_records(sample, delimiter, bytes.len() >= DELIMITER_SAMPLE_BYTES);
+    if records.is_empty() {
+        return None;
+    }
+    let mut prefix = Vec::new();
+    for (_, record) in records {
+        prefix.extend_from_slice(record);
+        prefix.push(b'\n');
+    }
+    Some(prefix)
+}
+
+/// Discovery never applies destructive NA policy or validates key equality.
+pub fn discovery_table(bytes: &[u8], params: &LoadingParams) -> Option<Frame> {
+    let prefix = discovery_prefix(bytes, params)?;
+    let mut preview_params = params.clone();
+    preview_params.na.policy = NaPolicy::Ignore;
+    read_table_bytes(&prefix, &preview_params).ok()
+}
+
 pub fn read_table_bytes(bytes: &[u8], params: &LoadingParams) -> Result<Frame, SpecError> {
     read_table_bytes_impl(bytes, params, None)
 }
@@ -802,6 +1040,26 @@ fn read_table_bytes_impl(
                 .collect(),
         );
     }
+    let first_width = if has_header {
+        records.first().map(|row| (0, row.len()))
+    } else {
+        records
+            .iter()
+            .enumerate()
+            .find(|(_, row)| !(row.len() == 1 && row[0].is_empty()))
+            .map(|(index, row)| (index, row.len()))
+    };
+    if let Some((first, width)) = first_width {
+        for (index, row) in records.iter().enumerate().skip(first + 1) {
+            if row.len() > width {
+                return Err(SpecError::new(format!(
+                    "csv width error: record {} has {} fields, expected {width}",
+                    index + 1,
+                    row.len()
+                )));
+            }
+        }
+    }
     if records.is_empty() {
         return apply_na_policy(
             &Frame {
@@ -815,7 +1073,20 @@ fn read_table_bytes_impl(
 
     let ncols = records.iter().map(|r| r.len()).max().unwrap_or(0);
     let (header, data_start) = if has_header {
-        (records[0].clone(), 1)
+        (
+            records[0]
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    if name.is_empty() {
+                        format!("Unnamed: {index}")
+                    } else {
+                        name.clone()
+                    }
+                })
+                .collect::<Vec<_>>(),
+            1,
+        )
     } else {
         ((0..ncols).map(|i| i.to_string()).collect(), 0)
     };
@@ -881,6 +1152,50 @@ fn preserve_empty_csv_records(input: &[u8], delimiter: u8, has_header: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_negative_zero_preserves_bits_without_retyping_integer_columns() {
+        for tokens in [
+            vec!["-0", "9007199254740993", "1.5"],
+            vec!["-00", "18446744073709551616", "1.5"],
+            vec![" -0 ", "9007199254740993", ""],
+        ] {
+            let raw = tokens.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let column = infer_column("x", &raw, '.');
+            assert!(
+                matches!(column.values[0], Cell::Float(value) if value.to_bits() == (-0.0_f64).to_bits())
+            );
+            let metadata = super::super::frame::metadata_cell_value(&column, 0, &column.values[0]);
+            assert!(metadata.is_f64());
+            assert_eq!(metadata.as_f64().unwrap().to_bits(), (-0.0_f64).to_bits());
+        }
+        for tokens in [vec!["-0", "3"], vec!["-0", "9007199254740993", "3"]] {
+            let raw = tokens.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let column = infer_column("x", &raw, '.');
+            assert_eq!(column.values[0], Cell::Int(0));
+        }
+        let raw = ["-0", "9007199254740993", "1.5"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let frame = Frame::from_columns(vec![infer_column("x", &raw, '.')], "text");
+        let matrix = frame
+            .coerce_numeric_with_storage(
+                &["x".into()],
+                Some(super::super::numeric::NumericStorage::Float32),
+                None,
+            )
+            .unwrap();
+        assert_eq!(matrix.data[0].to_bits(), (-0.0_f64).to_bits());
+        let raw = ["-0", "abc"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            infer_column("m", &raw, '.').values[0],
+            Cell::Str("-0".into())
+        );
+    }
 
     #[test]
     fn ignore_keeps_empty_target_records_with_lf_crlf_and_quoted_cells() {
@@ -1124,30 +1439,6 @@ mod tests {
     }
 
     #[test]
-    fn csv_replace_mean_and_median_follow_python_axis_rules() {
-        let mut cfg = na(NaPolicy::Replace);
-        cfg.fill_method = Some(FillMethod::Mean);
-
-        let mean_fill = read(
-            "a;b;label\n1;10;x\n;20;y\n3;30;\n",
-            &params_with_na(cfg.clone()),
-        );
-        assert_eq!(mean_fill.numeric_column_f64("a"), vec![1.0, 2.0, 3.0]);
-        assert!(
-            matches!(mean_fill.column("label").unwrap().values[2], Cell::Na),
-            "per-column numeric mean must not fill non-numeric columns"
-        );
-
-        cfg.fill_method = Some(FillMethod::Median);
-        let median_fill = read("a;b\n1;10\n;20\n5;30\n", &params_with_na(cfg.clone()));
-        assert_eq!(median_fill.numeric_column_f64("a"), vec![1.0, 3.0, 5.0]);
-
-        cfg.fill_per_column = false;
-        let global_fill = read("a;b\n1;10\n;20\n5;30\n", &params_with_na(cfg));
-        assert_eq!(global_fill.numeric_column_f64("a"), vec![1.0, 10.0, 5.0]);
-    }
-
-    #[test]
     fn csv_replace_forward_and_backward_fill_across_columns() {
         let mut cfg = na(NaPolicy::Replace);
         cfg.fill_method = Some(FillMethod::ForwardFill);
@@ -1159,5 +1450,196 @@ mod tests {
         let bfill = read("a;b;c\n1;;3\n;2;3\n", &params_with_na(cfg));
         assert_eq!(bfill.numeric_column_f64("b"), vec![3.0, 2.0]);
         assert_eq!(bfill.numeric_column_f64("a")[1], 2.0);
+    }
+}
+
+#[cfg(test)]
+mod residual_arity_tests {
+    use super::*;
+
+    #[test]
+    fn literal_empty_or_whitespace_header_sets_physical_width() {
+        let params = LoadingParams {
+            delimiter: Some(",".into()),
+            has_header: Some(true),
+            na: NaConfig {
+                policy: NaPolicy::Ignore,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for header in [" ", "\t", "\" \"", "\"\""] {
+            let text = format!("{header}\n1,2\n3,4\n");
+            let error = read_table_bytes(text.as_bytes(), &params).unwrap_err();
+            assert_eq!(
+                error.message,
+                "csv width error: record 2 has 2 fields, expected 1"
+            );
+        }
+        let empty_header = read_table_bytes(b"\"\"\n1\n2\n", &params).unwrap();
+        assert_eq!(empty_header.n_rows, 2);
+        assert_eq!(empty_header.column_names(), vec!["Unnamed: 0"]);
+        let headerless = LoadingParams {
+            has_header: Some(false),
+            ..params
+        };
+        let error = read_table_bytes(b" \n1,2\n3,4\n", &headerless).unwrap_err();
+        assert!(error.message.contains("expected 1"));
+        let missing_first = read_table_bytes(b"\n1,2\n3,4\n", &headerless).unwrap();
+        assert_eq!(missing_first.n_rows, 3);
+        assert!(missing_first.numeric_column_f64("0")[0].is_nan());
+    }
+
+    #[test]
+    fn physical_width_valid_controls_keep_names_and_blank_observation_positions() {
+        let params = LoadingParams {
+            delimiter: Some(",".into()),
+            has_header: Some(true),
+            na: NaConfig {
+                policy: NaPolicy::Ignore,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let trailing = read_table_bytes(b"x,y,\n1,2,\n", &params).unwrap();
+        assert_eq!(trailing.column_names(), vec!["x", "y", "Unnamed: 2"]);
+        let first = read_table_bytes(b"x,y\n\n1,2\n", &params).unwrap();
+        assert_eq!(first.n_rows, 2);
+        assert!(first.numeric_column_f64("x")[0].is_nan());
+        assert_eq!(first.numeric_column_f64("x")[1], 1.0);
+        let middle = read_table_bytes(b"x,y\n1,2\n\n3,4\n", &params).unwrap();
+        assert_eq!(middle.n_rows, 3);
+        assert!(middle.numeric_column_f64("x")[1].is_nan());
+        let single = read_table_bytes(b"x\n1\n\n2\n", &params).unwrap();
+        assert_eq!(single.n_rows, 3);
+        assert!(single.numeric_column_f64("x")[1].is_nan());
+        let semicolon = LoadingParams {
+            delimiter: Some(";".into()),
+            ..params.clone()
+        };
+        for (text, rows) in [
+            (b"x;y\n\n1;2\n".as_slice(), 2),
+            (b"x;y\n\n\n1;2\n".as_slice(), 3),
+            (b"x;y\r\n\r\n1;2\r\n".as_slice(), 2),
+            (b"x;y\r\r1;2\r".as_slice(), 2),
+        ] {
+            let frame = read_table_bytes(text, &semicolon).unwrap();
+            assert_eq!(frame.n_rows, rows);
+            assert!(frame.numeric_column_f64("x")[0].is_nan());
+            assert_eq!(frame.numeric_column_f64("x")[rows - 1], 1.0);
+        }
+        assert_eq!(
+            read_table_bytes(b"\n\ntarget\n1\n", &semicolon)
+                .unwrap()
+                .n_rows,
+            1
+        );
+    }
+
+    #[test]
+    fn physical_width_refuses_overflow_including_trailing_empty_fields() {
+        for has_header in [true, false] {
+            let params = LoadingParams {
+                delimiter: Some(",".into()),
+                has_header: Some(has_header),
+                na: NaConfig {
+                    policy: NaPolicy::Ignore,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            for text in [
+                "x,y,m\n0.5,1.0,7,9\n1.5,2.0,8\n",
+                "x,y,m\n1,2,3,4\n5,6,7,8\n",
+                "x,y,m\n1,2,3,\n4,5,6,\n",
+                "x,y,m\n1,2,3,\n4,5,6\n",
+                "x,y,m\n1,2,3\n4,5,6,\n",
+                "x,y,m\n1,2,3\n4,5,6,7\n",
+                "x,y,m\n1,2,3,,\n",
+                "x,y,m\n1\n2,3,4,5\n",
+            ] {
+                let error = read_table_bytes(text.as_bytes(), &params).unwrap_err();
+                assert!(error.message.contains("csv width error:"), "{error:?}");
+            }
+            for text in [
+                "x,y,m\n1,2\n4,5,6\n",
+                "x,y,\n1,2,\n",
+                "x,y\n\"a\nb,c\",2\n",
+                "x,y\r\n1,2\r\n3,4\r\n",
+                "x,y\n\n1,2\n",
+            ] {
+                assert!(
+                    read_table_bytes(text.as_bytes(), &params).is_ok(),
+                    "{text:?}"
+                );
+            }
+            let large = format!("x,y\n{},2\n", "a".repeat(140_000));
+            assert!(read_table_bytes(large.as_bytes(), &params).is_ok());
+        }
+    }
+}
+
+#[cfg(test)]
+mod delimiter_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn narrow_rule_retains_quotes_defaults_and_ambiguity() {
+        for (bytes, expected) in [
+            (&b"x,y\n1,2\n"[..], DelimiterVerdict::Ambiguous(vec![b','])),
+            (&b"x\ty\n1\t2\n"[..], DelimiterVerdict::Detected(b'\t')),
+            (&b"x|y\n1|2\n"[..], DelimiterVerdict::Detected(b'|')),
+            (&b"1,5\n2,5\n"[..], DelimiterVerdict::Ambiguous(vec![b','])),
+            (
+                &b"a,b|c\n1,2|3\n"[..],
+                DelimiterVerdict::Ambiguous(vec![b',', b'|']),
+            ),
+            (&b"x;m\n1.5;\n2.5;\n"[..], DelimiterVerdict::Default),
+            (&b"1,5;2,5\n3,5;4,5\n"[..], DelimiterVerdict::Default),
+            (
+                &b"name\n\"Smith, J\"\n\"Doe, A\"\n"[..],
+                DelimiterVerdict::Default,
+            ),
+            (&b"name\nSmith, J\nDoe, A\n"[..], DelimiterVerdict::Default),
+            (&b"y\n1,5\n2,5\n"[..], DelimiterVerdict::Default),
+            (
+                &b"Full Name\nJohn Smith\nAnn Lee\n"[..],
+                DelimiterVerdict::Default,
+            ),
+            (&b"a,b\n"[..], DelimiterVerdict::Default),
+            (
+                &b"Protein, %\n12,5\n13,1\n14,2\n"[..],
+                DelimiterVerdict::Ambiguous(vec![b',']),
+            ),
+            (
+                &b"id,y\n1,5\n2,7\n"[..],
+                DelimiterVerdict::Ambiguous(vec![b',']),
+            ),
+            (
+                &b"x,y\n1.5,2.5\n3.5,4.5\n"[..],
+                DelimiterVerdict::Detected(b','),
+            ),
+            (
+                &b"1,5 \n2,5 \n3,5 "[..],
+                DelimiterVerdict::Ambiguous(vec![b',']),
+            ),
+        ] {
+            assert_eq!(undeclared_delimiter(bytes), expected);
+        }
+        let header = "axis,".repeat(40000);
+        assert_eq!(
+            undeclared_delimiter(format!("\"{header}\",y\n1.0,2.0\n3.0,4.0\n").as_bytes()),
+            DelimiterVerdict::Detected(b',')
+        );
+        assert_eq!(
+            undeclared_delimiter(format!("\"{header}\"\n1\n2\n").as_bytes()),
+            DelimiterVerdict::Default
+        );
+        let mut bounded = b"x,y\n1.0,2.0\n".repeat(25);
+        bounded.extend_from_slice(b"3;4\n");
+        assert_eq!(
+            undeclared_delimiter(&bounded),
+            DelimiterVerdict::Detected(b',')
+        );
     }
 }

@@ -1,0 +1,825 @@
+{
+  "schema": "nirs4all.io.source-schema-canonical-vectors.v1",
+  "cases": [
+    {
+      "id": "base.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "base.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":null,\"height\":null,\"channel\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "base.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "base.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"temperature\",\"cultivar\"],\"dtype\":\"object\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "permuted.nir",
+      "input": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{},\"axis_units\":{\"wavelength\":null},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "permuted.image",
+      "input": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{\"channel\":null,\"height\":null,\"width\":null},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "permuted.series",
+      "input": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{\"time\":null,\"variable\":null},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "permuted.metadata",
+      "input": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{\"column\":null},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "integer.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":null},\"axis_coordinates\":{\"wavelength\":[900,910,920]},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{\"wavelength\":[900,910,920]},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "integer.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":null,\"height\":null,\"channel\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "integer.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "integer.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"temperature\",\"cultivar\"],\"dtype\":\"object\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "integral_float.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":null},\"axis_coordinates\":{\"wavelength\":[900.0,910.0,920.0]},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{\"wavelength\":[900.0,910.0,920.0]},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "integral_float.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":null,\"height\":null,\"channel\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "integral_float.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "integral_float.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"temperature\",\"cultivar\"],\"dtype\":\"object\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "mixed.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":null},\"axis_coordinates\":{\"wavelength\":[900,910.0,920]},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{\"wavelength\":[900,910.0,920]},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "mixed.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":null,\"height\":null,\"channel\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "mixed.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "mixed.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"temperature\",\"cultivar\"],\"dtype\":\"object\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "adjacent.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":null},\"axis_coordinates\":{\"wavelength\":[1e-07,1.0000000000000001e-07,2e-07]},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{\"wavelength\":[1e-07,1.0000000000000001e-07,2e-07]},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "adjacent.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":null,\"height\":null,\"channel\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "adjacent.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "adjacent.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"temperature\",\"cultivar\"],\"dtype\":\"object\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "geometry.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":\"quote\\\" backslash\\\\ newline\\n control\\u0001 separator \",\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":\"quote\\\" backslash\\\\ newline\\n control\\u0001 separator \"},\"axis_coordinates\":{\"wavelength\":[-0.0,1.5e-300,1e-07]},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{\"wavelength\":[-0.0,1.5e-300,1e-07]},\"axis_units\":{\"wavelength\":\"quote\\\" backslash\\\\ newline\\n control\\u0001 separator \"},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":\"quote\\\" backslash\\\\ newline\\n control\\u0001 separator \",\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "geometry.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":\"µm\",\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":\"px\",\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":\"px\",\"height\":\"µm\",\"channel\":null},\"axis_coordinates\":{\"width\":[0],\"height\":[-0.0],\"channel\":[\"r\",\"g\",\"b\"]},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{\"channel\":[\"r\",\"g\",\"b\"],\"height\":[-0.0],\"width\":[0]},\"axis_units\":{\"height\":\"µm\",\"width\":\"px\"},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":\"µm\",\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":\"px\",\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "geometry.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "geometry.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"quote\\\" backslash\\\\ newline\\n control\\u0001 separator \",\"café😀\"],\"dtype\":\"object\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{\"column\":[\"😀\",\"\"]},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{\"column\":[\"😀\",\"\"]},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"quote\\\" backslash\\\\ newline\\n control\\u0001 separator \",\"café😀\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "null_unit.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "null_unit.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":null,\"height\":null,\"channel\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "null_unit.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "null_unit.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"temperature\",\"cultivar\"],\"dtype\":\"object\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "absent_unit.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "absent_unit.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":null,\"height\":null,\"channel\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "absent_unit.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "absent_unit.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"temperature\",\"cultivar\"],\"dtype\":\"object\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    },
+    {
+      "id": "tabular_text.nir",
+      "input": {
+        "identity": "{\"type_id\":\"dense_signal\",\"source_id\":\"nir\",\"shape\":[null,3],\"representation_id\":\"signal_1d\",\"native_representation\":{\"type_id\":\"dense_signal\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"signal_1d\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"wavelength\",\"kind\":\"wavelength\"}]},\"modality\":\"nirs\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"wavelength\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"wavelength\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"wavelength\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"nirs\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"wavelength\",\"name\":\"wavelength\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"signal_1d\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"dense_signal\"},\"representation_id\":\"signal_1d\",\"shape\":[null,3],\"source_id\":\"nir\",\"type_id\":\"dense_signal\"}",
+        "dtype": "float64",
+        "input_shape": [
+          3
+        ],
+        "representation_id": "signal_1d"
+      }
+    },
+    {
+      "id": "tabular_text.image",
+      "input": {
+        "identity": "{\"type_id\":\"image_rgb\",\"source_id\":\"image\",\"shape\":[null,1,1,3],\"representation_id\":\"rgb_image\",\"native_representation\":{\"type_id\":\"image_rgb\",\"sparse\":false,\"rank\":4,\"ragged\":false,\"id\":\"rgb_image\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"height\",\"kind\":\"height\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"width\",\"kind\":\"width\"},{\"variable\":false,\"unit\":null,\"size\":3,\"name\":\"channel\",\"kind\":\"channel\"}]},\"modality\":\"image\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"width\":null,\"height\":null,\"channel\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"height\",\"width\",\"channel\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"height\",\"width\",\"channel\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"image\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"height\",\"name\":\"height\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"width\",\"name\":\"width\",\"size\":1,\"unit\":null,\"variable\":false},{\"kind\":\"channel\",\"name\":\"channel\",\"size\":3,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"rgb_image\",\"ragged\":false,\"rank\":4,\"sparse\":false,\"type_id\":\"image_rgb\"},\"representation_id\":\"rgb_image\",\"shape\":[null,1,1,3],\"source_id\":\"image\",\"type_id\":\"image_rgb\"}",
+        "dtype": "float64",
+        "input_shape": [
+          1,
+          1,
+          3
+        ],
+        "representation_id": "rgb_image"
+      }
+    },
+    {
+      "id": "tabular_text.series",
+      "input": {
+        "identity": "{\"type_id\":\"time_series\",\"source_id\":\"series\",\"shape\":[null,2,1],\"representation_id\":\"series_mv\",\"native_representation\":{\"type_id\":\"time_series\",\"sparse\":false,\"rank\":3,\"ragged\":false,\"id\":\"series_mv\",\"dtype\":\"float64\",\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"time\",\"kind\":\"time\"},{\"variable\":false,\"unit\":null,\"size\":1,\"name\":\"variable\",\"kind\":\"feature\"}]},\"modality\":\"time_series\",\"feature_names\":null,\"dtype\":\"float64\",\"axis_units\":{\"variable\":null,\"time\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"time\",\"variable\"]}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"time\",\"variable\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"float64\",\"feature_names\":null,\"modality\":\"time_series\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"time\",\"name\":\"time\",\"size\":2,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"variable\",\"size\":1,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":\"float64\",\"id\":\"series_mv\",\"ragged\":false,\"rank\":3,\"sparse\":false,\"type_id\":\"time_series\"},\"representation_id\":\"series_mv\",\"shape\":[null,2,1],\"source_id\":\"series\",\"type_id\":\"time_series\"}",
+        "dtype": "float64",
+        "input_shape": [
+          2,
+          1
+        ],
+        "representation_id": "series_mv"
+      }
+    },
+    {
+      "id": "tabular_text.metadata",
+      "input": {
+        "identity": "{\"type_id\":\"table\",\"source_id\":\"metadata\",\"shape\":[null,2],\"representation_id\":\"tabular_mixed\",\"native_representation\":{\"type_id\":\"table\",\"sparse\":false,\"rank\":2,\"ragged\":false,\"id\":\"tabular_mixed\",\"dtype\":null,\"container\":\"ndarray\",\"axes\":[{\"variable\":false,\"unit\":null,\"size\":null,\"name\":\"sample\",\"kind\":\"sample\"},{\"variable\":false,\"unit\":null,\"size\":2,\"name\":\"column\",\"kind\":\"feature\"}]},\"modality\":\"tabular\",\"feature_names\":[\"temperature\",\"cultivar\"],\"dtype\":\"<U32\",\"axis_units\":{\"column\":null},\"axis_coordinates\":{},\"axes\":[\"sample\",\"column\"]}",
+        "dtype": "<U32",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      },
+      "expected": {
+        "identity": "{\"axes\":[\"sample\",\"column\"],\"axis_coordinates\":{},\"axis_units\":{},\"dtype\":\"object\",\"feature_names\":[\"temperature\",\"cultivar\"],\"modality\":\"tabular\",\"native_representation\":{\"axes\":[{\"kind\":\"sample\",\"name\":\"sample\",\"size\":null,\"unit\":null,\"variable\":false},{\"kind\":\"feature\",\"name\":\"column\",\"size\":2,\"unit\":null,\"variable\":false}],\"container\":\"ndarray\",\"dtype\":null,\"id\":\"tabular_mixed\",\"ragged\":false,\"rank\":2,\"sparse\":false,\"type_id\":\"table\"},\"representation_id\":\"tabular_mixed\",\"shape\":[null,2],\"source_id\":\"metadata\",\"type_id\":\"table\"}",
+        "dtype": "object",
+        "input_shape": [
+          2
+        ],
+        "representation_id": "tabular_mixed"
+      }
+    }
+  ]
+}

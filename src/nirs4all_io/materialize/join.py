@@ -16,11 +16,15 @@ agnostic** — column roles are tracked by the builder; here we only align rows.
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass, field
+from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ..spec.enums import Cardinality, Coverage, SpecError
+from .loaders import NumericRefusal
 
 
 class JoinError(SpecError):
@@ -48,10 +52,45 @@ def _require_columns(df: pd.DataFrame, cols: list[str], where: str) -> None:
         raise JoinError(f"{where}: key column(s) {missing} not found (have {list(df.columns)})")
 
 
+def _typed_key(cell: Any) -> tuple[Any, ...]:
+    """The admitted key domain, independent of pandas column-wide dtype inference."""
+    if isinstance(cell, NumericRefusal):
+        return ("lexeme", cell.lexeme if cell.lexeme is not None else cell.token)
+    if cell is None or pd.isna(cell):
+        return ("missing",)
+    if isinstance(cell, (bool, np.bool_)):
+        return ("bool", bool(cell))
+    if isinstance(cell, (int, np.integer)):
+        value = int(cell)
+        if -(2**63) <= value < 2**64:
+            return ("integer", value)
+        return ("lexeme", str(value))
+    if isinstance(cell, (float, np.floating)):
+        floating = float(cell)
+        if floating.is_integer() and -(2**63) <= floating < 2**64:
+            return ("integer", int(floating))
+        return ("float", struct.pack(">d", floating))
+    return ("text", str(cell))
+
+
 def _key_tuples(df: pd.DataFrame, keys: list[str]) -> list[tuple]:
-    if len(keys) == 1:
-        return list(df[keys[0]])
-    return [tuple(row) for row in df[keys].itertuples(index=False, name=None)]
+    # Column iteration avoids itertuples' row-wide numeric promotion.
+    columns = [df[key].tolist() for key in keys]
+    return [tuple(_typed_key(cell) for cell in row) for row in zip(*columns, strict=True)]
+
+
+def _missing_key(key: tuple) -> bool:
+    return any(cell[0] == "missing" for cell in key)
+
+
+def _diagnostic_keys(frame: pd.DataFrame, columns: list[str], typed_keys: list[tuple]) -> dict[tuple, Any]:
+    """Public scalar/compound diagnostics retain cells, never private comparison tags."""
+    result: dict[tuple, Any] = {}
+    cells = [frame[column].tolist() for column in columns]
+    for key, row in zip(typed_keys, zip(*cells, strict=True), strict=True):
+        values = tuple(cell.token if isinstance(cell, NumericRefusal) else cell for cell in row)
+        result.setdefault(key, values[0] if len(values) == 1 else values)
+    return result
 
 
 def concat_samples(frames: list[pd.DataFrame], names: list[str]) -> tuple[pd.DataFrame, list[str], JoinAudit]:
@@ -92,8 +131,13 @@ def concat_features(frames: list[pd.DataFrame], names: list[str], *, key: str | 
     renamed = []
     seen: set[str] = set()
     for frame, name in zip(frames, names, strict=False):
-        cols = {c: (c if c not in seen else f"{name}__{c}") for c in frame.columns}
-        seen.update(cols.values())
+        cols = {}
+        for c in frame.columns:
+            target = c if c not in seen else f"{name}__{c}"
+            if target in seen:
+                raise JoinError(f"source '{name}': column '{c}' generates duplicate output column '{target}'")
+            seen.add(target)
+            cols[c] = target
         renamed.append(frame.rename(columns=cols).reset_index(drop=True))
     out = pd.concat(renamed, axis=1)
     audit.n_result = len(out)
@@ -118,8 +162,24 @@ def join_tables(
     if len(lkeys) != len(rkeys):
         raise JoinError(f"join keys must have equal arity: {lkeys} vs {rkeys}")
 
-    left_dup = bool(left.duplicated(subset=lkeys).any())
-    right_dup = bool(right.duplicated(subset=rkeys).any())
+    # Validate payload names before pandas can merge or overwrite colliding columns.
+    seen: set[str] = set()
+    left_names = set(left.columns)
+    for c in left.columns:
+        if c in seen:
+            raise JoinError(f"source '{left_name}': duplicate output column '{c}'")
+        seen.add(c)
+    for c in right.columns:
+        if c in rkeys:
+            continue
+        target = f"{c}__{right_name}" if c in left_names else c
+        if target in seen:
+            raise JoinError(f"source '{right_name}': column '{c}' generates duplicate output column '{target}'")
+        seen.add(target)
+
+    left_tuples, right_tuples = _key_tuples(left, lkeys), _key_tuples(right, rkeys)
+    left_dup = len(set(left_tuples)) != len(left_tuples)
+    right_dup = len(set(right_tuples)) != len(right_tuples)
     if cardinality is Cardinality.ONE_TO_ONE:
         if left_dup:
             raise JoinError(f"1:1 join: duplicate keys on left '{left_name}'")
@@ -132,23 +192,35 @@ def join_tables(
         if left_dup:
             raise JoinError(f"1:m join: duplicate keys on left '{left_name}' on {lkeys}")
 
-    right_keyset = set(_key_tuples(right, rkeys))
-    left_tuples = _key_tuples(left, lkeys)
-    missing = [k for k in left_tuples if k not in right_keyset]
+    right_keyset = {key for key in right_tuples if not _missing_key(key)}
+    missing = [key for key in left_tuples if _missing_key(key) or key not in right_keyset]
     missing_unique = list(dict.fromkeys(missing))
+    diagnostics = _diagnostic_keys(left, lkeys, left_tuples)
 
     if missing and coverage is Coverage.COMPLETE:
-        preview = missing_unique[:10]
+        preview = [diagnostics[key] for key in missing_unique[:10]]
         raise JoinError(f"coverage 'complete': {len(missing_unique)} key(s) in '{left_name}' have no match in '{right_name}': {preview}{' ...' if len(missing_unique) > 10 else ''}")
     if missing and coverage is Coverage.ERROR:
-        raise JoinError(f"coverage 'error': key {missing[0]!r} from '{left_name}' not found in '{right_name}'")
+        raise JoinError(f"coverage 'error': key {diagnostics[missing[0]]!r} from '{left_name}' not found in '{right_name}'")
 
     how = "inner" if coverage is Coverage.DROP else "left"
-    merged = left.merge(right, how=how, left_on=lkeys, right_on=rkeys, suffixes=("", f"__{right_name}"))
-    # drop redundant right key columns when names differ (they duplicate the left keys)
-    drop_cols = [rk for rk in rkeys if rk not in lkeys and rk in merged.columns]
-    if drop_cols:
-        merged = merged.drop(columns=drop_cols)
+    name = "__nio_join_code__"
+    while name in left.columns or name in right.columns:
+        name += "_"
+    matched_keys = {key for key in left_tuples if not _missing_key(key)} & right_keyset
+    codes: dict[tuple, int] = {}
+    def code(key: tuple, missing_code: int) -> int:
+        if key not in matched_keys:
+            return missing_code
+        if key not in codes:
+            codes[key] = len(codes)
+        return codes[key]
+    left_codes = [code(key, -1 - row) for row, key in enumerate(left_tuples)]
+    right_codes = [code(key, -1 - len(left_tuples) - row) for row, key in enumerate(right_tuples)]
+    left_view = left.assign(**{name: np.asarray(left_codes, dtype=np.int64)})
+    # The right key is a comparison operand only; the left key remains the original payload.
+    right_view = right.drop(columns=rkeys).assign(**{name: np.asarray(right_codes, dtype=np.int64)})
+    merged = left_view.merge(right_view, how=how, on=name, suffixes=("", f"__{right_name}"), sort=False).drop(columns=name)
 
     audit = JoinAudit(
         operation=f"{cardinality.value} join '{left_name}' <- '{right_name}'",
@@ -158,7 +230,7 @@ def join_tables(
         n_matched=len(left_tuples) - len(missing),
     )
     if missing and coverage is Coverage.DROP:
-        audit.dropped_rows = [{"key": k, "reason": "unmatched_left"} for k in missing_unique]
+        audit.dropped_rows = [{"key": diagnostics[key], "reason": "unmatched_left"} for key in missing_unique]
         audit.warnings.append(f"coverage 'drop': removed {len(missing)} unmatched row(s) from '{left_name}' ({len(missing_unique)} distinct key(s))")
     if missing and coverage is Coverage.WARN:
         audit.warnings.append(f"coverage 'warn': {len(missing_unique)} key(s) in '{left_name}' unmatched in '{right_name}'; right columns null-filled")

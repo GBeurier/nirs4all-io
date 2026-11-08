@@ -44,55 +44,84 @@ fn is_glob(text: &str) -> bool {
 /// *relative to `base_dir`* (with separators normalized to `/`) so the in-memory
 /// glob re-match stays path-scoped and a `spectra/*.csv` source does not also
 /// match a sibling `meta.csv` (Codex #2).
-fn resolve_named(input: &Value, base_dir: &Path) -> Vec<(String, PathBuf)> {
+fn pattern_paths(pattern: &str) -> Vec<PathBuf> {
+    glob::glob(pattern)
+        .map(|paths| paths.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+// Keep scoped glob construction testable independently of direct-path fallback.
+fn scoped_pattern(text: &str, base_dir: &Path) -> String {
+    if Path::new(text).is_absolute() {
+        text.to_string()
+    } else {
+        let escaped = glob::Pattern::escape(&base_dir.to_string_lossy());
+        Path::new(&escaped)
+            .join(text)
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+fn resolve_named(input: &Value, base_dir: &Path) -> Result<Vec<(String, PathBuf)>, SpecError> {
     let items: Vec<&Value> = match input {
-        Value::Array(a) => a.iter().collect(),
+        Value::Array(values) => values.iter().collect(),
         other => vec![other],
     };
     let mut out = Vec::new();
     for item in items {
         let Some(text) = item.as_str() else { continue };
+        let scoped = base_dir.join(text);
+        if scoped.is_file() {
+            out.push((text.to_string(), scoped));
+            continue;
+        }
         if is_glob(text) {
-            let pat = base_dir.join(text);
-            let (mut g, scoped): (Vec<PathBuf>, bool) = {
-                let scoped: Vec<PathBuf> = glob::glob(&pat.to_string_lossy())
-                    .map(|p| p.filter_map(Result::ok).collect())
-                    .unwrap_or_default();
-                if scoped.is_empty() {
-                    (
-                        glob::glob(text)
-                            .map(|p| p.filter_map(Result::ok).collect())
-                            .unwrap_or_default(),
-                        false,
-                    )
-                } else {
-                    (scoped, true)
+            let pattern = scoped_pattern(text, base_dir);
+            let mut matched = pattern_paths(&pattern);
+            matched.sort();
+            if !matched.is_empty() {
+                for path in matched {
+                    let name = if Path::new(text).is_absolute() {
+                        path.to_string_lossy().replace('\\', "/")
+                    } else {
+                        let logical = crate::resolve::logical_path(&path);
+                        let base = crate::resolve::logical_path(base_dir);
+                        logical
+                            .strip_prefix(&base)
+                            .map_err(|_| {
+                                SpecError::new(format!(
+                                    "glob path {logical:?} is outside base {base:?}"
+                                ))
+                            })?
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                    };
+                    out.push((name, path));
                 }
-            };
-            g.sort();
-            for p in g {
-                // Re-match name = path relative to base_dir for base_dir-scoped
-                // matches, else the path as globbed; normalize to `/`.
-                let rel = if scoped {
-                    p.strip_prefix(base_dir).unwrap_or(&p)
-                } else {
-                    p.as_path()
-                };
-                let name = rel.to_string_lossy().replace('\\', "/");
-                let name = if name.is_empty() {
-                    text.to_string()
-                } else {
-                    name
-                };
-                out.push((name, p));
+                continue;
             }
+        }
+        if scoped.exists() {
+            out.push((text.to_string(), scoped));
+            continue;
+        }
+        let direct = PathBuf::from(text);
+        if direct.is_file() {
+            out.push((text.to_string(), direct));
+        } else if is_glob(text) {
+            let mut matched = pattern_paths(text);
+            matched.sort();
+            out.extend(
+                matched
+                    .into_iter()
+                    .map(|path| (path.to_string_lossy().replace('\\', "/"), path)),
+            );
         } else {
-            let p = base_dir.join(text);
-            let path = if p.exists() { p } else { PathBuf::from(text) };
-            out.push((text.to_string(), path));
+            out.push((text.to_string(), direct));
         }
     }
-    out
+    Ok(out)
 }
 
 fn path_key(path: &Path) -> PathBuf {
@@ -151,7 +180,7 @@ fn gather_parquet_projections(
     let mut projections = HashMap::new();
     for source in &spec.sources {
         let source_params = effective_params(&spec.params, &source.params);
-        for (_, path) in resolve_named(&source.input, base_dir) {
+        for (_, path) in resolve_named(&source.input, base_dir)? {
             update_projection(&mut projections, &path, &source_params)?;
         }
         for variation in &source.variations {
@@ -159,7 +188,7 @@ fn gather_parquet_projections(
             if !variation.params.is_empty_value() {
                 params = effective_params(&params, &variation.params);
             }
-            for (_, path) in resolve_named(&variation.input, base_dir) {
+            for (_, path) in resolve_named(&variation.input, base_dir)? {
                 update_projection(&mut projections, &path, &params)?;
             }
         }
@@ -178,7 +207,7 @@ fn gather_sources(
     let mut seen: HashMap<String, ()> = HashMap::new();
     let mut out: Vec<InMemorySource> = Vec::new();
     let mut add_input = |input: &Value| -> Result<(), SpecError> {
-        for (name, path) in resolve_named(input, base_dir) {
+        for (name, path) in resolve_named(input, base_dir)? {
             if seen.insert(name.clone(), ()).is_some() {
                 continue;
             }
@@ -245,6 +274,7 @@ fn gather_index_lists(
     for (part, file) in [
         ("train", &p.train_file),
         ("test", &p.test_file),
+        ("val", &p.val_file),
         ("predict", &p.predict_file),
     ] {
         if let Some(file) = file {
@@ -289,6 +319,70 @@ pub fn assemble(spec: &DatasetSpec, base_dir: &Path) -> Result<AssembledDataset,
 }
 
 /// Assemble with explicit host-selected read/decompression/shape budgets.
+pub fn assemble_with_storage(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    options: &nirs4all_io_core::materialize::NumericStorageOptions,
+) -> Result<AssembledDataset, SpecError> {
+    assemble_with_limits_and_storage(spec, base_dir, LoadLimits::default(), options)
+}
+
+pub fn assemble_with_limits_and_storage(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    limits: LoadLimits,
+    options: &nirs4all_io_core::materialize::NumericStorageOptions,
+) -> Result<AssembledDataset, SpecError> {
+    assemble_with_budget_and_storage(spec, base_dir, &mut ReadBudget::new(limits)?, options)
+}
+
+pub(crate) fn assemble_with_budget_and_storage(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    budget: &mut ReadBudget,
+    options: &nirs4all_io_core::materialize::NumericStorageOptions,
+) -> Result<AssembledDataset, SpecError> {
+    let sources = gather_sources(spec, base_dir, budget)?;
+    let indices = gather_index_lists(spec, base_dir, budget)?;
+    let folds = gather_folds(spec, base_dir, budget)?;
+    nirs4all_io_core::materialize::assemble_in_memory_with_storage_and_tabular_limits(
+        spec,
+        &sources,
+        &indices,
+        folds.as_deref(),
+        Some(budget.limits.tabular()),
+        options,
+    )
+}
+
+pub(crate) fn package_with_budget_and_storage(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    budget: &mut ReadBudget,
+    options: &nirs4all_io_core::materialize::NumericStorageOptions,
+) -> Result<nirs4all_io_core::materialize::DatasetPackage, SpecError> {
+    let sources = gather_sources(spec, base_dir, budget)?;
+    let indices = gather_index_lists(spec, base_dir, budget)?;
+    let folds = gather_folds(spec, base_dir, budget)?;
+    nirs4all_io_core::materialize::package_in_memory_with_storage_and_tabular_limits(
+        spec,
+        &sources,
+        &indices,
+        folds.as_deref(),
+        Some(budget.limits.tabular()),
+        options,
+    )
+}
+
+pub fn package_with_limits_and_storage(
+    spec: &DatasetSpec,
+    base_dir: &Path,
+    limits: LoadLimits,
+    options: &nirs4all_io_core::materialize::NumericStorageOptions,
+) -> Result<nirs4all_io_core::materialize::DatasetPackage, SpecError> {
+    package_with_budget_and_storage(spec, base_dir, &mut ReadBudget::new(limits)?, options)
+}
+
 pub fn assemble_with_limits(
     spec: &DatasetSpec,
     base_dir: &Path,
@@ -399,5 +493,75 @@ mod tests {
         assert_eq!(block.feature_headers, vec![vec!["a"], vec!["b"]]);
         assert_eq!(block.x[0].data, vec![1.0, 2.0]);
         assert_eq!(block.x[1].data, vec![10.0, 20.0]);
+    }
+}
+
+#[cfg(test)]
+mod path_reference_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn non_pattern_directory_keeps_its_base_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let decoy = tempfile::Builder::new()
+            .prefix("n4io-dir-decoy-")
+            .tempfile_in(".")
+            .unwrap();
+        let name = decoy
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        std::fs::create_dir(tmp.path().join(&name)).unwrap();
+        let expected = vec![(name.clone(), tmp.path().join(&name))];
+        assert_eq!(resolve_named(&json!(name), tmp.path()).unwrap(), expected);
+        drop(decoy);
+        assert_eq!(resolve_named(&json!(name), tmp.path()).unwrap(), expected);
+    }
+
+    #[test]
+    fn empty_base_scoped_pattern_remains_relative_before_fallback() {
+        assert_eq!(scoped_pattern("*.csv", Path::new("")), "*.csv");
+        assert_eq!(
+            Path::new(&scoped_pattern("spectra/*.csv", Path::new(""))),
+            Path::new("spectra/*.csv")
+        );
+        assert_eq!(
+            Path::new(&scoped_pattern("spectra/*.csv", Path::new("cfg[1]"))),
+            Path::new("cfg[[]1[]]/spectra/*.csv")
+        );
+    }
+
+    #[test]
+    fn absolute_pattern_is_independent_of_empty_base() {
+        let tmp = tempfile::Builder::new()
+            .prefix("n4io-relative-")
+            .tempdir_in(".")
+            .unwrap();
+        std::fs::write(tmp.path().join("part.csv"), "x\n0.1\n").unwrap();
+        let pattern = format!("{}/*.csv", tmp.path().display());
+        let found = resolve_named(&json!(pattern), Path::new("")).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1, tmp.path().join("part.csv"));
+    }
+    #[test]
+    fn interior_curdir_scoped_pattern_preserves_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("spectra")).unwrap();
+        std::fs::write(tmp.path().join("spectra/a.csv"), "x\n0.1\n").unwrap();
+        let base = tmp.path().join(".");
+        let names = resolve_named(&json!("spectra/*.csv"), &base).unwrap();
+        assert_eq!(names[0].0, "spectra/a.csv");
+        let spec = DatasetSpec::from_value(
+            &json!({"sources":[{"id":"x","role":"features","input":"spectra/*.csv"}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            assemble(&spec, &base).unwrap().blocks["train"].x[0].data[0],
+            0.1
+        );
     }
 }

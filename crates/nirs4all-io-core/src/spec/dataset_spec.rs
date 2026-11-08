@@ -13,9 +13,10 @@
 use serde_json::{Map, Value};
 
 use super::enums::{
-    AggregateMethod, Cardinality, CategoricalMode, Coverage, FillMethod, FoldFormat, HeaderUnit,
-    MergeMode, Modality, NaPolicy, Partition, PartitionBy, Role, SampleIndexBy, SignalType,
-    SourceKind, SpecError, TaskType, UnknownPolicy,
+    normalize_enum_key, AggregateMethod, Cardinality, CategoricalMode, Coverage, FillMethod,
+    FoldFormat, HeaderUnit, MergeMode, Modality, NaPolicy, Partition, PartitionBy, Role,
+    SampleIndexBy, SignalType, SourceKind, SpecError, TaskType, UnknownPolicy,
+    REFUSED_STATISTICAL_FILL_METHODS,
 };
 use super::selectors::Selector;
 use crate::pyfmt::{py_int, py_repr, py_truthy};
@@ -124,6 +125,17 @@ impl NaConfig {
             Some(Value::Object(m)) => m,
             _ => &empty,
         };
+        if let Some(Value::String(method)) = fill.get("method") {
+            if REFUSED_STATISTICAL_FILL_METHODS.contains(&normalize_enum_key(method).as_str()) {
+                return Err(SpecError::new(format!(
+                    "na.fill.method: {} is refused: IO does not compute fill statistics across samples; \
+                     use fitted preprocessing in the training pipeline for train/test partitions and cross-validation folds. \
+                     Supported IO options are na.fill.method 'value', 'forward_fill' or 'backward_fill' \
+                     (within each sample), or na.policy 'remove_sample', 'remove_feature' or 'ignore'.",
+                    crate::pyfmt::py_repr_str(method)
+                )));
+            }
+        }
         let policy = match d.get("policy") {
             Some(v) => NaPolicy::coerce(v, "na.policy")?,
             None => NaPolicy::Auto,
@@ -662,13 +674,16 @@ pub struct PartitionsSpec {
     pub column: Option<String>,
     pub train_values: Vec<Value>,
     pub test_values: Vec<Value>,
+    pub val_values: Vec<Value>,
     pub predict_values: Vec<Value>,
     pub unknown_policy: UnknownPolicy,
     pub train: Value,
     pub test: Value,
+    pub val: Value,
     pub predict: Value,
     pub train_file: Option<String>,
     pub test_file: Option<String>,
+    pub val_file: Option<String>,
     pub predict_file: Option<String>,
 }
 
@@ -678,17 +693,85 @@ impl PartitionsSpec {
             return Ok(None);
         };
         let m = as_object(d, "partitions")?;
-        let list_of = |key: &str| -> Vec<Value> {
-            match m.get(key) {
-                Some(Value::Array(a)) => a.clone(),
-                _ => vec![],
+        let allowed = [
+            "by",
+            "column",
+            "train_values",
+            "test_values",
+            "val_values",
+            "predict_values",
+            "unknown_policy",
+            "train",
+            "test",
+            "val",
+            "predict",
+            "train_file",
+            "test_file",
+            "val_file",
+            "predict_file",
+        ];
+        let mut unknown: Vec<String> = m
+            .keys()
+            .filter(|k| !allowed.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        unknown.sort();
+        if !unknown.is_empty() {
+            return Err(SpecError::new(format!(
+                "partitions: unknown keys {}",
+                py_repr(&Value::from(unknown))
+            )));
+        }
+        for key in [
+            "train_values",
+            "test_values",
+            "val_values",
+            "predict_values",
+        ] {
+            if m.get(key).is_some_and(|v| !v.is_array()) {
+                return Err(SpecError::new(format!("partitions.{key} must be an array")));
             }
+        }
+        let by = coerce_opt(m, "by", |v| PartitionBy::coerce(v, "partitions.by"))?;
+        let declarations: &[&str] = match by {
+            Some(PartitionBy::Column) => &[
+                "column",
+                "train_values",
+                "test_values",
+                "val_values",
+                "predict_values",
+                "unknown_policy",
+            ],
+            Some(PartitionBy::Index) => &["train", "test", "val", "predict"],
+            Some(PartitionBy::IndexFile) => {
+                &["train_file", "test_file", "val_file", "predict_file"]
+            }
+            _ => &[],
+        };
+        for (key, value) in m {
+            let empty = value.is_null()
+                || value.as_str().is_some_and(str::is_empty)
+                || value.as_array().is_some_and(Vec::is_empty)
+                || value.as_object().is_some_and(Map::is_empty);
+            if key != "by" && !declarations.contains(&key.as_str()) && !empty {
+                return Err(SpecError::new(format!(
+                    "partitions.{key} is not applicable to by='{}'",
+                    by.map(|v| v.value()).unwrap_or("absent")
+                )));
+            }
+        }
+        let list_of = |key: &str| -> Vec<Value> {
+            m.get(key)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
         };
         Ok(Some(Self {
-            by: coerce_opt(m, "by", |v| PartitionBy::coerce(v, "partitions.by"))?,
+            by,
             column: opt_string(m.get("column")),
             train_values: list_of("train_values"),
             test_values: list_of("test_values"),
+            val_values: list_of("val_values"),
             predict_values: list_of("predict_values"),
             unknown_policy: match m.get("unknown_policy") {
                 Some(v) => UnknownPolicy::coerce(v, "partitions.unknown_policy")?,
@@ -696,11 +779,45 @@ impl PartitionsSpec {
             },
             train: m.get("train").cloned().unwrap_or(Value::Null),
             test: m.get("test").cloned().unwrap_or(Value::Null),
+            val: m.get("val").cloned().unwrap_or(Value::Null),
             predict: m.get("predict").cloned().unwrap_or(Value::Null),
             train_file: opt_string(m.get("train_file")),
             test_file: opt_string(m.get("test_file")),
+            val_file: opt_string(m.get("val_file")),
             predict_file: opt_string(m.get("predict_file")),
         }))
+    }
+
+    pub(crate) fn validate_column_values(&self) -> Result<(), SpecError> {
+        let mut owners = std::collections::HashMap::new();
+        for (name, values) in [
+            ("train_values", &self.train_values),
+            ("test_values", &self.test_values),
+            ("val_values", &self.val_values),
+            ("predict_values", &self.predict_values),
+        ] {
+            for value in values {
+                let valid = match value {
+                    Value::String(_) | Value::Bool(_) => true,
+                    Value::Number(number) => number.as_f64().is_some_and(f64::is_finite),
+                    _ => false,
+                };
+                if !valid {
+                    return Err(SpecError::new(format!(
+                        "partitions.{name}: labels must be strings, finite numbers or bools"
+                    )));
+                }
+                let normalized = crate::pyfmt::py_str_scalar(value).to_lowercase();
+                let first = owners.entry(normalized.clone()).or_insert(name);
+                if *first != name {
+                    return Err(SpecError::new(format!(
+                        "partitions: value {} appears in both '{first}' and '{name}'",
+                        py_repr(&Value::from(normalized))
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn to_value(&self) -> Value {
@@ -709,6 +826,7 @@ impl PartitionsSpec {
             ("column", json_opt_str(&self.column)),
             ("train_values", Value::Array(self.train_values.clone())),
             ("test_values", Value::Array(self.test_values.clone())),
+            ("val_values", Value::Array(self.val_values.clone())),
             ("predict_values", Value::Array(self.predict_values.clone())),
             (
                 "unknown_policy",
@@ -720,9 +838,11 @@ impl PartitionsSpec {
             ),
             ("train", self.train.clone()),
             ("test", self.test.clone()),
+            ("val", self.val.clone()),
             ("predict", self.predict.clone()),
             ("train_file", json_opt_str(&self.train_file)),
             ("test_file", json_opt_str(&self.test_file)),
+            ("val_file", json_opt_str(&self.val_file)),
             ("predict_file", json_opt_str(&self.predict_file)),
         ])
     }
@@ -745,7 +865,8 @@ impl FoldsSpec {
         Ok(Some(Self {
             inline: match m.get("inline") {
                 Some(Value::Array(a)) => a.clone(),
-                _ => vec![],
+                Some(_) => return Err(SpecError::new("folds.inline must be an array")),
+                None => vec![],
             },
             file: opt_string(m.get("file")),
             format: match m.get("format") {
@@ -792,10 +913,12 @@ impl AggregateSpec {
                 None => AggregateMethod::Mean,
             },
             exclude_outliers: bool_default(m, "exclude_outliers", false),
-            outlier_threshold: m
-                .get("outlier_threshold")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.95),
+            outlier_threshold: match m.get("outlier_threshold") {
+                None => 0.95,
+                Some(value) => value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| {
+                    SpecError::new("aggregate.outlier_threshold must be a finite number")
+                })?,
+            },
         }))
     }
 
@@ -1010,6 +1133,34 @@ mod tests {
     }
 
     #[test]
+    fn file_fold_format_survives_the_typed_spec_roundtrip() {
+        for format in ["auto", "csv", "json"] {
+            let spec = DatasetSpec::from_value(&json!({
+                "sources": [{"id": "x", "role": "features", "input": "X.csv"}],
+                "folds": {"file": "folds.csv", "format": format}
+            }))
+            .unwrap();
+            let value = spec.to_value();
+            assert_eq!(spec.folds.as_ref().unwrap().format.value(), format);
+            if format == "auto" {
+                assert_eq!(spec.folds.as_ref().unwrap().format, FoldFormat::Auto);
+                assert!(value["folds"].get("format").is_none());
+            } else {
+                assert_eq!(value["folds"]["format"], format);
+            }
+            assert_eq!(DatasetSpec::from_value(&value).unwrap(), spec);
+        }
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"file":"folds.csv"}),
+        ] {
+            let folds = FoldsSpec::from_value(Some(&value)).unwrap().unwrap();
+            assert_eq!(folds.format, FoldFormat::Auto);
+            assert!(folds.to_value().get("format").is_none());
+        }
+    }
+
+    #[test]
     fn omission_rules() {
         // task_type=auto omitted, sample_index default omitted, strict_columns
         // only-when-false, input keeps empty list.
@@ -1058,5 +1209,87 @@ mod tests {
         ); // int(2.0)
         assert_eq!(sv(json!({"sources": []})).unwrap(), 1); // default
         assert!(sv(json!({"schema_version": "bad", "sources": []})).is_err()); // not silently v1
+    }
+}
+
+#[cfg(test)]
+mod validation_partition_spec_tests {
+    use super::PartitionsSpec;
+    use serde_json::json;
+
+    #[test]
+    fn val_roundtrips_and_absent_fields_keep_literal_emission() {
+        for input in [
+            json!({"by":"column","column":"set","val_values":["val"]}),
+            json!({"by":"index","val":[2,6]}),
+            json!({"by":"index_file","val_file":"val.json"}),
+        ] {
+            let parsed = PartitionsSpec::from_value(Some(&input)).unwrap().unwrap();
+            assert_eq!(parsed.to_value(), input);
+        }
+        for (input, literal) in [
+            (
+                json!({"by":"index","train":[0]}),
+                r#"{"by":"index","train":[0]}"#,
+            ),
+            (
+                json!({"by":"index_file","train_file":"train.json"}),
+                r#"{"by":"index_file","train_file":"train.json"}"#,
+            ),
+            (
+                json!({"by":"column","column":"set","train_values":["train"]}),
+                r#"{"by":"column","column":"set","train_values":["train"]}"#,
+            ),
+        ] {
+            let parsed = PartitionsSpec::from_value(Some(&input)).unwrap().unwrap();
+            assert_eq!(parsed.to_value().to_string(), literal);
+        }
+    }
+}
+
+#[cfg(test)]
+mod partition_label_declaration_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn all_four_lists_refuse_non_scalar_labels_with_specific_name() {
+        for name in [
+            "train_values",
+            "test_values",
+            "val_values",
+            "predict_values",
+        ] {
+            for bad in [Value::Null, json!([]), json!({})] {
+                let mut value = json!({"by":"column","column":"set"});
+                value[name] = json!([bad]);
+                let spec = PartitionsSpec::from_value(Some(&value)).unwrap().unwrap();
+                assert!(spec
+                    .validate_column_values()
+                    .unwrap_err()
+                    .message
+                    .contains(name));
+            }
+        }
+        // serde_json cannot hold nonfinite numeric declarations: these become
+        // null, which the same typed declaration guard refuses, never a wildcard.
+        assert_eq!(Value::from(f64::INFINITY), Value::Null);
+        assert_eq!(Value::from(f64::NAN), Value::Null);
+    }
+
+    #[test]
+    fn finite_scalar_keys_and_existing_unicode_overlap_rules_stay() {
+        for (left, right, collision) in [
+            (json!("ΣΑΣ"), json!("σας"), true),
+            (json!("İ"), json!("i\u{0307}"), true),
+            (json!("ß"), json!("SS"), false),
+            (json!(1), json!("1"), true),
+            (json!(1), json!(1.0), false),
+            (json!(true), json!("true"), true),
+        ] {
+            let value = json!({"by":"column","column":"set","train_values":[left.clone(),left],"test_values":[right]});
+            let spec = PartitionsSpec::from_value(Some(&value)).unwrap().unwrap();
+            assert_eq!(spec.validate_column_values().is_err(), collision);
+        }
     }
 }

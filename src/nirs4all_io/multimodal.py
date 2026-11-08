@@ -146,6 +146,11 @@ def _array_to_dict(array: np.ndarray) -> dict[str, Any]:
 
 def _array_from_dict(value: Any, label: str) -> np.ndarray:
     record = _closed_fields(value, {"dtype", "shape", "values"}, label)
+    # The ONE normalization of a serialized declared-float array: the original JSON integer/float cells meet the declared
+    # dtype here, before numpy infers anything. (Function-level import: ``dataset_facade`` imports this module.)
+    from .dataset_facade import _declared_float_cells
+
+    record = _declared_float_cells(record)
     if not isinstance(record["dtype"], str):
         raise ValueError(f"{label}.dtype must be a dtype string")
     try:
@@ -790,6 +795,10 @@ class MultimodalDataset:
         ``presence_mask`` marks all its supplied rows present.
         Explicit ragged records are validated with ``RaggedSeriesSource``;
         their variable lengths never relax the existing dense source contract.
+        Every serialized array record is first normalized by the one declared-float gate
+        (``dataset_facade._declared_float_cells``): integer cells of a declared float array
+        are domain-checked, exact in float64 or directly rounded for float32, and float32
+        overflow/underflow refuses. Typed host arrays are not reinterpreted.
         """
         record = _closed_fields(
             payload, {"schema", "schema_version", "name", "sample_ids", "sources", "y", "groups", "partitions"},

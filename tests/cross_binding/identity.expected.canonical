@@ -1,6 +1,6 @@
 {
   "aggregate": null,
-  "assembled_schema_version": 2,
+  "assembled_schema_version": 3,
   "blocks": {
     "test": {
       "feature_headers": [
@@ -120,19 +120,17 @@
   "fold_provenance": [
     {
       "train_observation_ids": [
-        "O0",
-        "O2"
+        "O0"
       ],
       "validation_observation_ids": [
-        "O1"
+        "O2"
       ]
     }
   ],
   "folds": [
     [
       [
-        0,
-        2
+        0
       ],
       [
         1

@@ -17,6 +17,7 @@ pub use api::{
     load_role_tagged_assembled, load_role_tagged_assembled_with_limits, to_spec_role_tagged,
     RoleTaggedReadLimits, MAX_ROLE_TAGGED_FILE_BYTES, MAX_ROLE_TAGGED_TOTAL_BYTES,
 };
+pub use nirs4all_formats::{XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION};
 pub use nirs4all_io_core as core;
 pub use nirs4all_io_core::{canonical_json, CanonicalJsonError};
 pub use resolve::{resolve_list, resolve_path, InputItem, InputSet};

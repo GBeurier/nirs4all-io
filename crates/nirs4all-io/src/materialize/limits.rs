@@ -170,6 +170,13 @@ impl ReadBudget {
         )
     }
 
+    pub fn xlsx_limits(&self) -> nirs4all_formats::XlsxDecodeLimits {
+        nirs4all_formats::XlsxDecodeLimits {
+            max_decoded_file_bytes: self.limits.max_decoded_file_bytes,
+            decoded_allowance: self.decoded_allowance(),
+        }
+    }
+
     pub fn charge_decoded(&mut self, bytes: u64) -> Result<(), SpecError> {
         if bytes > self.decoded_allowance() {
             return Err(limit_error(

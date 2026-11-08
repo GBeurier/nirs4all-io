@@ -8,6 +8,7 @@ and Rust sides (`crates/nirs4all-io-core/tests/versions.rs`) cannot drift.
 from __future__ import annotations
 
 from nirs4all_io.materialize.assemble import ASSEMBLED_DATASET_VERSION
+from nirs4all_io.materialize.package import DATASET_PACKAGE_VERSION
 from nirs4all_io.spec.dataset_spec import SCHEMA_VERSION
 
 
@@ -18,5 +19,9 @@ def test_dataset_spec_schema_version() -> None:
 
 
 def test_assembled_dataset_wire_version() -> None:
-    """The versioned v2 summary/full wire replaced the unversioned v1 artifact."""
-    assert ASSEMBLED_DATASET_VERSION == 2
+    """The exact-F64 v3 wire (dtype/mask blocks, partition_order) retired v2."""
+    assert ASSEMBLED_DATASET_VERSION == 3
+
+
+def test_dataset_package_wire_version() -> None:
+    assert DATASET_PACKAGE_VERSION == 4

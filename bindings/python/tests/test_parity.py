@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 """Cross-language golden parity (EPIC 12.3): the pyo3 binding's to_spec / infer
 output, canonicalized, is byte-identical to the committed contract goldens — the
-same goldens the Rust facade and Python MVP reproduce. This proves the binding is
+same goldens the Rust facade and Python MVP reproduce, except for the explicitly
+bounded V1-RUST-MIXED-SPECTRAL-HEADER case. This proves the binding is
 on the byte-for-byte contract, not merely functional."""
 import json
 from pathlib import Path
@@ -61,4 +62,50 @@ def test_infer_dir_is_byte_identical_to_golden():
     ]:
         plan = nio.infer(str(CORPUS / case))
         produced = _normalize_contract_paths(canonical(plan))
-        assert produced == golden(gold), f"infer parity drift for {case}"
+        expected = golden(gold)
+        if case == "single_combined":
+            frozen = json.loads(expected)
+            frozen["params"]["data.csv"]["has_header"] = {"value": True, "score": 0.85}
+            roles = frozen["columns"][0]["column_roles"]
+            assert len(roles) == 13
+            for role in roles[:12]:
+                assert role["role"] == "features"
+                role["score"] = 0.9
+                role["evidence"] = ["monotonic nm/cm-1 wavelength column"]
+            assert roles[12]["role"] == "targets"
+            roles[12]["score"] = 0.65
+            roles[12]["evidence"] = ["numeric non-wavelength column alongside a spectral block"]
+            frozen["resolved_spec"]["sources"][0]["params"]["header_unit"] = "nm"
+            expected = golden("inf_single_combined.infer.rust-v1.canonical")
+            assert json.loads(expected) == frozen, "V1-RUST-MIXED-SPECTRAL-HEADER exceeded its reviewed delta"
+        assert produced == expected, f"infer parity drift for {case}"
+
+
+def test_explicit_header_options_precede_first_inference_read(tmp_path):
+    from nirs4all_io._adapter import _decode_targets, _matrix
+
+    path = tmp_path / "myspectra.csv"
+    path.write_text("".join(
+        f"0.{465041 + row * 10000:07};" + ";".join(["0.2"] * 699) + "\n"
+        for row in range(20)
+    ))
+    auto = nio.infer(str(path))
+    assert auto["params"][path.name]["header_ambiguous"] is True
+    assert auto.resolved_spec["sources"][0]["params"]["has_header"] is True
+    explicit = nio.infer(str(path), params={"has_header": True},
+                         file_params={path.name: {"has_header": False}})
+    assert explicit.resolved_spec["sources"][0]["params"]["has_header"] is False
+    assert not any("header_ambiguous" in warning for warning in explicit.warnings)
+    full = nio.assembled_full(explicit.resolved_spec)
+    block = full["blocks"]["train"]
+    assert block["n_samples"] == 20
+    matrix = block["x"][0]
+    x = _matrix(matrix)
+    assert x.shape == (20, 699)
+    assert x[0, 0] == 0.0465041
+    assert x[19, 0] == 0.0655041
+    assert all(matrix["validity"])
+    y = _decode_targets(block["y"])
+    assert y.shape == (20, 1)
+    assert (y == 0.2).all()
+    assert all(block["y"]["columns"][0]["block"]["validity"])

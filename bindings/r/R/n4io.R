@@ -14,11 +14,12 @@ n4io_to_spec <- function(input_json, conventions_json = NULL) {
 #' Inspect a data input and return the scored DatasetPlan (JSON string).
 #'
 #' @param input_json A JSON path string or file-list array.
-#' @param conventions_json Optional JSON array of convention names, or NULL.
+#' @param options_json NULL or an InferOptions JSON object with optional
+#'   \code{conventions}, \code{params}, and exact-name \code{file_params}.
 #' @return The DatasetPlan as a JSON string.
 #' @export
-n4io_infer <- function(input_json, conventions_json = NULL) {
-  .Call("r_n4io_infer", input_json, conventions_json)
+n4io_infer <- function(input_json, options_json = NULL) {
+  .Call("r_n4io_infer", input_json, options_json)
 }
 
 #' Materialize an input and return the assembled structural summary (JSON string).

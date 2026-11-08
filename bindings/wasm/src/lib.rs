@@ -10,9 +10,11 @@
 
 use nirs4all_io_core::canonical_json;
 use nirs4all_io_core::infer::memory::{
-    infer_browser_dataset, infer_decoded_records, infer_named_bytes, DecodedRecordSet, NamedBytes,
+    describe_tables as describe_named_tables, infer_browser_dataset, infer_decoded_records,
+    infer_named_bytes, DecodedRecordSet, DescribeOptions, NamedBytes,
 };
 use nirs4all_io_core::infer::propose::{propose_browser_dataset, ConfirmedLock};
+use nirs4all_io_core::infer::InferOptions;
 use nirs4all_io_core::materialize::{
     assemble_in_memory, AssembledDataset, InMemorySource, SourcePayload,
 };
@@ -40,12 +42,6 @@ struct WasmRecordSet {
     records: Vec<Value>,
 }
 
-#[derive(Deserialize, Default)]
-struct InferOptions {
-    #[serde(default)]
-    conventions: Vec<String>,
-}
-
 #[derive(Deserialize)]
 struct WasmConfirmedLock {
     kind: String,
@@ -58,8 +54,8 @@ struct WasmConfirmedLock {
 
 #[derive(Deserialize, Default)]
 struct ProposeOptions {
-    #[serde(default)]
-    conventions: Vec<String>,
+    #[serde(flatten)]
+    infer: InferOptions,
     #[serde(default)]
     confirmed: Vec<WasmConfirmedLock>,
 }
@@ -81,7 +77,8 @@ fn record_sets_from_js(record_sets: &JsValue) -> Result<Vec<WasmRecordSet>, JsEr
         .map_err(|_| JsError::new("recordSets must be an array: not serializable"))?
         .as_string()
         .ok_or_else(|| JsError::new("recordSets must be an array"))?;
-    serde_json::from_str(&text)
+    canonical_json::parse_json_value(&text)
+        .and_then(serde_json::from_value)
         .map_err(|e| JsError::new(&format!("recordSets must be an array: {e}")))
 }
 
@@ -95,8 +92,8 @@ fn to_js(value: &Value) -> Result<JsValue, JsError> {
 /// Normalize a spec/config JSON string into the canonical `DatasetSpec` JSON.
 #[wasm_bindgen]
 pub fn to_spec(spec_json: &str) -> Result<String, JsError> {
-    let value: Value =
-        serde_json::from_str(spec_json).map_err(|e| JsError::new(&format!("input JSON: {e}")))?;
+    let value: Value = canonical_json::parse_json_value(spec_json)
+        .map_err(|e| JsError::new(&format!("input JSON: {e}")))?;
     let spec = DatasetSpec::from_value(&normalize_to_spec_dict(&value))
         .map_err(|e| JsError::new(&e.message))?;
     canonical_json(&spec.to_value()).map_err(|e| JsError::new(&e.to_string()))
@@ -105,8 +102,8 @@ pub fn to_spec(spec_json: &str) -> Result<String, JsError> {
 /// Validate a `DatasetSpec` JSON string; throws (rejects) when invalid.
 #[wasm_bindgen]
 pub fn validate(spec_json: &str) -> Result<(), JsError> {
-    let value: Value =
-        serde_json::from_str(spec_json).map_err(|e| JsError::new(&format!("input JSON: {e}")))?;
+    let value: Value = canonical_json::parse_json_value(spec_json)
+        .map_err(|e| JsError::new(&format!("input JSON: {e}")))?;
     let spec = DatasetSpec::from_value(&value).map_err(|e| JsError::new(&e.message))?;
     validate_spec(&spec).map_err(|e| JsError::new(&e.message))?;
     Ok(())
@@ -117,6 +114,7 @@ pub fn validate(spec_json: &str) -> Result<(), JsError> {
 /// `files` must be an array of `{name, bytes}` where `bytes` is a
 /// `Uint8Array`. `options.conventions` can override the default
 /// `nirs4all-classic` convention list.
+/// `options.params` and exact-name `options.file_params` apply before inference reads.
 #[wasm_bindgen(js_name = inferFiles)]
 pub fn infer_files(files: JsValue, options: JsValue) -> Result<JsValue, JsError> {
     let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
@@ -129,13 +127,32 @@ pub fn infer_files(files: JsValue, options: JsValue) -> Result<JsValue, JsError>
             bytes: f.bytes,
         })
         .collect::<Vec<_>>();
-    let conventions = if options.conventions.is_empty() {
-        None
-    } else {
-        Some(options.conventions.as_slice())
-    };
-    let plan = infer_named_bytes(&named, conventions).map_err(|e| JsError::new(&e.message))?;
+    let plan = infer_named_bytes(&named, &options).map_err(|e| JsError::new(&e.message))?;
     to_js(&plan.to_value())
+}
+
+/// Inspect each original table independently, retaining NA and assembler column names.
+/// Per-file read refusals are returned in the descriptions; invalid arguments throw.
+#[wasm_bindgen(js_name = describeTables)]
+pub fn describe_tables(files: JsValue, options: JsValue) -> Result<JsValue, JsError> {
+    let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
+        .map_err(|e| JsError::new(&format!("files must be an array of {{name, bytes}}: {e}")))?;
+    let options: DescribeOptions = if options.is_null() || options.is_undefined() {
+        DescribeOptions::default()
+    } else {
+        serde_wasm_bindgen::from_value(options)
+            .map_err(|e| JsError::new(&format!("invalid describe options: {e}")))?
+    };
+    let named = files
+        .into_iter()
+        .map(|file| NamedBytes {
+            name: file.name,
+            bytes: file.bytes,
+        })
+        .collect::<Vec<_>>();
+    let descriptions = describe_named_tables(&named, &options);
+    let value = serde_json::to_value(descriptions).map_err(|e| JsError::new(&e.to_string()))?;
+    to_js(&value)
 }
 
 /// Infer a browser dataset plan from raw files and decoded spectral records.
@@ -167,13 +184,8 @@ pub fn infer_dataset(
             records: set.records,
         })
         .collect::<Vec<_>>();
-    let conventions = if options.conventions.is_empty() {
-        None
-    } else {
-        Some(options.conventions.as_slice())
-    };
     let plan =
-        infer_browser_dataset(&named, &sets, conventions).map_err(|e| JsError::new(&e.message))?;
+        infer_browser_dataset(&named, &sets, &options).map_err(|e| JsError::new(&e.message))?;
     to_js(&plan.to_value())
 }
 
@@ -224,12 +236,7 @@ pub fn propose_dataset(
             status: l.status,
         })
         .collect::<Vec<_>>();
-    let conventions = if opts.conventions.is_empty() {
-        None
-    } else {
-        Some(opts.conventions.as_slice())
-    };
-    let result = propose_browser_dataset(&named, &sets, &confirmed, conventions)
+    let result = propose_browser_dataset(&named, &sets, &confirmed, &opts.infer)
         .map_err(|e| JsError::new(&e.message))?;
     to_js(&result.to_value())
 }
@@ -263,10 +270,9 @@ pub fn infer_records(record_sets: JsValue) -> Result<JsValue, JsError> {
 /// sources (exact, then file-stem, then glob). Returns `AssembledDataset` as a
 /// plain JS object (per-partition `blocks` with `x`/`y`/headers/metadata + `folds`).
 ///
-/// Every numeric matrix `data` (X, y, processings) and `weights` is a
-/// `Float64Array` in which a missing value is `NaN`. JSON has no NaN, so a
-/// plain array would carry it as `null`, which JS arithmetic reads as 0.
-/// Metadata cells stay JSON values; a missing metadata cell is `null`.
+/// The owner full value carries exact assembled3 bytes and explicit masks.
+/// The existing typed-array view is retained; its DTO/mask interoperability
+/// requires separate stage4 qualification beyond this Rust type propagation.
 ///
 /// `index_file`/`folds.file` partitions are not browser-reachable here (no fs) and
 /// raise an error — column/inline partitions and folds work.
@@ -277,7 +283,9 @@ pub fn assemble_dataset(
     spec: &str,
 ) -> Result<JsValue, JsError> {
     let assembled = assemble_from_js(files, record_sets, spec)?;
-    let mut full = assembled.to_full_value();
+    let mut full: Value = assembled
+        .to_full_value()
+        .map_err(|error| JsError::new(&error))?;
     // The numbers cross as typed arrays below, not as JSON text.
     for block in full["blocks"]
         .as_object_mut()
@@ -339,12 +347,11 @@ fn get(object: &JsValue, key: &str) -> Result<JsValue, JsError> {
     js_sys::Reflect::get(object, &key.into()).map_err(js_err)
 }
 
-fn float64_array(values: &[f32]) -> js_sys::Float64Array {
-    let widened: Vec<f64> = values.iter().map(|&v| f64::from(v)).collect();
-    js_sys::Float64Array::from(widened.as_slice())
+fn float64_array(values: &[f64]) -> js_sys::Float64Array {
+    js_sys::Float64Array::from(values)
 }
 
-fn set_data(matrix: &JsValue, data: &[f32]) -> Result<(), JsError> {
+fn set_data(matrix: &JsValue, data: &[f64]) -> Result<(), JsError> {
     js_sys::Reflect::set(matrix, &"data".into(), &float64_array(data)).map_err(js_err)?;
     Ok(())
 }
@@ -369,8 +376,8 @@ fn assemble_from_js(
     let files: Vec<WasmFile> = serde_wasm_bindgen::from_value(files)
         .map_err(|e| JsError::new(&format!("files must be an array of {{name, bytes}}: {e}")))?;
     let record_sets = record_sets_from_js(&record_sets)?;
-    let value: Value =
-        serde_json::from_str(spec).map_err(|e| JsError::new(&format!("spec JSON: {e}")))?;
+    let value: Value = canonical_json::parse_json_value(spec)
+        .map_err(|e| JsError::new(&format!("spec JSON: {e}")))?;
     let spec = DatasetSpec::from_value(&value).map_err(|e| JsError::new(&e.message))?;
 
     let mut sources: Vec<InMemorySource> = Vec::with_capacity(files.len() + record_sets.len());

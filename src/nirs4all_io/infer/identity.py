@@ -12,8 +12,13 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from ..spec import DatasetSpec
+    from .plan import DatasetPlan
 
 # id-like column names (case-insensitive): sample_id, id, name, code, ref, key, *_id, ...
 _ID_NAME_RE = re.compile(r"^(sample[_ ]?id|sampleid|sample|id|name|code|ref(erence)?|key|index|spectrum[_ ]?id|scan[_ ]?id|.*_id|id_.*)$", re.IGNORECASE)
@@ -165,3 +170,171 @@ def classify_metadata_relation(x_df: pd.DataFrame, meta_df: pd.DataFrame, x_id: 
         if meta_df[col].is_unique and len(meta_df) < len(x_df):
             return "m:1", col, [f"shared dimension table keyed by '{col}' ({len(meta_df)} rows broadcast to {len(x_df)} samples)"]
     return None
+
+
+def source_preview(source: dict, refs: dict) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    """Project every input through the same bounded owner reader, or none."""
+    from pathlib import Path
+
+    from ..materialize.loaders import discovery_table
+    from ..spec.dataset_spec import LoadingParams
+
+    inputs = source["input"] if isinstance(source["input"], list) else [source["input"]]
+    frames, raw_frames = [], []
+    for name in inputs:
+        item = refs[name]
+        if item.extension not in {".csv", ".tsv", ".txt"}:
+            return None
+        table = discovery_table(Path(item.identity), LoadingParams.from_dict(source.get("params")))
+        if table is None:
+            return None
+        frames.append(table[0])
+        raw_frames.append(table[1])
+    if not frames or any(list(frame.columns) != list(frames[0].columns) for frame in frames):
+        return None
+    return pd.concat(frames, ignore_index=True), pd.concat(raw_frames, ignore_index=True)
+
+
+def key_sources_by_id(spec: dict, refs: dict, plan: DatasetPlan | None = None) -> None:
+    """Propose generated, partition-local keys without comparing or joining ids.
+
+    Missing operands are deliberately provisional. Full typed cardinality and
+    coverage are enforced by the existing materializer after user edits.
+    """
+    from pathlib import Path
+
+    from ..spec.dataset_spec import LoadingParams
+    from .describe import _detect_decimal, proposed_decimal
+    from .plan import Decision
+
+    sources = spec.get("sources", [])
+    # Vendor/declared lookup relations already have a deliberate identity policy.
+    if any(source.get("kind") == "lookup" for source in sources):
+        return
+    partitions = list(dict.fromkeys(source.get("partition") for source in sources))
+    groups = []
+    for partition in partitions:
+        group = [source for source in sources if source.get("partition") == partition]
+        anchor = next((source for source in group if source.get("role") in ("features", "mixed")), None)
+        if anchor is None:
+            continue
+        previews = {source["id"]: source_preview(source, refs) for source in group}
+        if any(value is None for value in previews.values()):
+            continue  # Never decide from a partially readable group/source.
+        profiles = {name: value for name, value in previews.items() if value is not None}
+        guesses = {}
+        for source in group:
+            frame = profiles[source["id"]][0]
+            guess = detect_sample_id(frame) if len(frame.columns) > 1 else None
+            if source is not anchor and guess is not None and (not guess.unique or pd.api.types.is_float_dtype(frame[guess.column])):
+                guess = None
+            if source.get("role") == "metadata" and guess is not None and not any(other.get("role") != "metadata" and guess.column in profiles[other["id"]][0].columns for other in group):
+                if plan is not None:
+                    name = "null" if partition is None else str(partition)
+                    plan.warnings.append(f"partition {name}: metadata label '{guess.column}' in source '{source['id']}' is not shared with features or targets; rows stay positional and are not verified by id; declare a key or join to align by identity")
+                guess = None
+            guesses[source["id"]] = guess
+        guess = guesses[anchor["id"]] or next((value for value in guesses.values() if value is not None), None)
+        groups.append((group, anchor, profiles, guess))
+    selected = next((guess for _, _, _, guess in groups if guess is not None), None)
+    if selected is None:
+        # Neutral discovery can recover a comma label already converted by a
+        # provisional decimal. It never participates in identity selection.
+        for group, anchor, profiles, _ in groups:
+            partition = anchor.get("partition")
+            for source in group:
+                inputs = source["input"] if isinstance(source["input"], list) else [source["input"]]
+                if source.get("role") != "metadata" or len(inputs) != 1 or source.get("params", {}).get("decimal_separator") != ",":
+                    continue
+                neutral = source_preview({**source, "params": {**source["params"], "decimal_separator": None}}, refs)
+                if neutral is None or len(neutral[0].columns) <= 1:
+                    continue
+                label = detect_sample_id(neutral[0])
+                if label is None or not label.unique or pd.api.types.is_float_dtype(neutral[0][label.column]):
+                    continue
+                if any(other.get("role") != "metadata" and label.column in profiles[other["id"]][0].columns for other in group):
+                    continue
+                params = source["params"]
+                decimal = proposed_decimal(Path(refs[inputs[0]].identity), LoadingParams.from_dict(params), key=label.column)
+                params.pop("decimal_separator", None)
+                if decimal == ",":
+                    params["decimal_separator"] = decimal
+                if plan is not None:
+                    name = "null" if partition is None else str(partition)
+                    warning = f"partition {name}: metadata label '{label.column}' in source '{source['id']}' is not shared with features or targets; rows stay positional and are not verified by id; declare a key or join to align by identity"
+                    if warning not in plan.warnings:
+                        plan.warnings.append(warning)
+                    entry = plan.params.get(Path(inputs[0]).name, {})
+                    entry.pop("decimal_separator", None)
+                    if decimal == ",":
+                        raw = profiles[source["id"]][1].drop(columns=[label.column], errors="ignore")
+                        _, score = _detect_decimal([list(raw.columns), *raw.values.tolist()])
+                        entry["decimal_separator"] = {"value": ",", "score": round(score, 3)}
+                        if pd.api.types.is_numeric_dtype(profiles[source["id"]][0][label.column]):
+                            plan.warnings.append(f"partition {name}: metadata label '{label.column}' in source '{source['id']}' also reads as numbers under decimal ','; source-wide decimals can rewrite or merge its values; declare decimal_separator '.' to keep comma-form values as text in this source")
+        return
+    key = selected.column
+    spec["sample_index"] = {"by": "id", "key": key}
+    if plan is not None and plan.identity is None:
+        plan.identity = Decision(key, selected.score, list(selected.evidence), ambiguous=not selected.unique)
+    for group, anchor, profiles, guess in groups:
+        # A single dataset identity cannot truthfully describe an id-free or
+        # differently keyed partition. Keep the required real operand visible.
+        frame = profiles[anchor["id"]][0]
+        profile = repetition_profile(frame[key]) if key in frame else None
+        repeated = bool(plan is not None and profile is not None and profile.is_repetition)
+        if plan is not None and profile is not None:
+            plan.params.setdefault("identity_repetition", {})[anchor["id"]] = {
+                "n_rows": profile.n_rows, "n_unique": profile.n_unique,
+                "avg_reps": profile.avg_reps, "is_repetition": profile.is_repetition,
+            }
+        if plan is not None and (guess is None or guess.column != key or any(key not in profiles[s["id"]][0] for s in group)):
+            plan.warnings.append(f"partition {anchor.get('partition')!r}: incomplete identity '{key}'; declare the join/identity before loading")
+        for source in group:
+            source["key"] = key
+            if source is not anchor:
+                join = source.setdefault("join", {"to": anchor["id"]})
+                join.update({"on": key, "how": "m:1" if repeated and source.get("role") in ("targets", "metadata") else "1:1", "coverage": "complete"})
+            inputs = source["input"] if isinstance(source["input"], list) else [source["input"]]
+            if len(inputs) == 1:
+                params = source.setdefault("params", {})
+                decimal = proposed_decimal(Path(refs[inputs[0]].identity), LoadingParams.from_dict(params), key=key)
+                params.pop("decimal_separator", None)
+                if decimal == ",":
+                    params["decimal_separator"] = decimal
+                if plan is not None:
+                    entry = plan.params.get(Path(inputs[0]).name, {})
+                    entry.pop("decimal_separator", None)
+                    if decimal == ",":
+                        raw = profiles[source["id"]][1].drop(columns=[key], errors="ignore")
+                        _, score = _detect_decimal([list(raw.columns), *raw.values.tolist()])
+                        entry["decimal_separator"] = {"value": ",", "score": round(score, 3)}
+            if plan is not None and source.get("role") in ("targets", "metadata") and key in frame and key in profiles[source["id"]][0]:
+                audit = coverage_audit(frame[key], profiles[source["id"]][0][key], other_name=source["id"])
+                audit["role"] = source.get("role")
+                audit["scope"] = "bounded_discovery_prefix"
+                audit["complete"] = False
+                plan.alignment.append(audit)
+                if audit["n_missing"]:
+                    plan.warnings.append(f"{audit['n_missing']} sample(s) have NO target in the sampled prefix of '{source['id']}'")
+
+
+def refuse_generated_identity(spec: DatasetSpec, refs: dict) -> None:
+    """Refuse unsafe generated identity at materialization, never in to_spec."""
+    from ..materialize.join import JoinError
+    from ..materialize.loaders import _COMMA_PAIR
+
+    if spec.sample_index.by.value != "id" or not isinstance(spec.sample_index.key, str):
+        return
+    key = spec.sample_index.key
+    for source in spec.to_dict()["sources"]:
+        if source.get("kind") == "lookup":
+            continue
+        preview = source_preview(source, refs)
+        if preview is None:
+            continue  # The existing reader owns unresolved dialect refusals.
+        frame, raw = preview
+        if key not in frame:
+            raise JoinError(f"source '{source['id']}': file '{source['input']}' missing identity key '{key}'; declare compatible keys/partitions")
+        if source.get("params", {}).get("decimal_separator") == "," and any(_COMMA_PAIR.fullmatch(str(value).strip()) for value in raw[key]):
+            raise JoinError(f"source '{source['id']}': file '{source['input']}' key '{key}' contains comma pairs under params.decimal_separator=','; declare an explicit identity/decimal policy")

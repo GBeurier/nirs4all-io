@@ -76,11 +76,11 @@ def _summary(a) -> dict:
     }
 
 
-def _read_v2_golden(path: Path) -> str:
+def _read_v3_golden(path: Path) -> str:
     """Accept only the explicitly versioned assembled-summary artifact wire."""
     value = json.loads(path.read_text(encoding="utf-8"))
     assert value.get("assembled_schema_version") == ASSEMBLED_DATASET_VERSION, (
-        "assembled golden uses the retired unversioned v1 wire; re-bless it as v2"
+        "assembled golden is not the current assembled3 wire; re-bless it from the producers"
     )
     return canonical_json(value)
 
@@ -94,4 +94,4 @@ def test_assembled_golden(case: str) -> None:
     if _ACCEPT:
         golden.write_text(produced, encoding="utf-8")
         return
-    assert produced == _read_v2_golden(golden), f"assembled drift for {case}"
+    assert produced == _read_v3_golden(golden), f"assembled drift for {case}"

@@ -6,6 +6,151 @@ use serde_json::{json, Value};
 fn input() -> Value {
     json!({"schema":"nirs4all.dataset.v1","schema_version":1,"origin_ids":["a","b","c","d"],"fold_ids":["0","0","1","1"],"dataset":{"schema":"nirs4all.multimodal-dataset","schema_version":1,"name":"public","sample_ids":["a","b","c","d"],"source_alignment":"strict","sources":[{"name":"spectra","sample_ids":["d","c","b","a"],"representation_id":"signal_1d","axes":["sample","wavelength"],"feature_names":null,"axis_units":{"wavelength":"nm"},"axis_coordinates":{"wavelength":[900,1000]},"array":{"dtype":"float64","shape":[4,2],"values":[[7.0,8.0],[5.0,6.0],[3.0,4.0],[1.0,2.0]]}}],"y":{"dtype":"float64","shape":[4],"values":[1.0,2.0,3.0,4.0]},"groups":null,"partitions":{"dtype":"<U5","shape":[4],"values":["train","train","train","train"]}}})
 }
+
+#[test]
+fn compiled_owner_vocabulary_is_the_actual_normalizer_domain() {
+    use nirs4all_io_core::public_dataset::{
+        CONTENT_IDENTITY_PROFILES, OWNER_ID, PUBLIC_RECORD_CONTENT_TYPES,
+    };
+    assert_eq!(OWNER_ID, "nirs4all-io");
+    assert_eq!(
+        CONTENT_IDENTITY_PROFILES,
+        ["sha256.raw.v1", "nirs4all.io.dataset-content.v1"]
+    );
+    assert_eq!(
+        PUBLIC_RECORD_CONTENT_TYPES,
+        [("nirs4all.dataset.v1", 1), ("nirs4all.dataset.v2", 2)]
+    );
+    for (schema, version) in PUBLIC_RECORD_CONTENT_TYPES {
+        let mut record = input();
+        record["schema"] = json!(schema);
+        record["schema_version"] = json!(version);
+        assert!(normalize_dataset(&record).is_ok());
+        for wrong in [
+            json!(3 - version),
+            json!(true),
+            json!(f64::from(*version)),
+            json!("1"),
+        ] {
+            record["schema_version"] = wrong;
+            assert!(normalize_dataset(&record).is_err());
+        }
+    }
+    let mut foreign = input();
+    foreign["schema"] = json!("foreign.dataset.v1");
+    assert!(normalize_dataset(&foreign).is_err());
+}
+
+#[test]
+fn u07_numeric_text_checks_underflow_and_original_integer_exactness_only_in_numeric_column() {
+    let original: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/runtime-u07-groups.json"
+    ))
+    .unwrap();
+    for token in [
+        "1e-400",
+        "2e-324",
+        "-2e-324",
+        "9007199254740993",
+        "340282366920938463463374607431768211456",
+    ] {
+        let mut record = original.clone();
+        record["dataset"]["sources"][3]["array"]["values"][0][0] = json!(token);
+        assert!(dataset_content_bytes(&record).is_err(), "whole: {token}");
+        assert!(u07_sources(&record).is_err(), "projection: {token}");
+    }
+    for (token, number) in [
+        ("0e5", 0.0_f64),
+        ("0.000e-999", 0.0),
+        ("-0.000e-999", -0.0),
+        ("18014398509481984", 18_014_398_509_481_984.0),
+        ("9007199254740992.0", 9_007_199_254_740_992.0),
+    ] {
+        let mut record = original.clone();
+        record["dataset"]["sources"][3]["array"]["values"][0][0] = json!(token);
+        record["dataset"]["sources"][3]["array"]["values"][0][1] = json!("1e-400");
+        let projected = u07_sources(&record).unwrap();
+        assert_eq!(projected["sources"]["metadata"]["rows"][0][1], "1e-400");
+        let mut numeric = record.clone();
+        // Object numeric values retain their separate public portable cap.
+        // Compare whole bytes only when that control belongs to its domain.
+        if number.abs() <= 9_007_199_254_740_991.0 {
+            numeric["dataset"]["sources"][3]["array"]["values"][0][0] = json!(number);
+            assert_eq!(
+                dataset_content_bytes(&record).unwrap(),
+                dataset_content_bytes(&numeric).unwrap()
+            );
+        } else {
+            assert!(dataset_content_bytes(&record).is_ok(), "{token}");
+        }
+    }
+}
+
+#[test]
+fn projection_content_hashes_the_same_declared_storage_values_that_supply_rows() {
+    use nirs4all_io_core::public_dataset::projected_matrix_dataset;
+    use sha2::{Digest, Sha256};
+    let input: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/runtime-u07-groups.json"
+    ))
+    .unwrap();
+    let ids = &input["dataset"]["sample_ids"];
+    let n = (1_i64 << 54) + (1_i64 << 30) + 1;
+    let run = |integer| {
+        let projections: Vec<Value> = input["dataset"]["sources"].as_array().unwrap().iter().enumerate().map(|(i, source)| {
+            json!({"source_id":source["name"],"sample_ids":ids,"array":{"dtype":if i == 0 {"float32"} else {"float64"},"shape":[2,1],"values":if i == 0 {json!([[integer],[integer]])} else {json!([[1.0],[1.0]])}},"feature_names":["encoded"],"presence_encoded":true})
+        }).collect();
+        let (output, provenance) = projected_matrix_dataset(&input, &projections).unwrap();
+        let mut normalized = projections.clone();
+        normalized[0]["array"]["values"] =
+            json!([[f64::from(integer as f32)], [f64::from(integer as f32)]]);
+        let (control, control_provenance) = projected_matrix_dataset(&input, &normalized).unwrap();
+        assert_eq!(output, control);
+        assert_eq!(provenance, control_provenance);
+        for (i, projection) in normalized.iter().enumerate() {
+            // Already-normalized producers keep the pre-existing tagged-tree framing.
+            let expected = format!(
+                "{:x}",
+                Sha256::digest(canonical_content_bytes(projection).unwrap())
+            );
+            assert_eq!(
+                provenance["source_projections"][i]["projection_content_fingerprint"],
+                expected
+            );
+        }
+        (output, provenance)
+    };
+    let (upper, upper_p) = run(n);
+    let (lower, lower_p) = run(n - 1);
+    // Literal pre-correction actual-owner delivered-dataset controls; the
+    // projection digest above is checked against the already-normalized input.
+    assert_eq!(
+        format!(
+            "{:x}",
+            Sha256::digest(dataset_content_bytes(&upper).unwrap())
+        ),
+        "89169f1513038d67318a6c1215a702d3bc950ced97f2d7912e18d7ba1eb45212"
+    );
+    assert_eq!(
+        format!(
+            "{:x}",
+            Sha256::digest(dataset_content_bytes(&lower).unwrap())
+        ),
+        "296d2452ca3c5d2fa6433605e3314dadbf2fba1dcd8e019b376e60a8ceb60f56"
+    );
+    assert_ne!(
+        upper["dataset"]["sources"][0]["array"]["values"],
+        lower["dataset"]["sources"][0]["array"]["values"]
+    );
+    assert_ne!(
+        dataset_content_bytes(&upper).unwrap(),
+        dataset_content_bytes(&lower).unwrap()
+    );
+    assert_ne!(
+        upper_p["source_projections"][0]["projection_content_fingerprint"],
+        lower_p["source_projections"][0]["projection_content_fingerprint"]
+    );
+}
 #[test]
 fn aligns_by_identity_and_preserves_folds_in_existing_package() {
     let normalized = normalize_dataset(&input()).unwrap();
@@ -203,9 +348,18 @@ fn matrix_targets_preserve_width_and_classification_is_explicit() {
     );
     assert!(dense_dataset_package(&value, "spectra").is_err());
     value["dataset"]["y"]["values"][0] = json!(16_777_217);
-    assert!(matrix_dataset_package(&value, "spectra")
+    assert!(matrix_dataset_package(&value, "spectra").is_ok());
+    let options = nirs4all_io_core::materialize::NumericStorageOptions {
+        targets: Some(nirs4all_io_core::materialize::NumericStorage::Float32),
+        ..Default::default()
+    };
+    assert!(
+        nirs4all_io_core::public_dataset::matrix_dataset_package_with_storage(
+            &value, "spectra", &options
+        )
         .unwrap_err()
-        .contains("float32"));
+        .contains("float32")
+    );
 }
 
 #[test]
@@ -387,10 +541,18 @@ fn masked_classifier_columns_preserve_independent_labels_and_observation_masks()
     assert_eq!(mask["target_mask"], value["dataset"]["target_mask"]);
     assert!(matrix_dataset_package(&value, "matrix").is_err());
     value["dataset"]["y"]["values"][1][1] = json!(16777217);
-    assert!(masked_matrix_dataset_package(&value, "matrix")
+    assert!(masked_matrix_dataset_package(&value, "matrix").is_ok());
+    let options = nirs4all_io_core::NumericStorageOptions {
+        targets: Some(nirs4all_io_core::NumericStorage::Float32),
+        ..Default::default()
+    };
+    assert!(
+        nirs4all_io_core::public_dataset::masked_matrix_dataset_package_with_storage(
+            &value, "matrix", &options
+        )
         .unwrap_err()
-        .to_string()
-        .contains("float32"));
+        .contains("float32")
+    );
     value["dataset"]["y"]["values"][1][1] = json!(3);
     value["dataset"]["target_names"] = json!(["class_a", "class_a"]);
     assert!(masked_matrix_dataset_package(&value, "matrix").is_err());
@@ -405,4 +567,36 @@ fn masked_classifier_columns_preserve_independent_labels_and_observation_masks()
     assert!(matrix_dataset_package(&value, "matrix").is_err());
     value["dataset"]["y"]["dtype"] = json!("float64");
     assert!(masked_matrix_dataset_package(&value, "matrix").is_err());
+}
+
+#[test]
+fn large_declared_arrays_reach_values_mismatch_without_a_cell_count_cap() {
+    let mut source = input();
+    source["dataset"]["sources"][0]["array"]["shape"] = json!([10_000, 2048]);
+    assert_eq!(
+        normalize_dataset(&source).unwrap_err(),
+        "Array shape differs from values"
+    );
+
+    let mut targets = input();
+    targets["dataset"]["y"]["shape"] = json!([10_000, 2048]);
+    assert_eq!(
+        normalize_dataset(&targets).unwrap_err(),
+        "Array shape differs from values"
+    );
+}
+
+#[test]
+fn public_array_dimensions_still_refuse_overflow_invalid_rank_and_invalid_dimensions() {
+    for (shape, expected) in [
+        (json!([usize::MAX, 2]), "Shape size overflows usize"),
+        (json!([]), "Invalid tensor rank"),
+        (json!([1, 1, 1, 1, 1, 1, 1, 1, 1]), "Invalid tensor rank"),
+        (json!([-1, 2]), "Shape must contain nonnegative integers"),
+        (json!([1.5, 2]), "Shape must contain nonnegative integers"),
+    ] {
+        let mut record = input();
+        record["dataset"]["sources"][0]["array"]["shape"] = shape;
+        assert_eq!(normalize_dataset(&record).unwrap_err(), expected);
+    }
 }

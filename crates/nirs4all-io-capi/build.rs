@@ -19,21 +19,12 @@ fn main() {
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed={}", config_path.display());
 
-    // On Linux, restrict the cdylib's exported symbols to the public `n4io_*`
-    // surface via a GNU ld version script (belt-and-suspenders: Rust already
-    // exports only `#[no_mangle]` symbols). macOS/Windows rely on that default,
-    // asserted by the ABI-check CI. cdylib-link-arg applies only to cdylibs.
-    let version_script = crate_dir.join("abi").join("version_script.map");
-    println!("cargo:rerun-if-changed={}", version_script.display());
+    // Rust already supplies the cdylib export list. A second, named ELF
+    // version script conflicts with rustc's anonymous script under GNU ld.
+    // The exact public symbol set is checked against abi/expected_symbols_*.
     match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("linux") => {
-            println!(
-                "cargo:rustc-cdylib-link-arg=-Wl,--version-script={}",
-                version_script.display()
-            );
-            // Without an explicit SONAME, GNU ld records Cargo's absolute
-            // output path as the BASE entry in .gnu.version_d. That makes an
-            // otherwise reproducible cdylib depend on its temporary target dir.
+            // Keep the SONAME independent of Cargo's temporary target path.
             println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libnirs4all_io_capi.so");
         }
         Ok("macos") => {

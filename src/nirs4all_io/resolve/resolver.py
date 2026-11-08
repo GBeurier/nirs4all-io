@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..spec.enums import SpecError
+
 # Known sidecar relationships: primary-extension -> companion-extensions sharing the stem.
 _SIDECAR_COMPANIONS: dict[str, tuple[str, ...]] = {
     ".img": (".hdr",),
@@ -103,7 +105,7 @@ def _group_sidecars(paths: list[Path]) -> dict[str, list[str]]:
 
 def _file_item(path: Path, sidecar_map: dict[str, list[str]], *, base: Path | None = None) -> InputItem:
     abspath = str(path.resolve())
-    ref = os.path.relpath(abspath, str(base)) if base else path.name
+    ref = os.path.relpath(str(path), str(base)) if base else path.name
     return InputItem(
         ref=ref,
         kind="file",
@@ -117,7 +119,8 @@ def _file_item(path: Path, sidecar_map: dict[str, list[str]], *, base: Path | No
 
 def _resolve_dir(path: Path, *, recursive: bool) -> InputSet:
     pattern = "**/*" if recursive else "*"
-    files = sorted((p for p in path.glob(pattern) if p.is_file()), key=lambda p: str(p.resolve()).lower())
+    files = sorted((p for p in path.glob(pattern) if p.is_file()), key=str)
+    files.sort(key=lambda p: str(p.resolve()).lower())
     # sidecar files are attached to primaries, not listed as standalone items
     sidecar_map = _group_sidecars(files)
     attached = {s for group in sidecar_map.values() for s in group}
@@ -128,7 +131,9 @@ def _resolve_dir(path: Path, *, recursive: bool) -> InputSet:
 def _resolve_paths(paths: list[str], *, recursive: bool) -> InputSet:
     expanded: list[Path] = []
     for raw in paths:
-        if _is_glob(raw):
+        if Path(raw).is_file():
+            expanded.append(Path(raw))
+        elif _is_glob(raw):
             expanded.extend(Path(p) for p in _glob.glob(raw, recursive=recursive))
         else:
             expanded.append(Path(raw))
@@ -189,3 +194,44 @@ def resolve(inp: Any, *, recursive: bool = False) -> InputSet:
         return InputSet(items=[_array_item("array", inp)], origin={"kind": "in_memory", "ref": "array"})
 
     raise TypeError(f"cannot resolve input of type {type(inp).__name__}")
+
+
+def _file_reference_table(iset: InputSet, spec: dict) -> dict[str, InputItem]:
+    """Bind only generated, used file refs; never discard distinct identities."""
+    used: list[str] = []
+    for source in spec.get("sources", []):
+        value = source.get("input")
+        used.extend(x for x in (value if isinstance(value, list) else [value]) if isinstance(x, str))
+    folds = spec.get("folds")
+    if isinstance(folds, dict) and isinstance(folds.get("file"), str):
+        used.append(folds["file"])
+    files = iset.files()
+    table: dict[str, InputItem] = {}
+    for ref in used:
+        candidates = [item for item in files if item.ref == ref]
+        if not candidates:
+            candidates = [item for item in files if item.identity == ref]
+        identities = sorted({item.identity for item in candidates})
+        if len(identities) > 1:
+            raise SpecError(f"input reference {ref!r} is ambiguous: {identities}")
+        if not candidates:
+            raise SpecError(f"generated input reference {ref!r} is not a resolved file")
+        table[ref] = candidates[0]
+    return table
+
+
+def _absolutize_file_references(spec: dict, table: dict[str, InputItem]) -> None:
+    for source in spec.get("sources", []):
+        value = source.get("input")
+        if isinstance(value, list):
+            source["input"] = [table[x].identity if isinstance(x, str) else x for x in value]
+        elif isinstance(value, str):
+            source["input"] = table[value].identity
+    folds = spec.get("folds")
+    if isinstance(folds, dict) and isinstance(folds.get("file"), str):
+        item = table[folds["file"]]
+        if folds.get("format", "auto") == "auto" and Path(item.identity).suffix.lower() != item.extension:
+            logical_format = {".csv": "csv", ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".txt": "txt"}.get(item.extension or "")
+            if logical_format:
+                folds["format"] = logical_format
+        folds["file"] = item.identity

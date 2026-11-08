@@ -1,0 +1,868 @@
+{
+  "schema_version": 1,
+  "rows": [
+    {
+      "id": "alias-store",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "store/ab12": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "store/cd34": "y\n1.5\n2.5\n"
+      },
+      "input": "aliases",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      },
+      "links": {
+        "aliases/Xcal.csv": "store/ab12",
+        "aliases/Ycal.csv": "store/cd34"
+      }
+    },
+    {
+      "id": "alias-dat",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "store/a.dat": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "store/b.dat": "y\n1.5\n2.5\n"
+      },
+      "input": [
+        "aliases/Xcal.csv",
+        "aliases/Ycal.csv"
+      ],
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      },
+      "links": {
+        "aliases/Xcal.csv": "store/a.dat",
+        "aliases/Ycal.csv": "store/b.dat"
+      }
+    },
+    {
+      "id": "directory-alias",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "real/Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "real/Ycal.csv": "y\n1.5\n2.5\n"
+      },
+      "input": "alias",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      },
+      "links": {
+        "alias": "real"
+      }
+    },
+    {
+      "id": "two-parents-shadow",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "features/Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "features/Ycal.csv": "y\n0\n1\n",
+        "labels/Ycal.csv": "y\n1.5\n2.5\n"
+      },
+      "input": [
+        "features/Xcal.csv",
+        "labels/Ycal.csv"
+      ],
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "fold-file",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "Ycal.csv": "y\n1.5\n2.5\n",
+        "folds.csv": "fold\n0\n1\n"
+      },
+      "input": ".",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression",
+        "folds": 2,
+        "fold_format": "auto"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "used-ambiguous",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "a/Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "b/Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n"
+      },
+      "input": [
+        "a/Xcal.csv",
+        "b/Xcal.csv"
+      ],
+      "expected": {
+        "error": "ambiguous"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "unused-duplicates",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "Ycal.csv": "y\n1.5\n2.5\n",
+        "a/readme.csv": "note\na\n",
+        "b/readme.csv": "note\nb\n"
+      },
+      "input": [
+        "Xcal.csv",
+        "Ycal.csv",
+        "a/readme.csv",
+        "b/readme.csv"
+      ],
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression",
+        "warning": "unassigned"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "resolver-literal-directory",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "run[2]/Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "run[2]/Ycal.csv": "y\n1.5\n2.5\n",
+        "run2/Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n7.1,7.1,7.1,7.1,7.1,7.1,7.1,7.1,7.1,7.1,7.1,7.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "run2/Ycal.csv": "y\n1.5\n2.5\n"
+      },
+      "input": [
+        "run[2]/Xcal.csv",
+        "run[2]/Ycal.csv"
+      ],
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "resolver-literal-no-neighbor",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "solo[3]/Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "solo[3]/Ycal.csv": "y\n1.5\n2.5\n"
+      },
+      "input": [
+        "solo[3]/Xcal.csv",
+        "solo[3]/Ycal.csv"
+      ],
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "literal-decoy",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "run[2]/a.csv": "x,y\n0.1,1.5\n0.1,2.5\n",
+        "run2/a.csv": "x,y\n7.1,1.5\n7.1,2.5\n"
+      },
+      "input": "run[2]/a.csv",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "y0": 1.5
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "literal-no-neighbor",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "solo[4].csv": "x,y\n0.4,1.5\n0.4,2.5\n"
+      },
+      "input": "solo[4].csv",
+      "expected": {
+        "x00": 0.4,
+        "n_samples": 2,
+        "y0": 1.5
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "literal-star",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "*.csv": "x,y\n0.2,1.5\n0.2,2.5\n",
+        "a.csv": "x,y\n7.2,1.5\n7.2,2.5\n"
+      },
+      "input": "*.csv",
+      "expected": {
+        "x00": 0.2,
+        "n_samples": 2,
+        "y0": 1.5
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      },
+      "platform": "unix"
+    },
+    {
+      "id": "genuine-glob",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "parts/part-1.csv": "x,y\n0.5,1.5\n0.5,2.5\n",
+        "parts/part-2.csv": "x,y\n0.6,1.5\n0.6,2.5\n"
+      },
+      "input": "parts/part-*.csv",
+      "expected": {
+        "x00": 0.5,
+        "n_samples": 4,
+        "y0": 1.5
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      }
+    },
+    {
+      "id": "base-pattern-before-direct",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "base/part-1.csv": "x,y\n0.5,1.5\n0.5,2.5\n",
+        "base/part-2.csv": "x,y\n0.6,1.5\n0.6,2.5\n",
+        "cwd/part-[12].csv": "x,y\n9.5,1.5\n9.5,2.5\n"
+      },
+      "input": "part-[12].csv",
+      "expected": {
+        "x00": 0.5,
+        "n_samples": 4,
+        "y0": 1.5
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      },
+      "base": "base",
+      "cwd": "cwd"
+    },
+    {
+      "id": "literal-base-pattern",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "run[2]/part-a.csv": "x,y\n0.5,1.5\n0.5,2.5\n",
+        "run2/part-a.csv": "x,y\n7.5,1.5\n7.5,2.5\n"
+      },
+      "input": "part-*.csv",
+      "expected": {
+        "x00": 0.5,
+        "n_samples": 2,
+        "y0": 1.5
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      },
+      "base": "run[2]"
+    },
+    {
+      "id": "variation-literal",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "main.csv": "x,y\n0.5,1.5\n0.5,2.5\n",
+        "run[2]/a.csv": "x\n0.1\n0.1\n",
+        "run2/a.csv": "x\n7.1\n7.1\n"
+      },
+      "input": "main.csv",
+      "expected": {
+        "x00": 0.5,
+        "n_samples": 2,
+        "y0": 1.5,
+        "processing_x00": 0.1
+      },
+      "attribution": {
+        "authority": "Root-adopted physical input literals and E1-E6/N1-N5; expected binary64 from the declared decimal values",
+        "Python_reference": "before/after execution receipts in author evidence",
+        "Rust_current": "UNRUN; required later, no historical602 inference claim"
+      },
+      "variation": "run[2]/a.csv"
+    },
+    {
+      "id": "named-literal",
+      "operation": "named",
+      "profile": "named-bytes-materialization-v1",
+      "files": {
+        "run[2]/x.csv": "x,y\n0.1,1.5\n0.1,2.5\n",
+        "run2/x.csv": "x,y\n7.1,1.5\n7.1,2.5\n"
+      },
+      "input": "run[2]/x.csv",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2
+      },
+      "attribution": {
+        "authority": "Root-adopted exact-name priority; physical literal values",
+        "current_core": "UNRUN",
+        "current_WASM": "UNRUN"
+      }
+    },
+    {
+      "id": "named-star",
+      "operation": "named",
+      "profile": "named-bytes-materialization-v1",
+      "files": {
+        "*.csv": "x,y\n0.2,1.5\n0.2,2.5\n",
+        "a.csv": "x,y\n7.2,1.5\n7.2,2.5\n"
+      },
+      "input": "*.csv",
+      "expected": {
+        "x00": 0.2,
+        "n_samples": 2
+      },
+      "attribution": {
+        "authority": "Root-adopted exact-name priority; physical literal values",
+        "current_core": "UNRUN",
+        "current_WASM": "UNRUN"
+      },
+      "platform": "unix"
+    },
+    {
+      "id": "named-record-literal",
+      "operation": "named-records",
+      "profile": "named-records-materialization-v1",
+      "records": {
+        "run[2]/x": [
+          {
+            "x": 0.1,
+            "y": 1.5
+          },
+          {
+            "x": 0.1,
+            "y": 2.5
+          }
+        ],
+        "run2/x": [
+          {
+            "x": 7.1,
+            "y": 9.5
+          },
+          {
+            "x": 7.1,
+            "y": 10.5
+          }
+        ]
+      },
+      "input": "run[2]/x",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2
+      },
+      "attribution": {
+        "authority": "Root-adopted exact-name/true-pattern contract and literal values",
+        "current_core": "UNRUN",
+        "current_WASM": "UNRUN"
+      }
+    },
+    {
+      "id": "named-variation",
+      "operation": "named",
+      "profile": "named-bytes-materialization-v1",
+      "files": {
+        "main.csv": "x,y\n0.5,1.5\n0.5,2.5\n",
+        "run[2]/x.csv": "x,y\n0.1,1.5\n0.1,2.5\n",
+        "run2/x.csv": "x,y\n7.1,1.5\n7.1,2.5\n"
+      },
+      "input": "main.csv",
+      "variation": "run[2]/x.csv",
+      "expected": {
+        "x00": 0.5,
+        "n_samples": 2,
+        "processing_x00": 0.1
+      },
+      "attribution": {
+        "authority": "Root-adopted exact-name/true-pattern contract and literal values",
+        "current_core": "UNRUN",
+        "current_WASM": "UNRUN"
+      }
+    },
+    {
+      "id": "named-genuine-glob",
+      "operation": "named",
+      "profile": "named-bytes-materialization-v1",
+      "files": {
+        "part-a.csv": "x,y\n0.5,1.5\n0.5,2.5\n",
+        "part-b.csv": "x,y\n0.6,1.5\n0.6,2.5\n"
+      },
+      "input": "part-*.csv",
+      "expected": {
+        "x00": 0.5,
+        "n_samples": 4
+      },
+      "attribution": {
+        "authority": "Root-adopted exact-name/true-pattern contract and literal values",
+        "current_core": "UNRUN",
+        "current_WASM": "UNRUN"
+      }
+    },
+    {
+      "id": "deep-directory-alias",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "deep/er/still/real/Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "deep/er/still/real/Ycal.csv": "y\n1.5\n2.5\n"
+      },
+      "input": "alias",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      },
+      "links": {
+        "alias": "deep/er/still/real"
+      }
+    },
+    {
+      "id": "alias-store-semicolon",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "store/ab12": "1000;1005;1010;1015;1020;1025;1030;1035;1040;1045;1050;1055\n0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1\n0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2\n",
+        "store/cd34": "y\n1.5\n2.5\n"
+      },
+      "input": "aliases",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      },
+      "links": {
+        "aliases/Xcal.csv": "store/ab12",
+        "aliases/Ycal.csv": "store/cd34"
+      }
+    },
+    {
+      "id": "folds-store-dir",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "store/ab12": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "store/cd34": "y\n1.5\n2.5\n",
+        "store/fb": "fold\n0\n1\n"
+      },
+      "input": "aliases",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression",
+        "folds": 2,
+        "fold_format": "csv"
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      },
+      "links": {
+        "aliases/Xcal.csv": "store/ab12",
+        "aliases/Ycal.csv": "store/cd34",
+        "aliases/folds.csv": "store/fb"
+      }
+    },
+    {
+      "id": "folds-store-list",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "store/ab12": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n",
+        "store/cd34": "y\n1.5\n2.5\n",
+        "store/fb": "fold\n0\n1\n"
+      },
+      "input": [
+        "aliases/Xcal.csv",
+        "aliases/Ycal.csv",
+        "aliases/folds.csv"
+      ],
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "nm",
+        "task": "regression",
+        "folds": 2,
+        "fold_format": "csv"
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      },
+      "links": {
+        "aliases/Xcal.csv": "store/ab12",
+        "aliases/Ycal.csv": "store/cd34",
+        "aliases/folds.csv": "store/fb"
+      }
+    },
+    {
+      "id": "binary-unparseable",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "store/bad.npy": "not a NumPy payload\n",
+        "store/cd34": "y\n1.5\n2.5\n"
+      },
+      "input": "aliases",
+      "expected": {
+        "load_error": true
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      },
+      "links": {
+        "aliases/Xcal.csv": "store/bad.npy",
+        "aliases/Ycal.csv": "store/cd34"
+      }
+    },
+    {
+      "id": "literal-list-all",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "literal[2].csv": "x,y\n0.2,1.5\n0.2,2.5\n",
+        "literal2.csv": "x,y\n7.2,9.5\n7.2,10.5\n",
+        "orphan[3].csv": "x,y\n0.3,1.5\n0.3,2.5\n"
+      },
+      "input": [
+        "literal[2].csv",
+        "orphan[3].csv"
+      ],
+      "expected": {
+        "x00": 0.2,
+        "n_samples": 4,
+        "y0": 1.5,
+        "x_values": [
+          0.2,
+          0.2,
+          0.3,
+          0.3
+        ]
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      }
+    },
+    {
+      "id": "literal-question",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "part-?.csv": "x,y\n0.2,1.5\n0.2,2.5\n",
+        "part-a.csv": "x,y\n7.2,1.5\n7.2,2.5\n"
+      },
+      "input": "part-?.csv",
+      "expected": {
+        "x00": 0.2,
+        "n_samples": 2,
+        "y0": 1.5
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      },
+      "platform": "unix"
+    },
+    {
+      "id": "nested-explicit-glob",
+      "profile": "filesystem-load-v1",
+      "operation": "load",
+      "files": {
+        "nested/spectra/part-a.csv": "x,y\n0.5,1.5\n0.5,2.5\n",
+        "nested/spectra/part-b.csv": "x,y\n0.6,1.5\n0.6,2.5\n",
+        "nested/metadata/part-a.csv": "x,y\n7.5,9.5\n7.5,10.5\n"
+      },
+      "input": "nested/spectra/part-*.csv",
+      "expected": {
+        "x00": 0.5,
+        "n_samples": 4,
+        "y0": 1.5,
+        "x_values": [
+          0.5,
+          0.5,
+          0.6,
+          0.6
+        ]
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      }
+    },
+    {
+      "id": "repeat-same-identity",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "Xcal.csv": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n"
+      },
+      "input": [
+        "Xcal.csv",
+        "Xcal.csv"
+      ],
+      "expected": {
+        "bindings_only": true
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      }
+    },
+    {
+      "id": "unique-aliases-same-identity",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "store/blob": "1000,1005,1010,1015,1020,1025,1030,1035,1040,1045,1050,1055\n0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2\n"
+      },
+      "input": [
+        "a/Xcal.csv",
+        "b/Xcal.csv"
+      ],
+      "expected": {
+        "bindings_only": true
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      },
+      "links": {
+        "a/Xcal.csv": "store/blob",
+        "b/Xcal.csv": "store/blob"
+      }
+    },
+    {
+      "id": "unknown-plan",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "a/readme.csv": "note\na\n",
+        "b/readme.csv": "note\nb\n"
+      },
+      "input": [
+        "a/readme.csv",
+        "b/readme.csv"
+      ],
+      "expected": {
+        "unknown": true
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      }
+    },
+    {
+      "id": "single-combined-alias",
+      "profile": "filesystem-infer-v1",
+      "operation": "infer",
+      "files": {
+        "store/combined": "1000;1005;1010;1015;1020;1025;1030;1035;1040;1045;1050;1055;y\n0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;0.1;1.5\n0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;0.2;2.5\n"
+      },
+      "input": "data.csv",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "unit": "text",
+        "task": "regression"
+      },
+      "attribution": {
+        "authority": "R1-R6 review physical inputs; literal decimal binary64 expectations; no new executed qualification claim",
+        "Python_reference": "UNRUN permanent regression",
+        "Rust_current": "UNRUN permanent regression"
+      },
+      "links": {
+        "data.csv": "store/combined"
+      }
+    },
+    {
+      "id": "a1-literal-directory-no-cwd-file",
+      "profile": "filesystem-directory-refusal-v1",
+      "operation": "directory-refusal",
+      "directories": [
+        "base/d[1]",
+        "cwd"
+      ],
+      "files": {},
+      "input": "d[1]",
+      "base": "base",
+      "cwd": "cwd",
+      "expected": {
+        "vendor_path": "base/d[1]"
+      },
+      "attribution": {
+        "authority": "Root-adopted Opus872 cumulative A1/A2; literal CSV values and directory fixture",
+        "Python_reference": "UNRUN at fixture authoring; see exact-hash execution receipts",
+        "Rust_current": "UNRUN; filesystem refusal control, no NumPy decode-equivalence claim"
+      }
+    },
+    {
+      "id": "a1-literal-directory-cwd-decoy",
+      "profile": "filesystem-directory-refusal-v1",
+      "operation": "directory-refusal",
+      "directories": [
+        "base/d[1]",
+        "cwd"
+      ],
+      "files": {
+        "cwd/d[1]": "x,y\n9.7,8.7\n9.8,8.8\n"
+      },
+      "input": "d[1]",
+      "base": "base",
+      "cwd": "cwd",
+      "expected": {
+        "vendor_path": "base/d[1]"
+      },
+      "attribution": {
+        "authority": "Root-adopted Opus872 cumulative A1/A2; literal CSV values and directory fixture",
+        "Python_reference": "UNRUN at fixture authoring; see exact-hash execution receipts",
+        "Rust_current": "UNRUN; filesystem refusal control, no NumPy decode-equivalence claim"
+      }
+    },
+    {
+      "id": "a1-base-pattern-before-literal-directory",
+      "profile": "filesystem-materialize-v1",
+      "operation": "load",
+      "directories": [
+        "base/d[1]",
+        "cwd"
+      ],
+      "files": {
+        "base/d1": "x,y\n0.1,1.5\n0.2,2.5\n",
+        "cwd/d[1]": "x,y\n9.7,8.7\n9.8,8.8\n"
+      },
+      "input": "d[1]",
+      "base": "base",
+      "cwd": "cwd",
+      "expected": {
+        "x00": 0.1,
+        "n_samples": 2,
+        "y0": 1.5,
+        "x_values": [
+          0.1,
+          0.2
+        ]
+      },
+      "attribution": {
+        "authority": "Root-adopted Opus872 cumulative A1/A2; literal CSV values and directory fixture",
+        "Python_reference": "UNRUN at fixture authoring; see exact-hash execution receipts",
+        "Rust_current": "UNRUN; filesystem refusal control, no NumPy decode-equivalence claim"
+      }
+    }
+  ]
+}

@@ -19,6 +19,56 @@ assert.throws(() => wasm.validate(JSON.stringify({ partitions: { by: "random" } 
 
 assert.match(wasm.version(), /^\d+\.\d+\.\d+/, "version looks like semver");
 
+// describeTables: original bytes/columns remain inspectable when NA aborts
+// assembly and, even with NA kept, incompatible identities refuse the join.
+{
+  const files = [
+    { name: "inspect-x.csv", bytes: new TextEncoder().encode("sample_id;1000\ns1;1\ns2;\n") },
+    { name: "inspect-y.csv", bytes: new TextEncoder().encode("sample_id;protein\ns9;9\ns8;8\n") },
+    { name: "inspect-odd.csv", bytes: new TextEncoder().encode(";a;a;batch\ns1;1;2;train\n\ns3;3;4;test\n") },
+    { name: "inspect-ambiguous.csv", bytes: new TextEncoder().encode("a,b\tc\n1,2\t3\n4,5\t6\n") },
+  ];
+  const originals = files.map((file) => Array.from(file.bytes));
+  const descriptions = wasm.describeTables(files, {
+    params: { "inspect-x.csv": { na: { policy: "remove_sample" } } },
+    distinct: [["inspect-y.csv", "sample_id"]],
+  });
+  assert.deepStrictEqual(descriptions.map((item) => item.name), files.map((file) => file.name));
+  assert.ok(descriptions.slice(0, 3).every((item) => item.readable));
+  assert.strictEqual(descriptions[0].n_rows, 2, "inspection retains the NA-bearing row");
+  assert.strictEqual(descriptions[0].params.na.policy, "ignore");
+  assert.strictEqual(descriptions[0].ignored_input_na_report.na_count, 1);
+  assert.ok(!("ignored_input_na_report" in descriptions[1]), "absent report stays absent");
+  assert.deepStrictEqual(descriptions[1].distinct.sample_id, ["s9", "s8"]);
+  assert.deepStrictEqual(descriptions[2].columns.map((column) => column.name), ["Unnamed: 0", "a", "a.1", "batch"]);
+  assert.strictEqual(descriptions[2].n_rows, 3, "physically empty observation is retained");
+  assert.strictEqual(descriptions[3].readable, false);
+  assert.strictEqual(descriptions[3].n_rows, null);
+  assert.ok(descriptions[3].delimiter_unresolved.candidates.includes(","));
+  assert.ok(descriptions[3].delimiter_unresolved.candidates.includes("\t"));
+  assert.deepStrictEqual(descriptions[3].columns, []);
+  const resolved = wasm.describeTables([files[3]], {
+    params: { "inspect-ambiguous.csv": { delimiter: "\t" } },
+  })[0];
+  assert.strictEqual(resolved.readable, true);
+  assert.deepStrictEqual(resolved.columns.map((column) => column.name), ["a,b", "c"]);
+  const inspectionSpec = {
+    sample_index: { by: "id", key: "sample_id" },
+    params: { na: { policy: "abort" } },
+    sources: [
+      { id: "x", role: "features", input: files[0].name, key: "sample_id" },
+      { id: "y", role: "targets", input: files[1].name, join: {
+        to: "x", left_on: "sample_id", right_on: "sample_id", cardinality: "1:1", coverage: "complete",
+      } },
+    ],
+  };
+  assert.throws(() => wasm.assembleDataset(files.slice(0, 2), [], JSON.stringify(inspectionSpec)), /NA values detected/);
+  inspectionSpec.params.na.policy = "ignore";
+  assert.throws(() => wasm.assembleDataset(files.slice(0, 2), [], JSON.stringify(inspectionSpec)), /coverage 'complete'/);
+  assert.deepStrictEqual(files.map((file) => Array.from(file.bytes)), originals, "input byte arrays are unchanged");
+  assert.throws(() => wasm.describeTables(files, { distinct: ["bad pair"] }), /invalid describe options/);
+}
+
 // inferFiles: browser/no-fs inference from named Uint8Array files.
 const plan = wasm.inferFiles(
   [
@@ -87,7 +137,7 @@ const assembled = wasm.assembleDataset(
 );
 // assembleDataset returns the full-value shape: blocks[part].x = [{data, n_rows,
 // n_cols}], metadata = {n_rows, columns: [{name, values}]}.
-assert.strictEqual(assembled.assembled_schema_version, 2, "assembled wire is explicitly v2");
+assert.strictEqual(assembled.assembled_schema_version, 3, "assembled wire is explicitly v3");
 const block = assembled.blocks.train;
 assert.strictEqual(block.n_samples, 3, "three assembled samples");
 assert.strictEqual(
@@ -171,7 +221,7 @@ const summaryCsv = JSON.parse(wasm.loadSummary(
     }],
   })
 ));
-assert.strictEqual(summaryCsv.assembled_schema_version, 2, "summary wire is explicitly v2");
+assert.strictEqual(summaryCsv.assembled_schema_version, 3, "summary wire is explicitly v3");
 assert.deepStrictEqual(summaryCsv.blocks.train.source_ids, ["x"], "summary preserves source ids");
 
 // proposeDataset: iterative builder surface. An X/y pair sharing sample_id ->
@@ -205,5 +255,30 @@ const stillOpen = confirmed.proposals.some(
   (p) => p.kind === "pairing" && p.target === pairing.target && p.status === "proposed"
 );
 assert.ok(!stillOpen, "the confirmed pairing proposal is suppressed");
+
+// Explicit choices reach inference before its first read; no host parsing rule.
+{
+  const name = "myspectra.csv";
+  const text = Array.from({ length: 20 }, (_, row) =>
+    `0.${String(465041 + row * 10000).padStart(7, "0")};${Array(699).fill("0.2").join(";")}\n`
+  ).join("");
+  const files = [{ name, bytes: new TextEncoder().encode(text) }];
+  const auto = wasm.inferDataset(files, [], {});
+  assert.strictEqual(auto.params[name].header_ambiguous, true);
+  assert.strictEqual(auto.resolved_spec.sources[0].params.has_header, true);
+  const options = { params: { has_header: true }, file_params: { [name]: { has_header: false } } };
+  for (const plan of [wasm.inferDataset(files, [], options), wasm.inferFiles(files, options)]) {
+    assert.strictEqual(plan.resolved_spec.sources[0].params.has_header, false);
+    assert.ok(!plan.warnings.some((warning) => warning.includes("header_ambiguous")));
+    const result = wasm.assembleDataset(files, [], JSON.stringify(plan.resolved_spec));
+    assert.strictEqual(result.blocks.train.n_samples, 20);
+    assert.strictEqual(result.blocks.train.x[0].data[0], 0.0465041);
+    assert.strictEqual(result.blocks.train.x[0].data[19 * 699], 0.0655041);
+  }
+  const proposal = wasm.proposeDataset(files, [], options);
+  assert.strictEqual(proposal.spec.sources[0].params.has_header, false);
+  assert.strictEqual(wasm.assembleDataset(files, [], JSON.stringify(proposal.spec)).blocks.train.n_samples, 20);
+  assert.throws(() => wasm.inferDataset(files, [], { file_params: { missing: { has_header: false } } }));
+}
 
 console.log("wasm node smoke OK");

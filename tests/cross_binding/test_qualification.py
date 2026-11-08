@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+from nirs4all_io.materialize.assemble import ASSEMBLED_DATASET_VERSION
+
 MODULE_PATH = Path(__file__).with_name("qualification.py")
 SPEC = importlib.util.spec_from_file_location("io_xlg_qualification", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -35,9 +37,17 @@ def test_complete_requires_every_surface_passed() -> None:
 def test_frozen_summary_carries_every_identity_axis() -> None:
     summary = json.loads(qualification.GOLDEN.read_text(encoding="utf-8"))
     qualification.validate_identity(summary)
-    assert summary["assembled_schema_version"] == 2
+    assert summary["assembled_schema_version"] == 3 == ASSEMBLED_DATASET_VERSION
     assert summary["blocks"]["train"]["source_ids"] == ["data"]
-    assert summary["folds"] == [[[0, 2], [1]]]
+    assert summary["folds"] == [[[0], [1]]]
+
+
+def test_report_identifiers_keep_profile_and_track_summary_version() -> None:
+    summary = json.loads(qualification.GOLDEN.read_text(encoding="utf-8"))
+    report = qualification.finalize_report(_rows())
+    assert report["schema_version"] == 1
+    assert report["qualification"] == "IO-XLG-001"
+    assert report["contract"] == f"assembled_dataset_summary_v{summary['assembled_schema_version']}"
 
 
 def test_strict_runner_never_installs_r_dependencies() -> None:

@@ -1,43 +1,59 @@
 /*
- * Bundle entry for the io.nirs4all.org Dataset Builder demo page.
+ * Host mount for the accepted nirs4all-ui `.1` column-mapping components.
  *
- * The reusable wizard itself lives in the sibling `nirs4all-ui` package
- * (`nirs4all-ui/datasetBuilder`); this file is a thin adapter that exposes a
- * `render()` on `window` so the no-build vanilla-JS io site can mount the React
- * component. Bundled to `vendor/dataset-builder.mjs` by `build-dataset-builder.mjs`.
+ * Composes three public components of `nirs4all-ui/datasetBuilder` (no wizard container, no
+ * auto-detection, no validation or export helpers) into one React root per call:
+ *   SourceSummaryCard, RoleSelectionCards, ColumnMappingTable.
+ * The handle contract matches the shared browser entry: `update` replaces the complete props,
+ * `unmount` releases the root. The host (dataset-builder.js) owns every id, role and selection.
  *
- * The relative import into `../../../nirs4all-ui/dist` reflects the ecosystem
- * working-tree layout (sibling repos side by side) documented in the root
- * CLAUDE.md; it is resolved at build time only.
+ * Bundled by build-dataset-builder.mjs from the verified `.1` package into
+ * vendor/ui-columns/column-mapping.mjs. `n4ui-datasetbuilder/*` is an esbuild alias for the
+ * extracted package's dist/datasetBuilder directory.
  */
 import { createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
 
-import { DatasetBuilder, autoDetectSource } from "../../../nirs4all-ui/dist/datasetBuilder/index.js";
-import type { DatasetBuilderProps, DatasetSource } from "../../../nirs4all-ui/dist/datasetBuilder/index.js";
+import { ColumnMappingTable } from "n4ui-datasetbuilder/ColumnMappingTable.js";
+import { RoleSelectionCards } from "n4ui-datasetbuilder/RoleSelectionCards.js";
+import { SourceSummaryCard } from "n4ui-datasetbuilder/SourceSummaryCard.js";
 
-const roots = new WeakMap<Element, Root>();
+type Props = Record<string, any>;
 
-function render(el: Element, props: DatasetBuilderProps): void {
-  let root = roots.get(el);
-  if (!root) {
-    root = createRoot(el);
-    roots.set(el, root);
-  }
-  root.render(createElement(DatasetBuilder, props));
+function ColumnEditor(p: Props) {
+  return createElement(
+    "div",
+    { className: "dsb dsb-host" },
+    createElement(SourceSummaryCard, { source: p.source, sources: p.sources, onChangeSource: p.onChangeSource, locale: "en" }),
+    createElement(RoleSelectionCards, { roles: p.roles, selectedCount: p.selectedCount, onAssignRole: p.onAssignRole, locale: "en" }),
+    createElement(ColumnMappingTable, {
+      columns: p.source.columns,
+      onToggleColumn: p.onToggleColumn,
+      onToggleAll: p.onToggleAll,
+      onAssignColumnRole: p.onAssignColumnRole,
+      filter: p.filter,
+      onFilterChange: p.onFilterChange,
+      showTip: false,
+      locale: "en",
+    }),
+  );
 }
 
-/** Run the package's pure auto-detection on a freshly-parsed source. */
-function detect(source: DatasetSource): DatasetSource {
-  return autoDetectSource(source);
+export function mountColumnMapping(host: HTMLElement, props: Props) {
+  const root = createRoot(host);
+  let active = true;
+  const render = (next: Props) => flushSync(() => root.render(createElement(ColumnEditor, next)));
+  render(props);
+  return {
+    update(next: Props) {
+      if (!active) throw new Error("column mapping: update() called after unmount()");
+      render(next);
+    },
+    unmount() {
+      if (!active) return;
+      active = false;
+      root.unmount();
+    },
+  };
 }
-
-declare global {
-  interface Window {
-    NIRS4ALL_DATASET_BUILDER: { render: typeof render; detect: typeof detect };
-  }
-}
-
-window.NIRS4ALL_DATASET_BUILDER = { render, detect };
-
-export { render, detect };

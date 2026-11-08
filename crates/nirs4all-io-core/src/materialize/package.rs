@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
-//! `DatasetPackage` — the target-agnostic v3 package (`IO-002` / `IO-MM-002`).
+//! `DatasetPackage` — the target-agnostic v4 package (`IO-002` / `IO-MM-002`).
 //!
-//! `AssembledDataset` stores its matrix payloads inline as dense `f32`
+//! `AssembledDataset` stores its matrix payloads inline as dense `f64`
 //! [`Matrix`]. That is fine for 1-D spectra but wrong for images / cubes (wrong
 //! dtype, wrong rank, pathological JSON size). [`DatasetPackage`] is versioned
 //! contract the `LOCK-IO` spec ratifies: a container of **typed payload blocks**
@@ -11,9 +11,9 @@
 //! canonical summary. Identity's **row-position fallback** is recorded explicitly
 //! and fingerprinted ([`RowPositionFallback`]), not left silent.
 //!
-//! `DatasetPackage` v3 is distinct from the explicitly versioned
-//! `AssembledDataset` v2 summary/full wire. [`DatasetPackage::from_assembled`]
-//! preserves every v2-expressible payload (proven by round-tripping through
+//! `DatasetPackage` v4 is distinct from the explicitly versioned
+//! `AssembledDataset` v3 summary/full wire. [`DatasetPackage::from_assembled`]
+//! preserves every supported assembled payload (proven by round-tripping through
 //! [`DatasetPackage::to_assembled`]); URI/tensor variants remain package-only.
 //! Neither wire silently accepts its retired predecessor.
 //!
@@ -32,14 +32,17 @@ use super::assemble::{
     identity_provenance_value, AssembledDataset, FoldProvenance, IdentityProvenance, PartitionBlock,
 };
 use super::folds::Fold;
-use super::frame::{Cell, Frame, Matrix};
+#[cfg(test)]
+use super::frame::Cell;
+use super::frame::{Frame, Matrix};
+use super::numeric::{NumericStorageOptions, PrecisionRecord};
 use crate::canonical_json::canonical_json;
 use crate::spec::dataset_spec::AggregateSpec;
 
 /// `DatasetPackage` wire-schema version. Distinct from
-/// `DATASET_SPEC_SCHEMA_VERSION` (1): this is a separate v3 wire and does not
-/// imply compatibility with package v2.
-pub const DATASET_PACKAGE_VERSION: u32 = 3;
+/// `DATASET_SPEC_SCHEMA_VERSION` (1): this is a separate v4 wire and does not
+/// imply compatibility with older packages.
+pub const DATASET_PACKAGE_VERSION: u32 = 4;
 
 /// Frozen representation-ID strings — a verbatim mirror of the published
 /// `dag-ml-data` `builtin_models.rs` registry (`DMD-001`). Kept here as plain
@@ -71,6 +74,27 @@ pub mod repr_ids {
     pub const MC_IMAGE: &str = "mc_image";
     /// `sample × height × width × band` multispectral image (net-new, declared).
     pub const MULTISPECTRAL_IMAGE: &str = "multispectral_image";
+}
+
+/// Assemble and package with the same initial storage selection and shape limits.
+pub fn package_in_memory_with_storage_and_tabular_limits(
+    spec: &crate::spec::DatasetSpec,
+    sources: &[super::assemble::InMemorySource],
+    index_lists: &std::collections::HashMap<String, Vec<i64>>,
+    fold_inline: Option<&[super::folds::Fold]>,
+    limits: Option<super::loaders::TabularReadLimits>,
+    options: &NumericStorageOptions,
+) -> Result<DatasetPackage, crate::spec::SpecError> {
+    let assembled = super::assemble::assemble_in_memory_with_storage_and_tabular_limits(
+        spec,
+        sources,
+        index_lists,
+        fold_inline,
+        limits,
+        options,
+    )?;
+    DatasetPackage::from_assembled_with_storage(&assembled, options)
+        .map_err(crate::spec::SpecError::new)
 }
 
 // --------------------------------------------------------------------------- //
@@ -163,6 +187,10 @@ pub struct UriRef {
 /// signal type and any named preprocessing variants.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeatureMatrix {
+    pub feature_names: Option<Vec<String>>,
+    pub source_id: String,
+    pub representation_id: String,
+    pub axes: Vec<Value>,
     /// Native `sample × feature` matrix.
     pub matrix: Matrix,
     /// Per-feature headers (axis labels / column names).
@@ -178,6 +206,7 @@ pub struct FeatureMatrix {
 /// A target table: a `sample × target` numeric matrix plus categorical mappings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TargetTable {
+    pub kinds: Vec<u8>,
     /// `sample × target` (encoded) matrix.
     pub matrix: Matrix,
     /// Target column headers.
@@ -198,8 +227,10 @@ pub struct MetadataTable {
 /// Per-sample training weights (sklearn-style `sample_weight`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct WeightsVector {
+    pub validity: Vec<bool>,
+    pub precision: PrecisionRecord,
     /// One weight per sample.
-    pub values: Vec<f32>,
+    pub values: Vec<f64>,
     /// The source column header, when known.
     pub header: Option<String>,
 }
@@ -352,7 +383,7 @@ impl PayloadBlock {
                     }
                     .to_string(),
                 );
-                e.dtype = "float32".into();
+                e.dtype = fm.matrix.precision.dtype.dtype().into();
                 e.shape = vec![fm.matrix.n_rows, fm.matrix.n_cols];
                 e.axes = axes;
                 inline(e, &feature_content_bytes(fm))
@@ -360,7 +391,13 @@ impl PayloadBlock {
             PayloadBlock::TargetTable(tt) => {
                 let mut e = base("targets", "target_table");
                 e.representation_id = tt.representation_id.clone();
-                e.dtype = "float32".into();
+                e.dtype = if tt.kinds.iter().all(|kind| *kind == 2) {
+                    "string-label".into()
+                } else if tt.kinds.contains(&2) {
+                    "mixed".into()
+                } else {
+                    tt.matrix.precision.dtype.dtype().into()
+                };
                 e.shape = vec![tt.matrix.n_rows, tt.matrix.n_cols];
                 e.axes = if tt.matrix.n_cols > 1 {
                     vec!["sample".into(), "target".into()]
@@ -379,7 +416,7 @@ impl PayloadBlock {
             }
             PayloadBlock::Weights(w) => {
                 let mut e = base("weights", "weights");
-                e.dtype = "float32".into();
+                e.dtype = w.precision.dtype.dtype().into();
                 e.shape = vec![w.values.len()];
                 e.axes = vec!["sample".into()];
                 inline(e, &weights_content_bytes(w))
@@ -468,7 +505,7 @@ pub struct RowPositionFallback {
     pub fingerprint: String,
 }
 
-/// The target-agnostic v3 dataset package (`AssembledDataset v2`).
+/// The target-agnostic v4 dataset package (`AssembledDataset v2`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DatasetPackage {
     /// Dataset name.
@@ -500,31 +537,179 @@ pub struct DatasetPackage {
 }
 
 impl DatasetPackage {
-    /// Represent an [`AssembledDataset`] as a v3 package, losslessly. Each `X`
+    /// Represent an [`AssembledDataset`] as a v4 package, losslessly. Each `X`
     /// source becomes a [`FeatureMatrix`] (carrying its processings), `y` a
     /// [`TargetTable`], metadata a [`MetadataTable`], weights a [`WeightsVector`].
     /// The row-position fallback decision is computed with the same rule the
     /// bridge uses for identity (aligned sample-id key in every partition).
-    pub fn from_assembled(assembled: &AssembledDataset) -> DatasetPackage {
+    pub fn from_assembled(assembled: &AssembledDataset) -> Result<DatasetPackage, String> {
+        Self::from_assembled_with_storage(assembled, &NumericStorageOptions::default())
+    }
+
+    pub fn from_assembled_with_storage(
+        assembled: &AssembledDataset,
+        options: &NumericStorageOptions,
+    ) -> Result<DatasetPackage, String> {
+        if options.consumer.as_deref() == Some("SpectroDataset")
+            && options.targets == Some(super::numeric::NumericStorage::Float64)
+            && assembled.blocks.values().any(|b| b.y.is_some())
+        {
+            return Err("SpectroDataset cannot guarantee an explicitly requested float64 numerical target view".into());
+        }
+        for block in assembled.blocks.values() {
+            if block.source_ids.len() != block.x.len()
+                || block
+                    .source_ids
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    != block.source_ids.len()
+            {
+                return Err("Missing/duplicate feature source IDs".into());
+            }
+            if block.x.iter().any(|m| m.n_rows != block.n_samples) {
+                return Err("Feature row count mismatch".into());
+            }
+            if block
+                .weights
+                .as_ref()
+                .is_some_and(|w| w.len() != block.n_samples)
+            {
+                return Err("Weight row count mismatch".into());
+            }
+        }
         let row_position_fallback = compute_row_position_fallback(assembled);
         let mut partitions: IndexMap<String, PackagePartition> = IndexMap::new();
         for (part, b) in &assembled.blocks {
             let mut payloads: Vec<(String, PayloadBlock)> = Vec::new();
             for k in 0..b.x.len() {
+                let matrix =
+                    b.x[k].with_storage(options.features, options.consumer.as_deref(), true)?;
+                let headers = b.feature_headers.get(k).cloned().unwrap_or_default();
+                if headers.len() != matrix.n_cols {
+                    return Err("Feature header count differs from matrix width".into());
+                }
+                let source_id = b
+                    .source_ids
+                    .get(k)
+                    .ok_or("Missing feature source id")?
+                    .clone();
+                let (representation_id, axes) = feature_descriptor(assembled, b, k)?;
                 let fm = FeatureMatrix {
-                    matrix: b.x[k].clone(),
+                    feature_names: b
+                        .feature_names
+                        .get(k)
+                        .cloned()
+                        .unwrap_or_else(|| Some(headers.clone())),
+                    source_id,
+                    representation_id,
+                    axes,
+                    matrix,
                     headers: b.feature_headers.get(k).cloned().unwrap_or_default(),
                     header_unit: b.header_units.get(k).cloned().unwrap_or_default(),
                     signal_type: b.signal_types.get(k).cloned().flatten(),
-                    processings: b.processings.get(k).cloned().unwrap_or_default(),
+                    processings: b
+                        .processings
+                        .get(k)
+                        .into_iter()
+                        .flatten()
+                        .map(|(name, m)| {
+                            if m.n_rows != b.n_samples || m.n_cols != b.x[k].n_cols {
+                                return Err("Processing shape differs from feature matrix".into());
+                            }
+                            Ok((
+                                name.clone(),
+                                m.with_storage(
+                                    options.features,
+                                    options.consumer.as_deref(),
+                                    true,
+                                )?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, String>>()?,
                 };
                 payloads.push((format!("{part}/x{k}"), PayloadBlock::FeatureMatrix(fm)));
             }
             if let Some(y) = &b.y {
                 let representation_id =
                     target_representation_id(&assembled.task_type, &b.y_headers, &b.y_categorical);
+                if b.y_headers.len() != y.n_cols || y.n_rows != b.n_samples {
+                    return Err("Target shape/header mismatch".into());
+                }
+                let kinds = b
+                    .y_headers
+                    .iter()
+                    .map(|name| {
+                        if b.y_categorical.contains_key(name) {
+                            2
+                        } else if matches!(
+                            assembled.task_type.as_str(),
+                            "classification" | "binary" | "multiclass"
+                        ) {
+                            1
+                        } else {
+                            0
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if kinds.contains(&2) && options.targets.is_some() {
+                    return Err(
+                        "Numeric precision request for string targets is unsupported".into(),
+                    );
+                }
+                let mut numeric_ir = y.clone();
+                if kinds.iter().all(|kind| *kind == 2) {
+                    numeric_ir.precision.source_dtype = None;
+                }
+                let matrix =
+                    numeric_ir.with_storage(options.targets, options.consumer.as_deref(), false)?;
+                for (column, kind) in kinds.iter().enumerate() {
+                    if *kind == 1 {
+                        for row in 0..matrix.n_rows {
+                            let pos = row * matrix.n_cols + column;
+                            if !matrix.validity[pos] {
+                                continue;
+                            }
+                            let label = y.data[pos];
+                            if label.fract() != 0.0 || label.abs() > 9_007_199_254_740_991.0 {
+                                return Err(
+                                    "Classification requires portable integer labels".into()
+                                );
+                            }
+                            super::numeric::validate_label(label as i64, matrix.precision.dtype)?;
+                        }
+                    }
+                }
+                for (column, kind) in kinds.iter().enumerate() {
+                    if *kind == 2 {
+                        let categories = b.y_categorical[&b.y_headers[column]]["categories"]
+                            .as_array()
+                            .ok_or("Invalid categorical codebook")?;
+                        if categories
+                            .iter()
+                            .any(|v| v.as_str().is_none_or(|s| s.is_empty()))
+                        {
+                            return Err("Unsupported string categorical labels".into());
+                        }
+                        for row in 0..matrix.n_rows {
+                            let pos = row * matrix.n_cols + column;
+                            let value = matrix.data[pos];
+                            if matrix.validity[pos] && matrix.data[pos] != y.data[pos] {
+                                return Err("Categorical codes cannot change during numeric storage projection".into());
+                            }
+                            if matrix.validity[pos]
+                                && (value < 0.0
+                                    || value.fract() != 0.0
+                                    || value >= categories.len() as f64)
+                            {
+                                return Err("Categorical code out of range".into());
+                            }
+                        }
+                    }
+                }
                 let tt = TargetTable {
-                    matrix: y.clone(),
+                    kinds,
+                    matrix,
                     headers: b.y_headers.clone(),
                     categorical: b.y_categorical.clone(),
                     representation_id,
@@ -540,10 +725,19 @@ impl DatasetPackage {
                 ));
             }
             if let Some(w) = &b.weights {
+                let mut matrix = Matrix::new(w.clone(), w.len(), 1);
+                matrix.precision = b.weights_precision.clone();
+                if let Some(validity) = &b.weights_validity {
+                    matrix.validity = validity.clone();
+                }
+                let matrix =
+                    matrix.with_storage(options.weights, options.consumer.as_deref(), false)?;
                 payloads.push((
                     format!("{part}/weights"),
                     PayloadBlock::Weights(WeightsVector {
-                        values: w.clone(),
+                        values: matrix.data,
+                        validity: matrix.validity,
+                        precision: matrix.precision,
                         header: b.weights_header.clone(),
                     }),
                 ));
@@ -557,7 +751,7 @@ impl DatasetPackage {
                 },
             );
         }
-        DatasetPackage {
+        let package = DatasetPackage {
             name: assembled.name.clone(),
             task_type: assembled.task_type.clone(),
             signal_type: assembled.signal_type.clone(),
@@ -571,12 +765,24 @@ impl DatasetPackage {
             audits: assembled.audits.clone(),
             partitions,
             row_position_fallback,
-        }
+        };
+        package.validate_storage()?;
+        Ok(package)
     }
 
     /// Reconstruct the [`AssembledDataset`] this package was built from. The
-    /// inverse of [`from_assembled`](Self::from_assembled) over the v2-expressible
-    /// payloads — the losslessness proof.
+    /// inverse of [`from_assembled`](Self::from_assembled) over the supported assembled
+    /// payloads after storage normalization. Raw Rust execution IR from
+    /// `Matrix::new` / assembly carries NaN with a false validity bit; it need
+    /// not satisfy canonical storage validation. This Rust package view instead
+    /// retains exact positive-zero placeholders and their false masks for X,
+    /// processings, targets and weights. Observed values retain their selected
+    /// precision, including signed zero and subnormals. Read data with validity;
+    /// data alone is never a logical view or the original masked sentinel.
+    /// Whole-content evidence remains in the owner record/content identity.
+    /// Logical presentation is explicit at consumers: the wire carries bytes
+    /// plus masks, the Python adapter copies them to NaN, and DMD enforces its
+    /// mask support. Python's in-memory NaN contract is unchanged.
     pub fn to_assembled(&self) -> AssembledDataset {
         let mut blocks: IndexMap<String, PartitionBlock> = IndexMap::new();
         for (part, p) in &self.partitions {
@@ -590,6 +796,9 @@ impl DatasetPackage {
                     PayloadBlock::FeatureMatrix(fm) => {
                         block.x.push(fm.matrix.clone());
                         block.feature_headers.push(fm.headers.clone());
+                        block.feature_names.push(fm.feature_names.clone());
+                        block.feature_axes.push(fm.axes.clone());
+                        block.representation_ids.push(fm.representation_id.clone());
                         block.header_units.push(fm.header_unit.clone());
                         block.signal_types.push(fm.signal_type.clone());
                         block.processings.push(fm.processings.clone());
@@ -604,6 +813,8 @@ impl DatasetPackage {
                     }
                     PayloadBlock::Weights(w) => {
                         block.weights = Some(w.values.clone());
+                        block.weights_validity = Some(w.validity.clone());
+                        block.weights_precision = w.precision.clone();
                         block.weights_header = w.header.clone();
                     }
                     // Package-only payloads have no `PartitionBlock` slot.
@@ -691,6 +902,253 @@ impl DatasetPackage {
         })
     }
 
+    pub fn validate_storage(&self) -> Result<(), String> {
+        for partition in self.partitions.values() {
+            let ordered_sources = partition
+                .payloads
+                .iter()
+                .filter_map(|(_, payload)| match payload {
+                    PayloadBlock::FeatureMatrix(feature) => Some(&feature.source_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if ordered_sources != partition.source_ids.iter().collect::<Vec<_>>() {
+                return Err("Ordered feature sources disagree with partition source IDs".into());
+            }
+            for kind in ["targets", "metadata", "weights"] {
+                let count = partition
+                    .payloads
+                    .iter()
+                    .filter(|(_, payload)| {
+                        matches!(
+                            (kind, payload),
+                            ("targets", PayloadBlock::TargetTable(_))
+                                | ("metadata", PayloadBlock::MetadataTable(_))
+                                | ("weights", PayloadBlock::Weights(_))
+                        )
+                    })
+                    .count();
+                if count > 1 {
+                    return Err(format!("Multiple {kind} payloads cannot be represented by the assembled owner seam"));
+                }
+            }
+            let mut ids = std::collections::HashSet::new();
+            let mut sources = std::collections::HashSet::new();
+            for (id, payload) in &partition.payloads {
+                if !ids.insert(id) {
+                    return Err("Duplicate payload ID".into());
+                }
+                match payload {
+                    PayloadBlock::FeatureMatrix(f) => {
+                        f.matrix.validate_storage(true)?;
+                        for audit in self.audits.iter().filter(|audit| {
+                            audit["source"] == f.source_id && audit.get("projection_axes").is_some()
+                        }) {
+                            let axes = super::projection::axes_from_full(
+                                &audit["projection_axes"],
+                                f.matrix.n_cols,
+                            )?;
+                            if super::projection::axes_full(&axes)?
+                                != super::projection::axes_full(&f.axes)?
+                                || audit["projection_representation_id"].as_str()
+                                    != Some(f.representation_id.as_str())
+                            {
+                                return Err(
+                                    "Exact feature axes/representation disagree with owner audits"
+                                        .into(),
+                                );
+                            }
+                        }
+                        if f.source_id.trim().is_empty()
+                            || !sources.insert(&f.source_id)
+                            || f.matrix.n_rows != partition.n_samples
+                            || f.headers.len() != f.matrix.n_cols
+                            || f.feature_names
+                                .as_ref()
+                                .is_some_and(|names| names.len() != f.matrix.n_cols)
+                        {
+                            return Err("Feature shape/source/header mismatch".into());
+                        }
+                        for axis in &f.axes {
+                            if axis["name"].as_str().is_none_or(str::is_empty)
+                                || (!axis["unit"].is_null() && !axis["unit"].is_string())
+                            {
+                                return Err("Invalid feature axis".into());
+                            }
+                            if let Some(coords) = axis["coordinates"].as_array() {
+                                if coords.len() != f.matrix.n_cols
+                                    || !(coords
+                                        .iter()
+                                        .all(|v| super::numeric::exact_json_number_f64(v).is_ok())
+                                        || coords.iter().all(Value::is_string))
+                                {
+                                    return Err("Invalid feature axis coordinates".into());
+                                }
+                            } else if !axis["coordinates"].is_null() {
+                                return Err("Invalid feature axis coordinates".into());
+                            }
+                        }
+                        for (_, matrix) in &f.processings {
+                            matrix.validate_storage(true)?;
+                            if matrix.n_rows != f.matrix.n_rows
+                                || matrix.n_cols != f.matrix.n_cols
+                                || matrix.precision.dtype != f.matrix.precision.dtype
+                            {
+                                return Err("Processing storage/shape differs from features; select an explicit common features storage request".into());
+                            }
+                        }
+                    }
+                    PayloadBlock::TargetTable(t) => {
+                        t.matrix.validate_storage(false)?;
+                        if t.matrix.precision.consumer.as_deref() == Some("SpectroDataset")
+                            && t.matrix.precision.requested_dtype
+                                == Some(super::numeric::NumericStorage::Float64)
+                        {
+                            return Err("SpectroDataset cannot guarantee an explicitly requested float64 numerical target view".into());
+                        }
+                        if t.kinds.len() != t.headers.len()
+                            || t.matrix.n_cols != t.headers.len()
+                            || t.matrix.n_rows != partition.n_samples
+                            || t.headers
+                                .iter()
+                                .collect::<std::collections::HashSet<_>>()
+                                .len()
+                                != t.headers.len()
+                        {
+                            return Err("Target kind/shape/header mismatch".into());
+                        }
+                        for (column, &kind) in t.kinds.iter().enumerate() {
+                            if kind > 2 {
+                                return Err("Unknown target kind".into());
+                            }
+                            if kind == 2 && t.matrix.precision.requested_dtype.is_some() {
+                                return Err("Numeric precision request for string target".into());
+                            }
+                            for row in 0..t.matrix.n_rows {
+                                let pos = row * t.matrix.n_cols + column;
+                                if !t.matrix.validity[pos] {
+                                    continue;
+                                }
+                                if kind == 2 {
+                                    if super::projection::target_string(t, row, column)
+                                        .is_none_or(str::is_empty)
+                                    {
+                                        return Err("Invalid categorical code/label".into());
+                                    }
+                                } else if kind == 1 {
+                                    let value = t.matrix.data[pos];
+                                    if value.fract() != 0.0 || value.abs() > 9_007_199_254_740_991.0
+                                    {
+                                        return Err(
+                                            "Classification label outside portable integer domain"
+                                                .into(),
+                                        );
+                                    }
+                                    super::numeric::validate_label(
+                                        value as i64,
+                                        t.matrix.precision.dtype,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    PayloadBlock::Weights(w) => {
+                        let mut matrix = Matrix::new(w.values.clone(), w.values.len(), 1);
+                        matrix.validity = w.validity.clone();
+                        matrix.precision = w.precision.clone();
+                        matrix.validate_storage(false)?;
+                        if matrix.n_rows != partition.n_samples {
+                            return Err("Weight row count mismatch".into());
+                        }
+                    }
+                    PayloadBlock::MetadataTable(metadata)
+                        if metadata.frame.n_rows != partition.n_samples
+                            || metadata
+                                .frame
+                                .columns
+                                .iter()
+                                .any(|column| column.values.len() != partition.n_samples) =>
+                    {
+                        return Err("Metadata shape differs from partition rows".into());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Exact v4 payload export. There is intentionally no whole-package Rust reader.
+    pub fn to_full_value(&self) -> Result<Value, String> {
+        self.validate_storage()?;
+        let mut value = self.to_summary_value();
+        value["partition_order"] = json!(self.partitions.keys().collect::<Vec<_>>());
+        value["audits"] = json!(self.audits);
+        let mut partitions = Map::new();
+        for (name, partition) in &self.partitions {
+            let mut payloads = Map::new();
+            for (id, payload) in &partition.payloads {
+                let (kind, body) = match payload {
+                    PayloadBlock::FeatureMatrix(feature) => (
+                        "feature_matrix",
+                        json!({
+                        "matrix":feature.matrix.full_value(),"headers":feature.headers,"header_unit":feature.header_unit,"signal_type":feature.signal_type,
+                        "source_id":feature.source_id,"feature_names":feature.feature_names,"representation_id":feature.representation_id,"axes":super::projection::axes_full(&feature.axes)?,
+                        "processings":feature.processings.iter().map(|(name,matrix)|json!({"name":name,"matrix":matrix.full_value()})).collect::<Vec<_>>() }),
+                    ),
+                    PayloadBlock::TargetTable(table) => (
+                        "target_table",
+                        json!({"columns":super::projection::target_columns(table),"categorical":table.categorical,"representation_id":table.representation_id}),
+                    ),
+                    PayloadBlock::Weights(weights) => {
+                        let mut matrix =
+                            Matrix::new(weights.values.clone(), weights.values.len(), 1);
+                        matrix.validity = weights.validity.clone();
+                        matrix.precision = weights.precision.clone();
+                        (
+                            "weights",
+                            json!({"matrix":matrix.full_value(),"header":weights.header}),
+                        )
+                    }
+                    PayloadBlock::MetadataTable(metadata) => (
+                        "metadata_table",
+                        serde_json::from_str(&frame_canonical_bytes(&metadata.frame))
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    PayloadBlock::SpectralRecordSet(records) => {
+                        ("spectral_record_set", json!({"records":records.records}))
+                    }
+                    PayloadBlock::NdTensor(tensor) => (
+                        "nd_tensor",
+                        json!({"representation_id":tensor.representation_id,"dtype":tensor.dtype,"shape":tensor.shape,"axis_names":tensor.axis_names,"observation_ids":tensor.observation_ids,"uri":tensor.uri}),
+                    ),
+                    PayloadBlock::SequenceBlock(sequence) => (
+                        "sequence_block",
+                        json!({"representation_id":sequence.representation_id,"dtype":sequence.dtype,"n_channels":sequence.n_channels,"lengths":sequence.lengths,"uri":sequence.uri}),
+                    ),
+                    PayloadBlock::GenotypeMatrix(genotype) => (
+                        "genotype_matrix",
+                        json!({"representation_id":genotype.representation_id,"n_variants":genotype.n_variants,"n_samples":genotype.n_samples,"encoding":genotype.encoding,"uri":genotype.uri}),
+                    ),
+                    PayloadBlock::MaskBlock(mask) => (
+                        "mask_block",
+                        json!({"representation_id":mask.representation_id,"dtype":mask.dtype,"shape":mask.shape,"uri":mask.uri}),
+                    ),
+                    PayloadBlock::UriBackedPayload(uri) => ("uri_backed_payload", json!(uri)),
+                };
+                if payloads
+                    .insert(id.clone(), json!({"kind":kind,"value":body}))
+                    .is_some()
+                {
+                    return Err("Duplicate payload ID".into());
+                }
+            }
+            partitions.insert(name.clone(),json!({"n_samples":partition.n_samples,"source_ids":partition.source_ids,"payloads":payloads}));
+        }
+        value["partitions"] = Value::Object(partitions);
+        Ok(value)
+    }
+
     /// The canonical-JSON string of [`to_summary_value`](Self::to_summary_value).
     pub fn to_canonical_summary(&self) -> String {
         canonical_json(&self.to_summary_value()).expect("summary serializes")
@@ -711,69 +1169,116 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Little-endian `f32` bytes, row-major — matches numpy `float32` C-order
-/// `tobytes()` so the hash is stable across a future Python mirror.
-fn matrix_bytes(m: &Matrix) -> Vec<u8> {
-    let mut out = Vec::with_capacity(m.data.len() * 4);
-    for v in &m.data {
-        out.extend_from_slice(&v.to_le_bytes());
+pub(crate) fn payload_head(kind: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    super::numeric::string(&mut out, "nirs4all.io.package-payload.v4");
+    out.extend_from_slice(&4_u32.to_le_bytes());
+    super::numeric::string(&mut out, kind);
+    out
+}
+
+pub fn feature_content_bytes(fm: &FeatureMatrix) -> Vec<u8> {
+    let mut out = payload_head("features");
+    out.extend_from_slice(&super::projection::feature_bytes(fm));
+    super::numeric::u64_bytes(&mut out, fm.processings.len());
+    for (name, matrix) in &fm.processings {
+        super::numeric::string(&mut out, name);
+        out.extend_from_slice(&matrix.numeric_bytes());
     }
     out
 }
 
-/// A feature source's canonical bytes: native matrix, then headers, then each
-/// named processing variant (name + matrix), so any change to the source's data
-/// or processing stack changes the hash.
-fn feature_content_bytes(fm: &FeatureMatrix) -> Vec<u8> {
-    let mut out = matrix_bytes(&fm.matrix);
-    out.extend_from_slice(fm.headers.join("\u{1f}").as_bytes());
-    for (name, m) in &fm.processings {
-        out.push(0);
-        out.extend_from_slice(name.as_bytes());
-        out.push(0);
-        out.extend_from_slice(&matrix_bytes(m));
+pub fn target_content_bytes(tt: &TargetTable) -> Vec<u8> {
+    let mut out = payload_head("targets");
+    super::numeric::u64_bytes(&mut out, tt.headers.len());
+    for column in 0..tt.headers.len() {
+        out.extend_from_slice(&super::projection::target_bytes(tt, column));
     }
     out
 }
 
-fn target_content_bytes(tt: &TargetTable) -> Vec<u8> {
-    let mut out = matrix_bytes(&tt.matrix);
-    out.extend_from_slice(tt.headers.join("\u{1f}").as_bytes());
-    let cat = Value::Object(
-        tt.categorical
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
-    );
-    out.push(0);
-    out.extend_from_slice(
-        canonical_json(&cat)
-            .expect("categorical serializes")
-            .as_bytes(),
-    );
+pub fn weights_content_bytes(w: &WeightsVector) -> Vec<u8> {
+    let mut out = payload_head("weights");
+    out.extend_from_slice(&w.precision.bytes());
+    let mut matrix = Matrix::new(w.values.clone(), w.values.len(), 1);
+    matrix.validity = w.validity.clone();
+    matrix.precision = w.precision.clone();
+    out.extend_from_slice(&matrix.numeric_bytes());
     out
 }
 
-fn weights_content_bytes(w: &WeightsVector) -> Vec<u8> {
-    let mut out = Vec::with_capacity(w.values.len() * 4);
-    for v in &w.values {
-        out.extend_from_slice(&v.to_le_bytes());
+pub(crate) fn feature_descriptor(
+    assembled: &AssembledDataset,
+    block: &PartitionBlock,
+    index: usize,
+) -> Result<(String, Vec<Value>), String> {
+    let source_id = &block.source_ids[index];
+    if !block.feature_axes.is_empty() || !block.representation_ids.is_empty() {
+        if block.feature_axes.len() != block.x.len()
+            || block.representation_ids.len() != block.x.len()
+            || block.feature_names.len() != block.x.len()
+        {
+            return Err("Feature metadata must align exactly with source matrices".into());
+        }
+        return Ok((
+            block.representation_ids[index].clone(),
+            block.feature_axes[index].clone(),
+        ));
     }
-    if let Some(h) = &w.header {
-        out.push(0);
-        out.extend_from_slice(h.as_bytes());
-    }
-    out
-}
 
-fn cell_value(c: &Cell) -> Value {
-    match c {
-        Cell::Bool(b) => Value::from(*b),
-        Cell::Int(i) => Value::from(*i),
-        Cell::Float(f) => Value::from(*f),
-        Cell::Str(s) => Value::from(s.clone()),
-        Cell::Na => Value::Null,
+    if let Some(audit) = assembled
+        .audits
+        .iter()
+        .find(|audit| audit["source"] == *source_id && audit.get("projection_axes").is_some())
+    {
+        return Ok((
+            audit["projection_representation_id"]
+                .as_str()
+                .ok_or("Projection representation missing")?
+                .to_owned(),
+            super::projection::axes_from_full(&audit["projection_axes"], block.x[index].n_cols)?,
+        ));
     }
+    if let Some(source) = assembled.audits.iter().find_map(|audit| {
+        (audit["selected_source"] == *source_id)
+            .then(|| audit.get("raw_projection_source"))
+            .flatten()
+    }) {
+        let axes = source["axes"].as_array().into_iter().flatten().filter_map(|name| {
+            let name = name.as_str()?;
+            if name == "sample" { return None; }
+            Some(json!({"name":name,"unit":source["axis_units"][name],"coordinates":source["axis_coordinates"][name]}))
+        }).collect();
+        return Ok((
+            source["representation_id"]
+                .as_str()
+                .unwrap_or(repr_ids::SIGNAL_1D)
+                .to_owned(),
+            axes,
+        ));
+    }
+    let unit = block
+        .header_units
+        .get(index)
+        .map(String::as_str)
+        .unwrap_or("text");
+    let name = feature_axis_name(unit);
+    let headers = block
+        .feature_headers
+        .get(index)
+        .cloned()
+        .unwrap_or_default();
+    let coords = header_coordinates(&headers)?;
+    let raw_unit = if matches!(unit, "text" | "index" | "") {
+        Value::Null
+    } else {
+        json!(unit)
+    };
+    let coordinates = json!(coords);
+    Ok((
+        repr_ids::SIGNAL_1D.into(),
+        vec![json!({"name":name,"unit":raw_unit,"coordinates":coordinates})],
+    ))
 }
 
 /// A frame's deterministic value (name/dtype/values per column) for hashing.
@@ -785,7 +1290,7 @@ fn frame_canonical_bytes(f: &Frame) -> String {
             json!({
                 "name": c.name,
                 "dtype": c.dtype.label(),
-                "values": c.values.iter().map(cell_value).collect::<Vec<_>>(),
+                "values": c.values.iter().enumerate().map(|(row, v)| super::frame::metadata_cell_value(c, row, v)).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -794,7 +1299,25 @@ fn frame_canonical_bytes(f: &Frame) -> String {
 }
 
 /// Spectral axis name from a header unit — mirrors the bridge's `feature_axis`.
-fn feature_axis_name(unit: &str) -> &'static str {
+pub(crate) fn header_coordinates(headers: &[String]) -> Result<Option<Vec<Value>>, String> {
+    if headers
+        .iter()
+        .any(|header| !header.parse::<f64>().is_ok_and(f64::is_finite))
+    {
+        return Ok(None);
+    }
+    headers
+        .iter()
+        .map(|header| {
+            super::numeric::NumericStorage::Float64
+                .decimal(header)
+                .map(Value::from)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+pub(crate) fn feature_axis_name(unit: &str) -> &'static str {
     let u = unit.to_ascii_lowercase();
     if u.contains("nm") || u.contains("nanomet") || u.contains("wavelength") {
         "wavelength"
@@ -821,8 +1344,10 @@ fn target_representation_id(
     if headers.is_empty() {
         return None;
     }
-    let is_cat =
-        |h: &str| categorical.contains_key(h) || matches!(task_type, "binary" | "multiclass");
+    let is_cat = |h: &str| {
+        categorical.contains_key(h)
+            || matches!(task_type, "classification" | "binary" | "multiclass")
+    };
     let kinds: Vec<bool> = headers.iter().map(|h| is_cat(h)).collect();
     let all_same = kinds.iter().all(|k| *k == kinds[0]);
     if headers.len() == 1 {
@@ -904,11 +1429,7 @@ mod tests {
     use crate::materialize::frame::Column;
 
     fn matrix(rows: usize, cols: usize) -> Matrix {
-        Matrix {
-            data: (0..rows * cols).map(|v| v as f32).collect(),
-            n_rows: rows,
-            n_cols: cols,
-        }
+        Matrix::new((0..rows * cols).map(|v| v as f64).collect(), rows, cols)
     }
 
     fn base_block() -> PartitionBlock {
@@ -917,6 +1438,9 @@ mod tests {
             source_ids: vec!["spectra".into()],
             x: vec![matrix(2, 3)],
             feature_headers: vec![vec!["1000".into(), "1010".into(), "1020".into()]],
+            feature_names: vec![],
+            feature_axes: vec![],
+            representation_ids: vec![],
             header_units: vec!["nm".into()],
             signal_types: vec![Some("absorbance".into())],
             processings: vec![vec![]],
@@ -932,6 +1456,8 @@ mod tests {
             )),
             weights: Some(vec![1.0, 2.0]),
             weights_header: Some("w".into()),
+            weights_validity: None,
+            weights_precision: Default::default(),
         }
     }
 
@@ -970,15 +1496,148 @@ mod tests {
     #[test]
     fn from_assembled_round_trips_losslessly() {
         let a = assembled(base_block());
-        let pkg = DatasetPackage::from_assembled(&a);
+        let pkg = DatasetPackage::from_assembled(&a).unwrap();
         // The v2-expressible payload is reconstructed byte-for-byte.
         assert_eq!(pkg.to_assembled().to_full_value(), a.to_full_value());
+    }
+
+    #[test]
+    fn canonical_package_view_preserves_masks_and_storage() {
+        let mut block = base_block();
+        block.x[0] = Matrix::new(vec![1.0, f64::NAN, 3.0, 4.0, 5.0, 6.0], 2, 3);
+        block.y = Some(Matrix::new(vec![1.5, f64::NAN], 2, 1));
+        block.processings[0].push(("raw".into(), block.x[0].clone()));
+        block.weights = Some(vec![1.0, f64::NAN]);
+        block.weights_validity = Some(vec![true, false]);
+        let original = assembled(block);
+        let raw = &original.blocks["train"];
+        assert!(raw.x[0].data[1].is_nan());
+        assert!(raw.y.as_ref().unwrap().data[1].is_nan());
+        assert!(raw.processings[0][0].1.data[1].is_nan());
+        assert!(raw.weights.as_ref().unwrap()[1].is_nan());
+        assert!(!raw.x[0].validity[1]);
+        assert!(!raw.y.as_ref().unwrap().validity[1]);
+        assert!(!raw.processings[0][0].1.validity[1]);
+        assert!(!raw.weights_validity.as_ref().unwrap()[1]);
+        assert!(raw.x[0].validate_storage(true).is_err());
+        let package = DatasetPackage::from_assembled(&original).unwrap();
+        let package_wire = package.to_full_value().unwrap();
+        let view = package.to_assembled();
+        let block = &view.blocks["train"];
+        assert_eq!(block.x[0].data[1].to_bits(), 0);
+        assert_eq!(block.y.as_ref().unwrap().data[1].to_bits(), 0);
+        assert_eq!(block.processings[0][0].1.data[1].to_bits(), 0);
+        assert_eq!(block.weights.as_ref().unwrap()[1].to_bits(), 0);
+        assert!(!block.x[0].validity[1]);
+        assert!(!block.y.as_ref().unwrap().validity[1]);
+        assert!(!block.processings[0][0].1.validity[1]);
+        assert_eq!(block.weights_validity, Some(vec![true, false]));
+        for (raw, stored) in [
+            (&raw.x[0], &block.x[0]),
+            (raw.y.as_ref().unwrap(), block.y.as_ref().unwrap()),
+            (&raw.processings[0][0].1, &block.processings[0][0].1),
+        ] {
+            assert_eq!(raw.validity, stored.validity);
+            for ((&expected, &observed), &valid) in
+                raw.data.iter().zip(&stored.data).zip(&stored.validity)
+            {
+                if valid {
+                    assert_eq!(expected.to_bits(), observed.to_bits());
+                }
+            }
+        }
+        assert_eq!(
+            raw.weights.as_ref().unwrap()[0].to_bits(),
+            block.weights.as_ref().unwrap()[0].to_bits()
+        );
+        let full = view.to_full_value().unwrap();
+        assert_eq!(full, original.to_full_value().unwrap());
+        let feature = Matrix::from_full_value(&full["blocks"]["train"]["x"][0]).unwrap();
+        assert_eq!(feature.data[1].to_bits(), 0);
+        let processing =
+            Matrix::from_full_value(&full["blocks"]["train"]["processings"][0][0]["matrix"])
+                .unwrap();
+        assert_eq!(processing.data[1].to_bits(), 0);
+        let weights = Matrix::from_full_value(&full["blocks"]["train"]["weights"]).unwrap();
+        assert_eq!(weights.data[1].to_bits(), 0);
+        assert!(!weights.validity[1]);
+        assert_eq!(package.to_full_value().unwrap(), package_wire);
+        let repacked = DatasetPackage::from_assembled(&view).unwrap();
+        assert_eq!(repacked.to_full_value().unwrap(), package_wire);
+        assert_eq!(repacked.to_assembled().to_full_value().unwrap(), full);
+        for (_, payload) in &package.partitions["train"].payloads {
+            let matrix = match payload {
+                PayloadBlock::FeatureMatrix(feature) => &feature.matrix,
+                PayloadBlock::TargetTable(target) => &target.matrix,
+                _ => continue,
+            };
+            matrix.validate_storage(false).unwrap();
+            for (&value, &valid) in matrix.data.iter().zip(&matrix.validity) {
+                if !valid {
+                    assert_eq!(value.to_bits(), 0);
+                }
+            }
+            let mut invalid = matrix.clone();
+            let missing = invalid.validity.iter().position(|valid| !valid).unwrap();
+            invalid.data[missing] = f64::NAN;
+            assert!(invalid.validate_storage(false).is_err());
+            let mut invalid_wire = matrix.full_value();
+            let mut hex = invalid_wire["data_bytes_hex"].as_str().unwrap().to_string();
+            let offset = missing * hex.len() / matrix.data.len();
+            hex.replace_range(offset..offset + 2, "01");
+            invalid_wire["data_bytes_hex"] = json!(hex);
+            assert!(Matrix::from_full_value(&invalid_wire).is_err());
+        }
+    }
+
+    #[test]
+    fn canonical_view_keeps_observed_signed_zero_and_subnormal_next_to_missing() {
+        let tiny = f64::from_bits(1);
+        let mut block = base_block();
+        block.x[0] = Matrix::new(vec![-0.0, f64::NAN, tiny, 4.0, 5.0, 6.0], 2, 3);
+        block.y = Some(Matrix::new(vec![-0.0, f64::NAN], 2, 1));
+        block.processings[0].push(("raw".into(), block.x[0].clone()));
+        block.weights = Some(vec![-0.0, f64::NAN]);
+        block.weights_validity = Some(vec![true, false]);
+        let raw = assembled(block);
+        let float64 = super::super::numeric::NumericStorage::Float64;
+        let options = NumericStorageOptions {
+            features: Some(float64),
+            targets: Some(float64),
+            weights: Some(float64),
+            ..Default::default()
+        };
+        let package = DatasetPackage::from_assembled_with_storage(&raw, &options).unwrap();
+        let view = package.to_assembled();
+        let block = &view.blocks["train"];
+        for matrix in [
+            &block.x[0],
+            &block.processings[0][0].1,
+            block.y.as_ref().unwrap(),
+        ] {
+            assert_eq!(matrix.data[0].to_bits(), (-0.0_f64).to_bits());
+            assert!(matrix.validity[0]);
+            assert_eq!(matrix.data[1].to_bits(), 0);
+            assert!(!matrix.validity[1]);
+            matrix.validate_storage(false).unwrap();
+        }
+        for matrix in [&block.x[0], &block.processings[0][0].1] {
+            assert_eq!(matrix.data[2].to_bits(), tiny.to_bits());
+            assert!(matrix.validity[2]);
+        }
+        assert_eq!(
+            block.weights.as_ref().unwrap()[0].to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        assert_eq!(block.weights.as_ref().unwrap()[1].to_bits(), 0);
+        assert_eq!(block.weights_validity, Some(vec![true, false]));
     }
 
     #[test]
     fn round_trip_preserves_multi_source_and_processings() {
         let mut block = base_block();
         block.x.push(matrix(2, 2));
+        block.source_ids.push("spectra2".into());
         block
             .feature_headers
             .push(vec!["1200".into(), "1210".into()]);
@@ -987,14 +1646,14 @@ mod tests {
         block.processings = vec![vec![("snv".into(), matrix(2, 3))], vec![]];
         let mut a = assembled(block);
         a.n_sources = 2;
-        let pkg = DatasetPackage::from_assembled(&a);
+        let pkg = DatasetPackage::from_assembled(&a).unwrap();
         assert_eq!(pkg.to_assembled().to_full_value(), a.to_full_value());
     }
 
     #[test]
     fn summary_is_deterministic_and_carries_no_payload_bytes() {
         let a = assembled(base_block());
-        let pkg = DatasetPackage::from_assembled(&a);
+        let pkg = DatasetPackage::from_assembled(&a).unwrap();
         let s1 = pkg.to_canonical_summary();
         let s2 = pkg.to_canonical_summary();
         assert_eq!(s1, s2, "canonical summary must be deterministic");
@@ -1014,7 +1673,7 @@ mod tests {
     #[test]
     fn manifest_maps_feature_target_metadata_weights() {
         let a = assembled(base_block());
-        let pkg = DatasetPackage::from_assembled(&a);
+        let pkg = DatasetPackage::from_assembled(&a).unwrap();
         let m = pkg.manifest();
         let by_id = |id: &str| m.entries.iter().find(|e| e.id == id).unwrap();
         assert_eq!(
@@ -1041,7 +1700,7 @@ mod tests {
     fn processing_stack_lifts_to_signal_with_processings() {
         let mut block = base_block();
         block.processings = vec![vec![("snv".into(), matrix(2, 3))]];
-        let pkg = DatasetPackage::from_assembled(&assembled(block));
+        let pkg = DatasetPackage::from_assembled(&assembled(block)).unwrap();
         let e = pkg
             .manifest()
             .entries
@@ -1060,7 +1719,7 @@ mod tests {
         let mut block = base_block();
         block.y = Some(matrix(2, 2));
         block.y_headers = vec!["protein".into(), "moisture".into()];
-        let pkg = DatasetPackage::from_assembled(&assembled(block));
+        let pkg = DatasetPackage::from_assembled(&assembled(block)).unwrap();
         let e = pkg
             .manifest()
             .entries
@@ -1077,8 +1736,9 @@ mod tests {
     #[test]
     fn content_hash_and_root_detect_payload_tampering() {
         let a = assembled(base_block());
-        let root0 = DatasetPackage::from_assembled(&a).manifest().root;
+        let root0 = DatasetPackage::from_assembled(&a).unwrap().manifest().root;
         let x0 = DatasetPackage::from_assembled(&a)
+            .unwrap()
             .manifest()
             .entries
             .into_iter()
@@ -1089,7 +1749,9 @@ mod tests {
         // Flip a single feature value.
         let mut tampered = a.clone();
         tampered.blocks["train"].x[0].data[0] += 1.0;
-        let m1 = DatasetPackage::from_assembled(&tampered).manifest();
+        let m1 = DatasetPackage::from_assembled(&tampered)
+            .unwrap()
+            .manifest();
         let x1 = m1.entries.iter().find(|e| e.id == "train/x0").unwrap();
         assert_ne!(x0, x1.content_hash, "feature hash must change on tamper");
         assert_ne!(root0, m1.root, "manifest root must change on tamper");
@@ -1097,7 +1759,7 @@ mod tests {
 
     #[test]
     fn row_position_fallback_is_recorded_when_no_key() {
-        let pkg = DatasetPackage::from_assembled(&assembled(base_block()));
+        let pkg = DatasetPackage::from_assembled(&assembled(base_block())).unwrap();
         let f = &pkg.row_position_fallback;
         assert!(f.used, "no sample-id key ⇒ row-position fallback");
         assert!(f.reason.contains("no stable sample-id key"));
@@ -1109,7 +1771,7 @@ mod tests {
     fn row_position_fallback_off_when_key_aligned() {
         let mut a = assembled(base_block());
         a.identity.sample_id = Some("rep".into()); // aligned metadata column of len 2
-        let pkg = DatasetPackage::from_assembled(&a);
+        let pkg = DatasetPackage::from_assembled(&a).unwrap();
         assert!(!pkg.row_position_fallback.used);
         assert!(pkg
             .row_position_fallback
@@ -1131,12 +1793,12 @@ mod tests {
             train_observation_ids: vec!["O1".into()],
             validation_observation_ids: vec!["O2".into()],
         }];
-        let package = DatasetPackage::from_assembled(&a);
+        let package = DatasetPackage::from_assembled(&a).unwrap();
         let value = package.to_summary_value();
-        assert_eq!(value["schema_version"], Value::from(3));
+        assert_eq!(value["schema_version"], Value::from(4));
         assert_eq!(
-            package.to_assembled().to_full_value()["assembled_schema_version"],
-            Value::from(2),
+            package.to_assembled().to_full_value().unwrap()["assembled_schema_version"],
+            Value::from(3),
             "the binding-facing assembled wire is explicitly versioned"
         );
         assert_eq!(value["identity"].as_object().unwrap().len(), 2);
@@ -1153,7 +1815,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_cross_language_canonical_summary_matches_golden() {
+    fn v4_cross_language_canonical_summary_matches_golden() {
         let mut a = assembled(base_block());
         a.identity = IdentityProvenance {
             source_ids: vec!["spectra".into()],
@@ -1178,8 +1840,10 @@ mod tests {
         ));
 
         assert_eq!(
-            DatasetPackage::from_assembled(&a).to_canonical_summary(),
-            include_str!("../../../../tests/goldens/dataset_package_v3.cross_language.canonical")
+            DatasetPackage::from_assembled(&a)
+                .unwrap()
+                .to_canonical_summary(),
+            include_str!("../../../../tests/goldens/dataset_package_v4.cross_language.canonical")
         );
     }
 
@@ -1189,6 +1853,7 @@ mod tests {
         a.repetition = Some("rep".into());
         assert!(
             DatasetPackage::from_assembled(&a)
+                .unwrap()
                 .row_position_fallback
                 .used
         );
@@ -1231,7 +1896,7 @@ mod tests {
         assert_eq!(e.representation_id.as_deref(), Some("rgb_image"));
 
         // A package carrying it summarizes without embedding any tensor bytes.
-        let mut pkg = DatasetPackage::from_assembled(&assembled(base_block()));
+        let mut pkg = DatasetPackage::from_assembled(&assembled(base_block())).unwrap();
         pkg.partitions["train"]
             .payloads
             .push(("train/img".into(), tensor));

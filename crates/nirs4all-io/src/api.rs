@@ -13,10 +13,17 @@ use std::path::{Path, PathBuf};
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 use nirs4all_io_core::conventions::{assignments_to_spec_dict, match_items, resolve_profiles};
+use nirs4all_io_core::infer::describe::proposed_decimal as proposed_decimal_bytes;
+use nirs4all_io_core::infer::identity::{configure_generated_keys, refuse_generated_identity};
+use nirs4all_io_core::infer::plan::DatasetPlan;
+use nirs4all_io_core::materialize::loaders::{
+    undeclared_delimiter, DelimiterVerdict, DELIMITER_SAMPLE_BYTES,
+};
 use nirs4all_io_core::materialize::{
     assemble_in_memory_with_tabular_limits, parse_fold_str, InMemorySource, SourcePayload,
     TabularReadLimits,
 };
+use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::{
     normalize_to_spec_dict, role_tagged_config_to_spec, validate_spec, DatasetSpec, SpecError,
 };
@@ -205,6 +212,7 @@ fn to_spec_with_budget(
     name: Option<&str>,
     budget: &mut ReadBudget,
 ) -> Result<(DatasetSpec, PathBuf), SpecError> {
+    admit_automatic_input(input, budget.limits)?;
     match input {
         Input::Spec(v) => {
             let mut spec = DatasetSpec::from_value(&normalize_to_spec_dict(v))?;
@@ -214,7 +222,7 @@ fn to_spec_with_budget(
             Ok((spec, PathBuf::from(".")))
         }
         Input::Path(p) => to_spec_path(p, conventions, name, budget),
-        Input::Paths(ps) => to_spec_paths(ps, conventions, name),
+        Input::Paths(ps) => to_spec_paths(ps, conventions, name, budget.limits),
     }
 }
 
@@ -239,7 +247,28 @@ pub fn load_assembled_with_limits(
     let mut budget = ReadBudget::new(limits)?;
     let (spec, base) = to_spec_with_budget(input, conventions, name, &mut budget)?;
     validate_spec(&spec)?;
+    check_generated_identity(input, &spec, &base, limits)?;
     assemble_with_budget(&spec, &base, &mut budget)
+}
+
+/// Materialize an input and package it using one read budget and storage policy.
+pub fn load_package_with_limits_and_storage(
+    input: &Input,
+    conventions: Option<&[String]>,
+    name: Option<&str>,
+    limits: LoadLimits,
+    options: &nirs4all_io_core::materialize::NumericStorageOptions,
+) -> Result<nirs4all_io_core::materialize::DatasetPackage, SpecError> {
+    let mut budget = ReadBudget::new(limits)?;
+    let (spec, base) = to_spec_with_budget(input, conventions, name, &mut budget)?;
+    validate_spec(&spec)?;
+    check_generated_identity(input, &spec, &base, limits)?;
+    crate::materialize::assemble::package_with_budget_and_storage(
+        &spec,
+        &base,
+        &mut budget,
+        options,
+    )
 }
 
 /// Adapt Studio's existing role-tagged `config.files` object to the official
@@ -513,13 +542,13 @@ fn to_spec_path(
         .map(str::to_lowercase);
     if suffix
         .as_deref()
-        .is_some_and(|s| CONFIG_SUFFIXES.contains(&s))
+        .is_some_and(|s| CONFIG_SUFFIXES.contains(&s.to_ascii_lowercase().as_str()))
         && path.is_file()
     {
         let text = String::from_utf8(budget.read(path)?)
             .map_err(|e| SpecError::new(format!("cannot read config {p}: {e}")))?;
         let raw: Value = if suffix.as_deref() == Some("json") {
-            serde_json::from_str(&text)
+            nirs4all_io_core::canonical_json::parse_json_value(&text)
                 .map_err(|e| SpecError::new(format!("invalid JSON config {p}: {e}")))?
         } else {
             return Err(SpecError::new(
@@ -547,7 +576,7 @@ fn to_spec_path(
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
         });
-        let spec = spec_from_directory(p, conventions, &dir_name)?;
+        let spec = spec_from_directory(p, conventions, &dir_name, budget.limits)?;
         return Ok((spec, path.to_path_buf()));
     }
     if path.is_file() {
@@ -558,10 +587,27 @@ fn to_spec_path(
         let spec_name = name
             .map(String::from)
             .unwrap_or_else(|| file_stem(&base_name));
-        let spec = DatasetSpec::from_value(&json!({
+        let mut spec = DatasetSpec::from_value(&json!({
             "name": spec_name,
             "sources": [{"id": "data", "role": "features", "input": base_name}],
         }))?;
+        if matches!(suffix.as_deref(), Some("csv" | "tsv" | "txt")) {
+            check_discovery_file(path, budget.limits)?;
+            let prefix = dialect_prefix(path)?;
+            spec.sources[0].params.delimiter = match undeclared_delimiter(&prefix) {
+                DelimiterVerdict::Detected(delimiter) => Some((delimiter as char).to_string()),
+                _ => None,
+            };
+            if spec.sources[0]
+                .params
+                .decimal_separator
+                .as_deref()
+                .is_none_or(str::is_empty)
+            {
+                spec.sources[0].params.decimal_separator =
+                    proposed_decimal_bytes(&prefix, &spec.sources[0].params);
+            }
+        }
         let base = path
             .parent()
             .map(Path::to_path_buf)
@@ -571,17 +617,111 @@ fn to_spec_path(
     Err(SpecError::new(format!("path does not exist: {p}")))
 }
 
+// Narrow prefix proposals do not charge ReadBudget: max_files counts actual
+// materialization reads, not the automatic configuration of a file reference.
+fn dialect_prefix(path: &Path) -> Result<Vec<u8>, SpecError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| SpecError::new(format!("cannot sample {}: {e}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take(DELIMITER_SAMPLE_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| SpecError::new(format!("cannot sample {}: {e}", path.display())))?;
+    Ok(bytes)
+}
+
+fn propose_source_delimiters(
+    spec: &mut Value,
+    refs: &crate::resolve::FileReferences,
+    samples: &HashMap<String, Vec<u8>>,
+) -> Result<(), SpecError> {
+    if let Some(sources) = spec["sources"].as_array_mut() {
+        for source in sources {
+            let inputs: Vec<String> = match &source["input"] {
+                Value::String(s) => vec![s.clone()],
+                Value::Array(items) => items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if source["params"]["delimiter"]
+                .as_str()
+                .is_none_or(|s| s.is_empty())
+            {
+                let mut proposals = Vec::new();
+                for input in &inputs {
+                    let item = &refs[input];
+                    proposals.push(
+                        if matches!(item.extension.as_deref(), Some(".csv" | ".tsv" | ".txt")) {
+                            match undeclared_delimiter(&samples[input]) {
+                                DelimiterVerdict::Detected(d) => Some((d as char).to_string()),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        },
+                    );
+                }
+                if let Some(Some(delimiter)) = proposals.first() {
+                    if proposals
+                        .iter()
+                        .all(|value| value.as_ref() == Some(delimiter))
+                    {
+                        if source.get("params").is_none() {
+                            source["params"] = json!({});
+                        }
+                        source["params"]["delimiter"] = Value::from(delimiter.clone());
+                    }
+                }
+            }
+            if inputs.len() == 1
+                && matches!(
+                    refs[&inputs[0]].extension.as_deref(),
+                    Some(".csv" | ".tsv" | ".txt")
+                )
+            {
+                let params = LoadingParams::from_value(source.get("params"))?;
+                if params
+                    .decimal_separator
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+                {
+                    if let Some(decimal) = proposed_decimal_bytes(&samples[&inputs[0]], &params) {
+                        if source.get("params").is_none() {
+                            source["params"] = json!({});
+                        }
+                        source["params"]["decimal_separator"] = json!(decimal);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn spec_from_directory(
     p: &str,
     conventions: Option<&[String]>,
     name: &str,
+    limits: LoadLimits,
 ) -> Result<DatasetSpec, SpecError> {
-    let iset = resolve_path(p, false);
+    let iset = resolve_path(p, false)?;
     let conv = conv_refs(conventions);
     let conv_ref: Vec<&str> = conv.iter().map(String::as_str).collect();
     let profiles = resolve_profiles(&conv_ref)?;
     let result = match_items(&iset.names(), &profiles, None, None);
-    let spec_dict = assignments_to_spec_dict(&result, name);
+    let mut spec_dict = assignments_to_spec_dict(&result, name);
+    let refs = crate::resolve::used_file_references(&iset, &spec_dict)?;
+    let samples = discovery_samples(&spec_dict, &refs, limits)?;
+    propose_source_delimiters(&mut spec_dict, &refs, &samples)?;
+    check_discovery_tables(&spec_dict, &samples, limits)?;
+    configure_generated_keys(
+        &mut spec_dict,
+        &mut DatasetPlan::default(),
+        |source| sample_inputs(source, &samples),
+        false,
+    );
     let has_sources = spec_dict
         .get("sources")
         .and_then(|v| v.as_array())
@@ -605,57 +745,28 @@ fn to_spec_paths(
     paths: &[String],
     conventions: Option<&[String]>,
     name: Option<&str>,
+    limits: LoadLimits,
 ) -> Result<(DatasetSpec, PathBuf), SpecError> {
-    let iset = crate::resolve::resolve_list(paths, false);
-    // refs (basenames) -> absolute identities. Mirrors Python `api.py`, which
-    // also builds `{it.ref: it.identity}` — so file lists with duplicate
-    // basenames collapse to one entry. Reproduced for parity (a known Python
-    // limitation), NOT a Rust regression; do not "fix" without changing Python.
-    let name_to_abs: std::collections::HashMap<String, String> = iset
-        .items
-        .iter()
-        .map(|it| (it.ref_.clone(), it.identity.clone()))
-        .collect();
+    let iset = crate::resolve::resolve_list(paths, false)?;
     let conv = conv_refs(conventions);
     let conv_ref: Vec<&str> = conv.iter().map(String::as_str).collect();
     let profiles = resolve_profiles(&conv_ref)?;
-    let names: Vec<String> = name_to_abs.keys().cloned().collect();
+    let mut names = iset.names();
+    names.sort();
+    names.dedup();
     let result = match_items(&names, &profiles, None, None);
     let mut spec_dict = assignments_to_spec_dict(&result, name.unwrap_or("dataset"));
-    if let Some(sources) = spec_dict.get_mut("sources").and_then(|v| v.as_array_mut()) {
-        for src in sources.iter_mut() {
-            let Some(obj) = src.as_object_mut() else {
-                continue;
-            };
-            match obj.get("input").cloned() {
-                Some(Value::Array(a)) => {
-                    let mapped: Vec<Value> = a
-                        .iter()
-                        .map(|v| {
-                            v.as_str()
-                                .map(|s| {
-                                    Value::from(
-                                        name_to_abs
-                                            .get(s)
-                                            .cloned()
-                                            .unwrap_or_else(|| s.to_string()),
-                                    )
-                                })
-                                .unwrap_or_else(|| v.clone())
-                        })
-                        .collect();
-                    obj.insert("input".into(), Value::Array(mapped));
-                }
-                Some(Value::String(s)) => {
-                    obj.insert(
-                        "input".into(),
-                        Value::from(name_to_abs.get(&s).cloned().unwrap_or(s)),
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
+    let refs = crate::resolve::used_file_references(&iset, &spec_dict)?;
+    let samples = discovery_samples(&spec_dict, &refs, limits)?;
+    propose_source_delimiters(&mut spec_dict, &refs, &samples)?;
+    check_discovery_tables(&spec_dict, &samples, limits)?;
+    configure_generated_keys(
+        &mut spec_dict,
+        &mut DatasetPlan::default(),
+        |source| sample_inputs(source, &samples),
+        false,
+    );
+    crate::resolve::absolutize_file_references(&mut spec_dict, &refs);
     Ok((DatasetSpec::from_value(&spec_dict)?, PathBuf::from(".")))
 }
 
@@ -686,4 +797,198 @@ mod role_tagged_secure_open_tests {
         assert_eq!(bytes, b"original");
         assert_eq!(fs::read(&input).unwrap(), b"attacker");
     }
+}
+
+fn sample_inputs(source: &Value, samples: &HashMap<String, Vec<u8>>) -> Option<Vec<Vec<u8>>> {
+    let names: Vec<&str> = match &source["input"] {
+        Value::String(input) => vec![input],
+        Value::Array(inputs) => inputs.iter().filter_map(Value::as_str).collect(),
+        _ => return None,
+    };
+    names
+        .into_iter()
+        .map(|name| samples.get(name).cloned())
+        .collect()
+}
+
+fn check_discovery_file(path: &Path, limits: LoadLimits) -> Result<u64, SpecError> {
+    let size = std::fs::metadata(path)
+        .map_err(|e| SpecError::new(e.to_string()))?
+        .len();
+    if size > limits.max_file_bytes
+        || size > limits.max_total_bytes
+        || size > limits.max_decoded_file_bytes
+    {
+        return Err(SpecError::new(format!(
+            "load limit exceeded before discovery: file/total bytes in {}",
+            path.display()
+        )));
+    }
+    Ok(size)
+}
+
+fn discovery_samples(
+    spec: &Value,
+    refs: &crate::resolve::FileReferences,
+    limits: LoadLimits,
+) -> Result<HashMap<String, Vec<u8>>, SpecError> {
+    let mut samples = HashMap::new();
+    let mut total = 0u64;
+    let mut physical = HashMap::new();
+    for source in spec["sources"].as_array().into_iter().flatten() {
+        let names: Vec<&str> = match &source["input"] {
+            Value::String(input) => vec![input],
+            Value::Array(inputs) => inputs.iter().filter_map(Value::as_str).collect(),
+            _ => continue,
+        };
+        for name in names {
+            let item = &refs[name];
+            if !matches!(item.extension.as_deref(), Some(".csv" | ".tsv" | ".txt")) {
+                continue;
+            }
+            if !physical.contains_key(&item.identity) {
+                let path = Path::new(&item.identity);
+                let size = check_discovery_file(path, limits)?;
+                total = total
+                    .checked_add(size)
+                    .ok_or_else(|| SpecError::new("discovery bytes overflow"))?;
+                if total > limits.max_total_bytes
+                    || total > limits.max_decoded_total_bytes
+                    || physical.len() as u64 >= limits.max_files
+                {
+                    return Err(SpecError::new(
+                        "load limit exceeded before discovery: total bytes/files",
+                    ));
+                }
+                physical.insert(item.identity.clone(), dialect_prefix(path)?);
+            }
+            samples.insert(name.to_string(), physical[&item.identity].clone());
+        }
+    }
+    Ok(samples)
+}
+
+fn check_generated_identity(
+    input: &Input,
+    spec: &DatasetSpec,
+    base: &Path,
+    limits: LoadLimits,
+) -> Result<(), SpecError> {
+    match input {
+        Input::Spec(_) => return Ok(()),
+        Input::Path(path)
+            if Path::new(path)
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| CONFIG_SUFFIXES.contains(&s.to_ascii_lowercase().as_str())) =>
+        {
+            return Ok(())
+        }
+        _ => {}
+    }
+    if spec.to_value()["sample_index"]["by"] != "id" {
+        return Ok(());
+    }
+    let value = spec.to_value();
+    let mut paths = Vec::new();
+    for source in value["sources"].as_array().into_iter().flatten() {
+        match &source["input"] {
+            Value::String(path) => paths.push(base.join(path).to_string_lossy().to_string()),
+            Value::Array(inputs) => {
+                for path in inputs.iter().filter_map(Value::as_str) {
+                    paths.push(base.join(path).to_string_lossy().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    let iset = crate::resolve::resolve_list(&paths, false)?;
+    let refs = crate::resolve::used_file_references(&iset, &value)?;
+    let samples = discovery_samples(&value, &refs, limits)?;
+    refuse_generated_identity(spec, |source| sample_inputs(source, &samples))
+}
+
+fn check_discovery_tables(
+    spec: &Value,
+    samples: &HashMap<String, Vec<u8>>,
+    limits: LoadLimits,
+) -> Result<(), SpecError> {
+    use nirs4all_io_core::materialize::loaders::{discovery_prefix, read_table_bytes_with_limits};
+    use nirs4all_io_core::spec::enums::NaPolicy;
+    for source in spec["sources"].as_array().into_iter().flatten() {
+        let Some(inputs) = sample_inputs(source, samples) else {
+            continue;
+        };
+        let mut params = LoadingParams::from_value(source.get("params"))?;
+        params.na.policy = NaPolicy::Ignore;
+        for bytes in inputs {
+            let Some(prefix) = discovery_prefix(&bytes, &params) else {
+                continue;
+            };
+            if let Err(error) = read_table_bytes_with_limits(&prefix, &params, limits.tabular()) {
+                // Structural/identity uncertainty stays provisional. Resource
+                // errors must propagate before any complete source is read.
+                if error.message.contains("load limit exceeded") {
+                    return Err(error);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// Resolution intentionally hashes file contents for provenance. Admit its
+// inventory by metadata before that existing full hash read, not just before
+// the new bounded table discovery. This never chooses roles, ids or joins.
+fn admit_automatic_input(input: &Input, limits: LoadLimits) -> Result<(), SpecError> {
+    let raw: Vec<String> = match input {
+        Input::Spec(_) => return Ok(()),
+        Input::Path(path)
+            if Path::new(path)
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| CONFIG_SUFFIXES.contains(&s.to_ascii_lowercase().as_str())) =>
+        {
+            return Ok(())
+        }
+        Input::Path(path) if Path::new(path).is_dir() => {
+            vec![format!("{}/*", glob::Pattern::escape(path))]
+        }
+        Input::Path(path) => vec![path.clone()],
+        Input::Paths(paths) => paths.clone(),
+    };
+    let mut total = 0u64;
+    let mut files = 0u64;
+    for raw in raw {
+        let paths: Vec<PathBuf> = if Path::new(&raw).is_file() {
+            vec![PathBuf::from(&raw)]
+        } else {
+            match glob::glob(&raw) {
+                Ok(entries) => entries
+                    .filter_map(Result::ok)
+                    .filter(|p| p.is_file())
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        };
+        for path in paths {
+            let size = std::fs::metadata(&path)
+                .map_err(|e| SpecError::new(e.to_string()))?
+                .len();
+            total = total
+                .checked_add(size)
+                .ok_or_else(|| SpecError::new("discovery bytes overflow"))?;
+            files += 1;
+            if size > limits.max_file_bytes
+                || total > limits.max_total_bytes
+                || files > limits.max_files
+            {
+                return Err(SpecError::new(format!(
+                    "load limit exceeded before discovery/resolution: file/total bytes/files in {}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
 }

@@ -174,10 +174,10 @@ def test_effective_params_source_wins():
     assert eff.has_header is True
 
 
-def test_coerce_numeric_to_float32():
+def test_coerce_numeric_is_exact_float64():
     df = pd.DataFrame({"a": ["1", "2"], "b": ["3.5", "x"]})
     arr = coerce_numeric(df)
-    assert arr.dtype == np.float32
+    assert arr.dtype == np.float64
     assert np.isnan(arr[1, 1])  # "x" -> NaN
 
 

@@ -1,6 +1,6 @@
 {
-  "assembled_schema_version": 2,
   "aggregate": null,
+  "assembled_schema_version": 3,
   "blocks": {
     "test": {
       "feature_headers": [

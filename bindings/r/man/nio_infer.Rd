@@ -4,7 +4,7 @@
 \alias{nio_infer}
 \title{Infer a scored dataset plan from a native R input.}
 \usage{
-nio_infer(input, conventions = NULL)
+nio_infer(input, conventions = NULL, params = NULL, file_params = NULL)
 }
 \arguments{
 \item{input}{A path (character scalar), a vector of files (character vector),
@@ -12,6 +12,13 @@ or a config \code{list}.}
 
 \item{conventions}{Optional character vector of convention names, or
 \code{NULL} for the binding default.}
+
+\item{params}{Optional named list of global loading choices, such as
+\code{list(has_header = FALSE)}, applied before inference reads.}
+
+\item{file_params}{Optional named list of named loading-parameter lists,
+keyed by exact input refs (basename for files, relative path for directories).
+File choices take precedence over \code{params}; unknown refs are refused.}
 }
 \value{
 An object of class \code{n4io_plan}: the parsed plan (recommendations,

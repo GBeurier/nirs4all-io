@@ -8,7 +8,6 @@
 //! `.gz`/`.zip`, then delegate to the shared core decoder. A single decoder thus
 //! backs both the native (path) and the in-memory paths (D-R4).
 
-use std::io::{Cursor, Read};
 use std::path::Path;
 
 use arrow_array::types::{
@@ -20,16 +19,15 @@ use arrow_array::{
     StringViewArray,
 };
 use arrow_schema::DataType;
-use calamine::{Data, DataRef, Reader, Xlsx};
+use nirs4all_formats::{decode_xlsx_cells, XlsxCellValue, XlsxDecodeError, XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION};
 use nirs4all_io_core::infer::table::{ColDtype, NumericKind};
 use nirs4all_io_core::materialize::loaders::{
-    apply_na_policy, read_sheet, read_table_bytes_with_limits, Sheet,
+    apply_na_policy, read_sheet, read_table_bytes_with_limits, Sheet, SheetCell,
 };
 use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::SpecError;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ProjectionMask;
-use quick_xml::events::Event;
 use serde_json::Value;
 
 use super::frame::{Cell, Column, Frame};
@@ -58,106 +56,12 @@ pub(crate) fn is_spreadsheet_path(path: &Path) -> bool {
     )
 }
 
-/// One spreadsheet value as a typed cell, as pandas reads it: an integral
-/// number is an integer (the header `1000`, not `1000.0`), a date is ISO text,
-/// an empty or error cell is missing.
-fn sheet_cell(value: &Data) -> Cell {
-    match value {
-        Data::Empty | Data::Error(_) => Cell::Na,
-        Data::Int(value) => Cell::Int(*value),
-        // Below 2^53 every integral f64 is an exact i64.
-        Data::Float(value) if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 => {
-            Cell::Int(*value as i64)
-        }
-        Data::Float(value) => Cell::Float(*value),
-        Data::String(text) | Data::DateTimeIso(text) | Data::DurationIso(text) => {
-            Cell::Str(text.clone())
-        }
-        Data::Bool(value) => Cell::Bool(*value),
-        Data::DateTime(value) => value.as_datetime().map_or_else(
-            || Cell::Float(value.as_f64()),
-            |datetime| Cell::Str(datetime.to_string()),
-        ),
-    }
-}
-
-/// A worksheet's used cells (`(row, column)` positions with their value) as
-/// dense rows anchored at `A1`, as pandas reads them: leading empty rows and
-/// columns are kept, trailing ones are not. The dense grid may not hold more
-/// cells than the bytes the workbook decoded to, so a sparse sheet cannot turn
-/// a small file into a huge allocation.
-fn dense_rows(
-    name: &str,
-    cells: Vec<((u32, u32), Cell)>,
-    decoded: u64,
-) -> Result<Vec<Vec<Cell>>, SpecError> {
-    let (Some(bottom), Some(right)) = (
-        cells.iter().map(|((row, _), _)| *row).max(),
-        cells.iter().map(|((_, col), _)| *col).max(),
-    ) else {
-        return Ok(Vec::new());
-    };
-    let height = u64::from(bottom) + 1;
-    let width = u64::from(right) + 1;
-    if height.saturating_mul(width) > decoded {
-        return Err(SpecError::new(format!(
-            "worksheet '{name}' spans {height} x {width} cells, more than the {decoded} bytes it was decoded from; refusing a sparse sheet that would amplify memory"
-        )));
-    }
-    let mut rows = vec![vec![Cell::Na; width as usize]; height as usize];
-    for ((row, col), cell) in cells {
-        rows[row as usize][col as usize] = cell;
-    }
-    Ok(rows)
-}
-
-/// Whether every count the shared-strings reader could take from the first
-/// `<sst>` start tag fits in the part's `size` bytes; the reader reserves that
-/// many strings up front. The check does not depend on attribute syntax: after
-/// each `uniqueCount` in the tag's raw attributes, the next run of digits must
-/// fit.
-fn unique_strings_fit(part: impl Read, size: u64) -> Result<bool, quick_xml::Error> {
-    let mut xml = quick_xml::Reader::from_reader(std::io::BufReader::new(part));
-    // The reader's own configuration, so both see the same first `<sst>`.
-    let config = xml.config_mut();
-    config.check_end_names = false;
-    config.trim_text(false);
-    config.check_comments = false;
-    config.expand_empty_elements = true;
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        match xml.read_event_into(&mut buf)? {
-            Event::Start(start) if start.local_name().as_ref() == "sst" => {
-                let attributes = start.attributes_raw();
-                return Ok(attributes.match_indices("uniqueCount").all(|(at, key)| {
-                    let digits: String = attributes[at + key.len()..]
-                        .chars()
-                        .skip_while(|c| !c.is_ascii_digit())
-                        .take_while(char::is_ascii_digit)
-                        .collect();
-                    digits.is_empty() || digits.parse::<u64>().is_ok_and(|count| count <= size)
-                }));
-            }
-            Event::Eof => return Ok(true),
-            _ => {}
-        }
-    }
-}
-
-/// Decode every worksheet of an `.xlsx`/`.xlsm` workbook into rows of typed
-/// cells. The archive's declared decompressed size (which bounds every entry
-/// read) is charged against the decoded-bytes budget, a shared-strings count
-/// larger than its part is refused before the reader reserves for it, and
-/// sheets are streamed cell by cell. Legacy `.xls` workbooks are refused: their
-/// reader reserves a declared sheet size before any bound can apply.
+/// Decode physical cells through Formats, retaining IO's sparse-grid guard.
 pub(crate) fn read_workbook_with_budget(
     path: &Path,
     budget: &mut ReadBudget,
-) -> Result<Vec<Sheet>, SpecError> {
-    if path
-        .extension()
-        .and_then(|ext| ext.to_str())
+) -> Result<Vec<Sheet<SheetCell>>, SpecError> {
+    if path.extension().and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("xls"))
     {
         return Err(SpecError::new(format!(
@@ -166,67 +70,126 @@ pub(crate) fn read_workbook_with_budget(
         )));
     }
     let raw = budget.read_raw(path)?;
-    let read_error = |e: &dyn std::fmt::Display| {
-        SpecError::new(format!(
-            "spreadsheet read failed for {}: {e}",
-            path.display()
-        ))
-    };
-    let mut archive =
-        zip::ZipArchive::new(Cursor::new(raw.as_slice())).map_err(|e| read_error(&e))?;
-    let mut decoded = 0_u64;
-    for index in 0..archive.len() {
-        let size = archive
-            .by_index_raw(index)
-            .map_err(|e| read_error(&e))?
-            .size();
-        decoded = decoded.saturating_add(size);
-    }
-    budget.charge_decoded(decoded)?;
-    for index in 0..archive.len() {
-        let part = archive.by_index(index).map_err(|e| read_error(&e))?;
-        let name = part.name().map_err(|e| read_error(&e))?;
-        if !name.to_ascii_lowercase().ends_with("sharedstrings.xml") {
+    let workbook = decode_xlsx_cells(&raw, &path.to_string_lossy(), budget.xlsx_limits())
+        .map_err(|error| match error {
+            XlsxDecodeError::Limit { label, maximum } => limit_error(label, maximum),
+            error => SpecError::new(format!("spreadsheet read failed for {}: {error}", path.display())),
+        })?;
+    check_xlsx_profile(path, &workbook.operation, workbook.version)?;
+    let decoded = workbook.usage.archive_decoded_bytes;
+    let total = workbook.usage.total_decoded_bytes()
+        .ok_or_else(|| limit_error("decoded bytes overflow", budget.decoded_allowance()))?;
+    budget.charge_decoded(total)?;
+    let mut sheets = Vec::with_capacity(workbook.sheets.len());
+    for sheet in workbook.sheets {
+        let Some(extent) = sheet.used_extent else {
+            sheets.push((sheet.name, Vec::new()));
             continue;
-        }
-        let size = part.size();
-        if !unique_strings_fit(part, size).map_err(|e| read_error(&e))? {
-            return Err(read_error(&format!(
-                "the shared-strings part declares more strings than its {size} bytes can hold"
+        };
+        let (height, width) = (extent.height, extent.width);
+        if height.saturating_mul(width) > decoded {
+            return Err(SpecError::new(format!(
+                "worksheet '{}' spans {height} x {width} cells, more than the {decoded} bytes it was decoded from; refusing a sparse sheet that would amplify memory", sheet.name
             )));
         }
-    }
-    drop(archive);
-    let mut workbook: Xlsx<_> = Xlsx::new(Cursor::new(raw)).map_err(|e| read_error(&e))?;
-    let mut sheets = Vec::new();
-    let mut file_decoded = decoded;
-    for name in workbook.sheet_names() {
-        let mut reader = workbook
-            .worksheet_cells_reader(&name)
-            .map_err(|e| read_error(&e))?;
-        let mut cells = Vec::new();
-        while let Some(cell) = reader.next_cell().map_err(|e| read_error(&e))? {
-            let value = cell.get_value();
-            // A shared string is copied into every cell that references it:
-            // charge the copy before making it.
-            if let DataRef::SharedString(text) = value {
-                file_decoded = file_decoded.saturating_add(text.len() as u64);
-                if file_decoded > budget.limits.max_decoded_file_bytes {
-                    return Err(limit_error(
-                        "decoded file bytes",
-                        budget.limits.max_decoded_file_bytes,
-                    ));
-                }
-                budget.charge_decoded(text.len() as u64)?;
-            }
-            // An error cell (`#N/A`) is a missing value that still occupies its row.
-            if *value != DataRef::Empty {
-                cells.push((cell.get_position(), sheet_cell(&Data::from(value.clone()))));
-            }
+        let mut rows = vec![vec![SheetCell::Cell(Cell::Na); width as usize]; height as usize];
+        for cell in sheet.cells {
+            let (row, col) = cell.position;
+            if u64::from(row) >= height || u64::from(col) >= width { continue; }
+            rows[row as usize][col as usize] = project_xlsx_cell(cell.value);
         }
-        sheets.push((name.clone(), dense_rows(&name, cells, decoded)?));
+        sheets.push((sheet.name, rows));
     }
     Ok(sheets)
+}
+
+fn project_xlsx_cell(value: XlsxCellValue) -> SheetCell {
+    match value {
+        XlsxCellValue::IntegerLexeme { token } => SheetCell::IntegerLexeme(token),
+        XlsxCellValue::Float64 { bits, token } => SheetCell::Float64 { bits, token },
+        XlsxCellValue::Text(text) => SheetCell::Cell(Cell::Str(text)),
+        XlsxCellValue::Bool(value) => SheetCell::Cell(Cell::Bool(value)),
+        XlsxCellValue::Empty | XlsxCellValue::Error(_) => SheetCell::Cell(Cell::Na),
+        XlsxCellValue::Date { serial_bits, token, rendered, .. } => {
+            if let Some(text) = rendered {
+                return SheetCell::Cell(Cell::Str(text));
+            }
+            let serial = f64::from_bits(serial_bits);
+            let digits = token.strip_prefix(['+', '-']).unwrap_or(&token);
+            if serial.abs() >= 9_007_199_254_740_992.0
+                && !digits.is_empty()
+                && digits.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                // An unavailable date rendering cannot make a rounded serial
+                // authoritative over its physical integer token.
+                SheetCell::IntegerLexeme(token)
+            } else {
+                SheetCell::Cell(Cell::Float(serial))
+            }
+        }
+    }
+}
+
+fn check_xlsx_profile(path: &Path, operation: &str, version: u32) -> Result<(), SpecError> {
+    if operation != XLSX_CELLS_OPERATION || version != XLSX_CELLS_VERSION {
+        return Err(SpecError::new(format!("spreadsheet read failed for {}: unsupported typed-cell operation or version", path.display())));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod xlsx_profile_tests {
+    use super::*;
+
+    #[test]
+    fn date_mapping_uses_rendering_or_original_serial_bits() {
+        use nirs4all_formats::XlsxDateKind;
+        let date = |rendered| XlsxCellValue::Date {
+            kind: XlsxDateKind::DateTime, serial_bits: (-0.0_f64).to_bits(),
+            token: "-0".into(), epoch_1904: true, rendered,
+        };
+        assert!(matches!(project_xlsx_cell(date(Some("1904-01-01 00:00:00".into()))), SheetCell::Cell(Cell::Str(value)) if value == "1904-01-01 00:00:00"));
+        assert!(matches!(project_xlsx_cell(date(None)), SheetCell::Cell(Cell::Float(value)) if value.to_bits() == (-0.0_f64).to_bits()));
+        assert!(matches!(project_xlsx_cell(XlsxCellValue::Error("#N/A".into())), SheetCell::Cell(Cell::Na)));
+    }
+
+    #[test]
+    fn rejects_unknown_operation_and_version_before_mapping() {
+        let path = Path::new("profile.xlsx");
+        assert!(check_xlsx_profile(path, XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION).is_ok());
+        for (operation, version) in [("unknown", XLSX_CELLS_VERSION), (XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION + 1)] {
+            let error = check_xlsx_profile(path, operation, version).unwrap_err();
+            assert!(error.message.contains("profile.xlsx: unsupported typed-cell operation or version"));
+        }
+    }
+
+    #[test]
+    fn workbook_budget_is_cumulative_and_charged_once() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/spectra_refs.xlsx");
+        let bytes = std::fs::read(&path).unwrap();
+        let workbook = decode_xlsx_cells(&bytes, "spectra_refs.xlsx", nirs4all_formats::XlsxDecodeLimits::unlimited()).unwrap();
+        let decoded = workbook.usage.total_decoded_bytes().unwrap();
+        let limits = LoadLimits {
+            max_files: 2,
+            max_file_bytes: bytes.len() as u64,
+            max_total_bytes: 2 * bytes.len() as u64,
+            max_decoded_file_bytes: decoded,
+            max_decoded_total_bytes: 2 * decoded,
+            ..LoadLimits::default()
+        };
+        let mut budget = ReadBudget::new(limits).unwrap();
+        read_workbook_with_budget(&path, &mut budget).unwrap();
+        read_workbook_with_budget(&path, &mut budget).unwrap();
+        assert!(read_workbook_with_budget(&path, &mut budget).unwrap_err().message.contains("max_files"));
+        for constrained in [
+            LoadLimits { max_total_bytes: 2 * bytes.len() as u64 - 1, ..limits },
+            LoadLimits { max_decoded_total_bytes: 2 * decoded - 1, ..limits },
+        ] {
+            let mut budget = ReadBudget::new(constrained).unwrap();
+            read_workbook_with_budget(&path, &mut budget).unwrap();
+            assert!(read_workbook_with_budget(&path, &mut budget).is_err());
+        }
+    }
 }
 
 fn parquet_header_unit(params: &LoadingParams) -> String {
@@ -411,13 +374,15 @@ fn column_from_parquet_cells(
     data_type: &DataType,
     cells: Vec<Cell>,
 ) -> Result<Column, SpecError> {
-    match data_type {
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => Ok(Column {
-            name: name.into(),
-            dtype: ColDtype::String,
-            numeric_kind: NumericKind::NonNumeric,
-            values: cells,
-        }),
+    let mut column = match data_type {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {
+            // Preserve loaded text/null cells without applying numeric NA promotion.
+            let mut column = Column::from_cells(name, Vec::new());
+            column.values = cells;
+            column.dtype = ColDtype::String;
+            column.numeric_kind = NumericKind::NonNumeric;
+            Ok(column)
+        }
         DataType::Boolean => Ok(Column::from_cells(name, cells)),
         DataType::Int8
         | DataType::Int16
@@ -430,7 +395,25 @@ fn column_from_parquet_cells(
         | DataType::Float32
         | DataType::Float64 => Ok(Column::from_cells(name, cells)),
         other => Err(unsupported_parquet_type(name, other)),
-    }
+    }?;
+    column.source_dtype = Some(
+        match data_type {
+            DataType::Float32 => "float32",
+            DataType::Float64 => "float64",
+            DataType::Int8 => "int8",
+            DataType::Int16 => "int16",
+            DataType::Int32 => "int32",
+            DataType::Int64 => "int64",
+            DataType::UInt8 => "uint8",
+            DataType::UInt16 => "uint16",
+            DataType::UInt32 => "uint32",
+            DataType::UInt64 => "uint64",
+            DataType::Boolean => "bool",
+            _ => "object",
+        }
+        .to_owned(),
+    );
+    Ok(column)
 }
 
 fn read_parquet_raw_with_budget(

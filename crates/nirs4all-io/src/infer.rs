@@ -11,10 +11,16 @@ use std::sync::LazyLock;
 
 use nirs4all_io_core::conventions::{assignments_to_spec_dict, match_items, resolve_profiles};
 use nirs4all_io_core::infer::column_roles::{infer_column_roles, structure_kind};
-use nirs4all_io_core::infer::describe::{describe_text, FileDescription};
+use nirs4all_io_core::infer::describe::{
+    describe_text, record_description, select_description_params, warn_inferred_header,
+    FileDescription,
+};
 use nirs4all_io_core::infer::detectors::{detect_signal_type, detect_task_type};
-use nirs4all_io_core::infer::identity::{detect_sample_id, key_sources_by_id, repetition_profile};
+use nirs4all_io_core::infer::identity::{
+    configure_generated_keys, detect_sample_id, repetition_profile,
+};
 use nirs4all_io_core::infer::plan::{DatasetPlan, Decision};
+use nirs4all_io_core::infer::InferOptions;
 use nirs4all_io_core::pyfmt::{py_float_repr, py_round};
 use nirs4all_io_core::spec::dataset_spec::LoadingParams;
 use nirs4all_io_core::spec::selectors::Selector;
@@ -23,7 +29,10 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::materialize::loaders::{read_table, LoadedTable};
-use crate::resolve::{resolve_list, resolve_path, InputSet};
+use crate::resolve::{
+    absolutize_file_references, resolve_list, resolve_path, used_file_references, FileReferences,
+    InputSet,
+};
 
 const DEFAULT_CONVENTIONS: &[&str] = &["nirs4all-classic"];
 
@@ -48,8 +57,11 @@ pub fn describe(path: &Path) -> FileDescription {
     describe_text(&text, 50)
 }
 
-fn params_from(src: &Value) -> LoadingParams {
-    LoadingParams::from_value(src.get("params")).unwrap_or_default()
+fn params_from(src: &Value, global: Option<&Value>) -> LoadingParams {
+    nirs4all_io_core::materialize::effective_params(
+        &LoadingParams::from_value(global).unwrap_or_default(),
+        &LoadingParams::from_value(src.get("params")).unwrap_or_default(),
+    )
 }
 
 /// Resolve the input string (dir/file/glob) and infer a plan.
@@ -58,39 +70,24 @@ fn params_from(src: &Value) -> LoadingParams {
 /// profile's `match.recursive` when expanding a directory (a known Python
 /// limitation reproduced for parity — e.g. `vendor-corpus` is recursive but the
 /// Python pipeline still resolves the top level only).
-pub fn infer_path(input: &str, conventions: Option<&[String]>) -> Result<DatasetPlan, SpecError> {
-    infer_inputset(resolve_path(input, false), conventions)
+pub fn infer_path(input: &str, options: &InferOptions) -> Result<DatasetPlan, SpecError> {
+    infer_inputset(resolve_path(input, false)?, options)
 }
 
 /// Resolve a list of paths and infer a plan.
-pub fn infer_paths(
-    paths: &[String],
-    conventions: Option<&[String]>,
-) -> Result<DatasetPlan, SpecError> {
-    infer_inputset(resolve_list(paths, false), conventions)
+pub fn infer_paths(paths: &[String], options: &InferOptions) -> Result<DatasetPlan, SpecError> {
+    infer_inputset(resolve_list(paths, false)?, options)
 }
 
-fn infer_inputset(
-    iset: InputSet,
-    conventions: Option<&[String]>,
-) -> Result<DatasetPlan, SpecError> {
-    let conv: Vec<&str> = match conventions {
-        Some(c) => c.iter().map(String::as_str).collect(),
-        None => DEFAULT_CONVENTIONS.to_vec(),
+fn infer_inputset(iset: InputSet, options: &InferOptions) -> Result<DatasetPlan, SpecError> {
+    options.validate(&iset.names())?;
+    let conv: Vec<&str> = if options.conventions.is_empty() {
+        DEFAULT_CONVENTIONS.to_vec()
+    } else {
+        options.conventions.iter().map(String::as_str).collect()
     };
     let profiles = resolve_profiles(&conv)?;
     let result = match_items(&iset.names(), &profiles, None, None);
-    let base_dir = iset
-        .items
-        .first()
-        .map(|it| {
-            PathBuf::from(&it.identity)
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_default()
-        })
-        .unwrap_or_else(|| PathBuf::from("."));
-
     let mut plan = DatasetPlan {
         input: json!({"kind": iset.origin.get("kind"), "ref": iset.origin.get("ref")}),
         ..Default::default()
@@ -144,7 +141,12 @@ fn infer_inputset(
             0.7,
             vec!["one tabular file; column roles inferred".into()],
         ));
-        infer_single_file(&file_items[0].identity, &mut plan)?
+        infer_single_file(
+            &file_items[0].identity,
+            &file_items[0].ref_,
+            options,
+            &mut plan,
+        )?
     } else {
         plan.structure = Some(Decision::new(
             "unknown",
@@ -156,9 +158,11 @@ fn infer_inputset(
         json!({"name": "dataset", "sources": []})
     };
 
-    enrich_params(&mut spec_dict, &base_dir, &mut plan);
-    infer_identity_and_alignment(&mut spec_dict, &base_dir, &mut plan)?;
-    infer_signal_and_task(&mut spec_dict, &base_dir, &mut plan);
+    options.apply_to_spec(&mut spec_dict)?;
+    let refs = used_file_references(&iset, &spec_dict)?;
+    enrich_params(&mut spec_dict, &refs, &mut plan);
+    infer_identity_and_alignment(&mut spec_dict, &refs, &mut plan)?;
+    infer_signal_and_task(&mut spec_dict, &refs, &mut plan);
     if let Some(t) = &plan.task_type {
         if matches!(t.value.as_str(), Some("binary") | Some("multiclass")) {
             if let Some(agg) = spec_dict
@@ -169,7 +173,7 @@ fn infer_inputset(
             }
         }
     }
-    absolutize_inputs(&mut spec_dict, &base_dir, &iset);
+    absolutize_file_references(&mut spec_dict, &refs);
 
     if !result.unmatched.is_empty() {
         let refs = Value::Array(
@@ -205,14 +209,26 @@ fn infer_inputset(
     Ok(plan)
 }
 
-fn infer_single_file(path: &str, plan: &mut DatasetPlan) -> Result<Value, SpecError> {
+fn infer_single_file(
+    path: &str,
+    logical_name: &str,
+    options: &InferOptions,
+    plan: &mut DatasetPlan,
+) -> Result<Value, SpecError> {
     let p = Path::new(path);
-    let desc = describe(p);
-    let params = LoadingParams {
-        delimiter: Some(desc.delimiter.to_string()),
-        has_header: Some(true),
-        ..Default::default()
-    };
+    let mut desc = describe(p);
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut selected = options.effective_file_params(logical_name)?;
+    warn_inferred_header(&desc, &selected, None, &name, &mut plan.warnings);
+    select_description_params(&desc, &mut selected, true, None);
+    record_description(&desc, &selected, "data", &name, plan);
+    let params = LoadingParams::from_value(Some(&Value::Object(selected.clone())))?;
+    if params.has_header == Some(false) {
+        desc.is_wavelength_header = false;
+    }
     let table = read_table(p, &params)?;
     let profile = table.to_table_profile();
     let guesses = infer_column_roles(&desc, &profile);
@@ -234,10 +250,6 @@ fn infer_single_file(path: &str, plan: &mut DatasetPlan) -> Result<Value, SpecEr
             }
         }
     }
-    let name = p
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
     plan.columns = vec![json!({"ref": name, "column_roles": guesses.clone()})];
 
     let mut columns: Vec<Value> = vec![];
@@ -254,12 +266,9 @@ fn infer_single_file(path: &str, plan: &mut DatasetPlan) -> Result<Value, SpecEr
     let mut source = Map::new();
     source.insert("id".into(), json!("data"));
     source.insert("role".into(), json!("mixed"));
-    source.insert("input".into(), json!(name));
+    source.insert("input".into(), json!(path));
     source.insert("columns".into(), Value::Array(columns));
-    source.insert(
-        "params".into(),
-        json!({"delimiter": desc.delimiter.to_string(), "has_header": true}),
-    );
+    source.insert("params".into(), Value::Object(selected));
 
     let stem = file_stem(&name);
     let mut spec = Map::new();
@@ -288,16 +297,12 @@ fn source_first_input(src: &Value) -> Option<String> {
     }
 }
 
-fn resolve_input_path(first: &str, base_dir: &Path) -> PathBuf {
-    let p = Path::new(first);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        base_dir.join(first)
-    }
+fn resolve_input_path(first: &str, refs: &FileReferences) -> PathBuf {
+    PathBuf::from(&refs[first].identity)
 }
 
-fn enrich_params(spec_dict: &mut Value, base_dir: &Path, plan: &mut DatasetPlan) {
+fn enrich_params(spec_dict: &mut Value, refs: &FileReferences, plan: &mut DatasetPlan) {
+    let global = spec_dict.get("params").cloned();
     let Some(sources) = spec_dict.get_mut("sources").and_then(|v| v.as_array_mut()) else {
         return;
     };
@@ -305,13 +310,10 @@ fn enrich_params(spec_dict: &mut Value, base_dir: &Path, plan: &mut DatasetPlan)
         let Some(first) = source_first_input(src) else {
             continue;
         };
-        let path = resolve_input_path(&first, base_dir);
+        let path = resolve_input_path(&first, refs);
         let ext_ok = matches!(
-            path.extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_lowercase)
-                .as_deref(),
-            Some("csv") | Some("tsv") | Some("txt")
+            refs[&first].extension.as_deref(),
+            Some(".csv" | ".tsv" | ".txt")
         );
         if !path.exists() || !ext_ok {
             continue;
@@ -322,6 +324,11 @@ fn enrich_params(spec_dict: &mut Value, base_dir: &Path, plan: &mut DatasetPlan)
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let single = src
+            .get("input")
+            .and_then(Value::as_array)
+            .is_none_or(|items| items.len() == 1);
+        let source_id = src["id"].as_str().unwrap().to_string();
         let params = src
             .as_object_mut()
             .unwrap()
@@ -329,33 +336,23 @@ fn enrich_params(spec_dict: &mut Value, base_dir: &Path, plan: &mut DatasetPlan)
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
             .unwrap();
-        params
-            .entry("delimiter")
-            .or_insert_with(|| json!(desc.delimiter.to_string()));
-        if desc.has_header {
-            params.entry("has_header").or_insert_with(|| json!(true));
-        }
-        if matches!(role.as_str(), "features" | "mixed")
+        let base = Path::new(&first)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        warn_inferred_header(&desc, params, global.as_ref(), &base, &mut plan.warnings);
+        select_description_params(&desc, params, single, global.as_ref());
+        let header_enabled = params.get("has_header").and_then(Value::as_bool) != Some(false);
+        if header_enabled
+            && matches!(role.as_str(), "features" | "mixed")
             && matches!(desc.header_unit.as_str(), "nm" | "cm-1")
         {
             params
                 .entry("header_unit")
                 .or_insert_with(|| json!(desc.header_unit.clone()));
         }
-        let base = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let dconf = py_round(*desc.confidence.get("delimiter").unwrap_or(&0.5), 3);
-        let hconf = py_round(*desc.confidence.get("has_header").unwrap_or(&0.5), 3);
-        plan.params.as_object_mut().unwrap().insert(
-            base,
-            json!({
-                "delimiter": {"value": desc.delimiter.to_string(), "score": dconf},
-                "has_header": {"value": desc.has_header, "score": hconf},
-            }),
-        );
-        if desc.is_wavelength_header {
+        record_description(&desc, params, &source_id, &base, plan);
+        if header_enabled && desc.is_wavelength_header {
             if let Some((lo, hi)) = desc.axis_range {
                 let ascore = py_round(*desc.confidence.get("header_unit").unwrap_or(&0.8), 3);
                 plan.axis = Some(json!({
@@ -402,7 +399,7 @@ fn resolve_role_columns(src: &Value, table: &LoadedTable, role: &str) -> Vec<Str
     out
 }
 
-fn infer_signal_and_task(spec_dict: &mut Value, base_dir: &Path, plan: &mut DatasetPlan) {
+fn infer_signal_and_task(spec_dict: &mut Value, refs: &FileReferences, plan: &mut DatasetPlan) {
     let sources = spec_dict
         .get("sources")
         .and_then(|v| v.as_array())
@@ -419,11 +416,11 @@ fn infer_signal_and_task(spec_dict: &mut Value, base_dir: &Path, plan: &mut Data
     let Some(first) = source_first_input(feature_src) else {
         return;
     };
-    let path = resolve_input_path(&first, base_dir);
+    let path = resolve_input_path(&first, refs);
     if !path.exists() {
         return;
     }
-    let Ok(table) = read_table(&path, &params_from(feature_src)) else {
+    let Ok(table) = read_table(&path, &params_from(feature_src, spec_dict.get("params"))) else {
         return;
     };
 
@@ -469,7 +466,9 @@ fn infer_signal_and_task(spec_dict: &mut Value, base_dir: &Path, plan: &mut Data
         });
     }
 
-    if let Some((values, where_)) = first_target_values(&sources, feature_src, &table, base_dir) {
+    if let Some((values, where_)) =
+        first_target_values(&sources, feature_src, &table, refs, spec_dict.get("params"))
+    {
         if !values.is_empty() {
             let (task, tscore) = detect_task_type(&values, 0.05);
             plan.task_type = Some(Decision::new(
@@ -485,7 +484,8 @@ fn first_target_values(
     sources: &[Value],
     feature_src: &Value,
     feature_table: &LoadedTable,
-    base_dir: &Path,
+    refs: &FileReferences,
+    global: Option<&Value>,
 ) -> Option<(Vec<f64>, String)> {
     let in_feature = resolve_role_columns(feature_src, feature_table, "targets");
     if let Some(col) = in_feature.first() {
@@ -512,11 +512,11 @@ fn first_target_values(
         let Some(first) = source_first_input(src) else {
             continue;
         };
-        let path = resolve_input_path(&first, base_dir);
+        let path = resolve_input_path(&first, refs);
         if !path.exists() {
             continue;
         }
-        let Ok(tdf) = read_table(&path, &params_from(src)) else {
+        let Ok(tdf) = read_table(&path, &params_from(src, global)) else {
             continue;
         };
         let cols = resolve_role_columns(src, &tdf, "targets");
@@ -536,7 +536,7 @@ fn first_target_values(
 
 fn infer_identity_and_alignment(
     spec_dict: &mut Value,
-    base_dir: &Path,
+    refs: &FileReferences,
     plan: &mut DatasetPlan,
 ) -> Result<(), SpecError> {
     if plan.identity.is_some() {
@@ -563,50 +563,103 @@ fn infer_identity_and_alignment(
     // a tracked follow-up (EPIC 12 parity hardening).
     let is_multi = matches!(feature_src.get("input"), Some(Value::Array(a)) if a.len() > 1);
     if is_multi {
+        configure_generated_keys(
+            spec_dict,
+            plan,
+            |source| {
+                let inputs: Vec<&str> = match &source["input"] {
+                    Value::String(input) => vec![input],
+                    Value::Array(inputs) => inputs.iter().filter_map(Value::as_str).collect(),
+                    _ => return None,
+                };
+                inputs
+                    .into_iter()
+                    .map(|input| {
+                        use std::io::Read;
+                        let path = resolve_input_path(input, refs);
+                        let file = std::fs::File::open(path).ok()?;
+                        let mut bytes = Vec::new();
+                        file.take(
+                            nirs4all_io_core::materialize::loaders::DELIMITER_SAMPLE_BYTES as u64,
+                        )
+                        .read_to_end(&mut bytes)
+                        .ok()?;
+                        Some(bytes)
+                    })
+                    .collect()
+            },
+            true,
+        );
         return Ok(());
     }
-    let path = resolve_input_path(&first, base_dir);
+    let path = resolve_input_path(&first, refs);
     if !path.exists() {
         return Ok(());
     }
-    let Ok(table) = read_table(&path, &params_from(feature_src)) else {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .map_err(|e| SpecError::new(e.to_string()))?
+        .take(nirs4all_io_core::materialize::loaders::DELIMITER_SAMPLE_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| SpecError::new(e.to_string()))?;
+    let Some(table) = nirs4all_io_core::materialize::loaders::discovery_table(
+        &bytes,
+        &params_from(feature_src, spec_dict.get("params")),
+    ) else {
         return Ok(());
     };
     let profile = table.to_table_profile();
-    let Some(guess) = detect_sample_id(&profile) else {
-        return Ok(());
-    };
-    let id_col = guess.column.clone();
-    plan.identity = Some(Decision {
-        value: json!(id_col),
-        score: guess.score,
-        evidence: guess.evidence.clone(),
-        alternatives: vec![],
-        ambiguous: !guess.unique,
-    });
-    let feature_id = feature_src
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if let Some(spec) = spec_dict.as_object_mut() {
-        spec.insert("sample_index".into(), json!({"by": "id", "key": id_col}));
-        if let Some(column) = profile.column(&id_col) {
-            apply_repetition(
-                spec,
-                plan,
-                &id_col,
-                column.str_values.len(),
-                column.nunique_with_na,
-            );
+    let guess = detect_sample_id(&profile);
+    if let Some(guess) = &guess {
+        let id_col = guess.column.clone();
+        plan.identity = Some(Decision {
+            value: json!(id_col),
+            score: guess.score,
+            evidence: guess.evidence.clone(),
+            alternatives: vec![],
+            ambiguous: !guess.unique,
+        });
+        if let Some(spec) = spec_dict.as_object_mut() {
+            spec.insert("sample_index".into(), json!({"by": "id", "key": id_col}));
+            if let Some(column) = profile.column(&id_col) {
+                apply_repetition(
+                    spec,
+                    plan,
+                    &id_col,
+                    column.str_values.len(),
+                    column.nunique_with_na,
+                );
+            }
         }
     }
-    key_sources_by_id(spec_dict, plan, &id_col, &feature_id, &profile, |source| {
-        let first = source_first_input(source)?;
-        let path = resolve_input_path(&first, base_dir);
-        let table = read_table(&path, &params_from(source)).ok()?;
-        Some(table.to_table_profile())
-    });
+    configure_generated_keys(
+        spec_dict,
+        plan,
+        |source| {
+            let inputs: Vec<&str> = match &source["input"] {
+                Value::String(input) => vec![input],
+                Value::Array(inputs) => inputs.iter().filter_map(Value::as_str).collect(),
+                _ => return None,
+            };
+            inputs
+                .into_iter()
+                .map(|input| {
+                    use std::io::Read;
+                    let path = resolve_input_path(input, refs);
+                    let file = std::fs::File::open(path).ok()?;
+                    let mut bytes = Vec::new();
+                    file.take(
+                        nirs4all_io_core::materialize::loaders::DELIMITER_SAMPLE_BYTES as u64,
+                    )
+                    .read_to_end(&mut bytes)
+                    .ok()?;
+                    Some(bytes)
+                })
+                .collect()
+        },
+        true,
+    );
     Ok(())
 }
 
@@ -643,44 +696,5 @@ fn apply_repetition(
             "sample id '{id_col}' has {} duplicate value(s) (not unique per row, not a clean repetition pattern)",
             profile.n_rows - profile.n_unique
         ));
-    }
-}
-
-fn absolutize_inputs(spec_dict: &mut Value, base_dir: &Path, iset: &InputSet) {
-    let mut name_to_abs: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for it in &iset.items {
-        name_to_abs.insert(it.ref_.clone(), it.identity.clone());
-    }
-    let abs = |name: &str| -> String {
-        name_to_abs
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| base_dir.join(name).to_string_lossy().into_owned())
-    };
-    let Some(sources) = spec_dict.get_mut("sources").and_then(|v| v.as_array_mut()) else {
-        return;
-    };
-    for src in sources.iter_mut() {
-        let Some(obj) = src.as_object_mut() else {
-            continue;
-        };
-        match obj.get("input").cloned() {
-            Some(Value::Array(a)) => {
-                let mapped: Vec<Value> = a
-                    .iter()
-                    .map(|v| {
-                        v.as_str()
-                            .map(|s| Value::from(abs(s)))
-                            .unwrap_or_else(|| v.clone())
-                    })
-                    .collect();
-                obj.insert("input".into(), Value::Array(mapped));
-            }
-            Some(Value::String(s)) => {
-                obj.insert("input".into(), Value::from(abs(&s)));
-            }
-            _ => {}
-        }
     }
 }

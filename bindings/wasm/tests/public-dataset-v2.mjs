@@ -45,3 +45,17 @@ test('masked independent classifier columns preserve labels and refuse changed o
  value.dataset.y.values=[[0,3],[1,3],[0,7],[1,3]];value.dataset.target_mask.values=value.dataset.y.values.map(()=>[true,true]);
  assert.deepEqual(new Dataset(value).toMaskedMatrixRegression('matrix').y,value.dataset.y.values);assert.throws(()=>new Dataset(value).toMatrixRegression('matrix'),/int64 target vector/);
 });
+
+test('large declared arrays reach nested-values mismatch without a cell-count cap',()=>{
+ const source=read();source.dataset.sources[0].array.shape=[10000,2048];
+ assert.throws(()=>normalizeDataset(source),/Array shape differs from nested values/);
+ const targets=read();targets.dataset.target_mask=null;targets.dataset.y.shape=[10000,2048];
+ assert.throws(()=>normalizeDataset(targets),/Array shape differs from nested values/);
+});
+
+test('array dimensions still refuse unsafe products, invalid ranks and invalid dimensions',()=>{
+ for(const shape of [[2**40,2**20],[],Array(9).fill(1),[-1,2],[1.5,2]]){
+  const record=read();record.dataset.sources[0].array.shape=shape;
+  assert.throws(()=>normalizeDataset(record),/Invalid dtype\/shape/);
+ }
+});

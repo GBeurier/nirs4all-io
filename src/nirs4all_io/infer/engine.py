@@ -18,13 +18,15 @@ import pandas as pd
 from ..conventions.engine import get_stem, match_items
 from ..conventions.profiles import resolve_profiles
 from ..conventions.to_spec import assignments_to_spec_dict
-from ..materialize.loaders import coerce_numeric, read_table
+from ..materialize.loaders import coerce_numeric, discovery_table, effective_params, read_table
 from ..resolve import resolve
+from ..resolve.resolver import InputItem, _absolutize_file_references, _file_reference_table
 from ..spec import DatasetSpec
+from ..spec.dataset_spec import LoadingParams
 from ..spec.enums import Role
 from .describe import FileDescription, describe
 from .detectors import detect_signal_type, detect_task_type
-from .identity import classify_metadata_relation, coverage_audit, detect_replicate_grouping, detect_sample_id, repetition_profile
+from .identity import classify_metadata_relation, coverage_audit, detect_replicate_grouping, detect_sample_id, key_sources_by_id, repetition_profile
 from .plan import DatasetPlan, Decision
 
 _WL_RE = re.compile(r"^\d+(\.\d+)?(nm|cm-1)?$", re.IGNORECASE)
@@ -40,7 +42,6 @@ def infer(inp: object, *, conventions: list[str] | None = None, hints: dict | No
     iset = resolve(inp)
     profiles = resolve_profiles(conventions or _DEFAULT_CONVENTIONS)
     result = match_items(iset.names, profiles)
-    base_dir = Path(iset.items[0].identity).parent if iset.items else Path(".")
     plan = DatasetPlan(input={"kind": iset.origin.get("kind"), "ref": iset.origin.get("ref")})
 
     file_items = [it for it in iset.items if it.kind == "file"]
@@ -70,13 +71,14 @@ def infer(inp: object, *, conventions: list[str] | None = None, hints: dict | No
         plan.warnings.append("no convention matched; provide an explicit DatasetSpec or conventions")
         spec_dict = {"name": "dataset", "sources": []}
 
-    _enrich_params(spec_dict, base_dir, plan)
-    _infer_identity_and_alignment(spec_dict, base_dir, plan)  # detect sample id + audit y/metadata coverage
-    _infer_signal_and_task(spec_dict, base_dir, plan)
+    refs = _file_reference_table(iset, spec_dict)
+    _enrich_params(spec_dict, plan, refs)
+    _infer_identity_and_alignment(spec_dict, plan, refs)  # detect sample id + audit y/metadata coverage
+    _infer_signal_and_task(spec_dict, plan, refs)
     # a proposed aggregation over repetitions uses 'vote' for classification targets
     if plan.task_type and plan.task_type.value in ("binary", "multiclass") and isinstance(spec_dict.get("aggregate"), dict):
         spec_dict["aggregate"]["method"] = "vote"
-    _absolutize_inputs(spec_dict, base_dir, iset)  # so load(plan.accept()) works anywhere
+    _absolutize_file_references(spec_dict, refs)  # so load(plan.accept()) works anywhere
 
     if result.unmatched:
         plan.warnings.append(f"unassigned files: {result.unmatched}")
@@ -118,6 +120,28 @@ def infer_column_roles(desc: FileDescription, df: pd.DataFrame) -> list[dict]:
     return guesses
 
 
+def _select_description_params(desc: FileDescription, params: dict, single: bool, global_params: dict | None = None) -> bool:
+    if desc.delimiter_candidates:
+        return False
+    params.setdefault("delimiter", desc.delimiter)
+    effective = effective_params(LoadingParams.from_dict(global_params), LoadingParams.from_dict(params))
+    if single and desc.decimal_separator == "," and (effective.delimiter or ";") == desc.delimiter and not effective.decimal_separator:
+        params.setdefault("decimal_separator", ",")
+    return True
+
+
+def _record_description(desc: FileDescription, params: dict, source_id: str, filename: str, plan: DatasetPlan) -> None:
+    resolved = not desc.delimiter_candidates
+    entry = {"delimiter": {"value": desc.delimiter if resolved else None, "score": round(desc.confidence.get("delimiter", 0.5), 3)}, "has_header": {"value": desc.has_header, "score": round(desc.confidence.get("has_header", 0.5), 3)}}
+    if resolved and params.get("decimal_separator") == ",":
+        entry["decimal_separator"] = {"value": ",", "score": round(desc.confidence.get("decimal_separator", 0.5), 3)}
+    plan.params[filename] = entry
+    if not resolved:
+        warning = f"source '{source_id}': file '{filename}' delimiter unresolved: candidates {list(desc.delimiter_candidates)!r}; declare params.delimiter (and params.decimal_separator if ',' is the decimal mark)"
+        if warning not in plan.warnings:
+            plan.warnings.append(warning)
+
+
 def _infer_single_file(path: str, plan: DatasetPlan) -> dict:
     from ..spec.dataset_spec import LoadingParams
 
@@ -126,7 +150,10 @@ def _infer_single_file(path: str, plan: DatasetPlan) -> dict:
     # column roles match what load() will read. Like nirs4all's loader, default
     # has_header=True for tabular data (the speculative no-header verdict on a
     # numeric wavelength header is unreliable).
-    table = read_table(path, LoadingParams(delimiter=desc.delimiter, has_header=True))
+    params: dict = {"has_header": True}
+    _select_description_params(desc, params, True)
+    table = read_table(path, LoadingParams.from_dict(params))
+    _record_description(desc, params, "data", Path(path).name, plan)
     desc.column_names = list(table.df.columns)
     guesses = infer_column_roles(desc, table.df)
     # detect a sample-id column; it is the identity key, not a feature/target/metadata role
@@ -143,7 +170,7 @@ def _infer_single_file(path: str, plan: DatasetPlan) -> dict:
         cols = [g["col"] for g in guesses if g["role"] == role and g["col"] != id_col]
         if cols:
             columns.append({"role": role, "select": cols})
-    source: dict = {"id": "data", "role": "mixed", "input": Path(path).name, "columns": columns, "params": {"delimiter": desc.delimiter, "has_header": True}}
+    source: dict = {"id": "data", "role": "mixed", "input": path, "columns": columns, "params": params}
     spec: dict = {"name": Path(path).stem, "sources": [source]}
     if id_col:
         source["key"] = id_col
@@ -152,30 +179,30 @@ def _infer_single_file(path: str, plan: DatasetPlan) -> dict:
     return spec
 
 
-def _enrich_params(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -> None:
+def _enrich_params(spec_dict: dict, plan: DatasetPlan, refs: dict[str, InputItem]) -> None:
     for src in spec_dict.get("sources", []):
         inp = src.get("input")
         first = inp[0] if isinstance(inp, list) else inp
         if not isinstance(first, str):
             continue
-        path = Path(first) if Path(first).is_absolute() else base_dir / first
-        if not path.exists() or path.suffix.lower() not in (".csv", ".tsv", ".txt"):
+        path = Path(refs[first].identity)
+        if not path.exists() or refs[first].extension not in (".csv", ".tsv", ".txt"):
             continue
         desc = describe(path)
         params = src.setdefault("params", {})
-        params.setdefault("delimiter", desc.delimiter)
+        _select_description_params(desc, params, not isinstance(inp, list) or len(inp) == 1, spec_dict.get("params"))
         # only assert a header when detected positively; never speculatively set
         # has_header=False (spectral CSVs default to having a header, like nirs4all)
         if desc.has_header:
             params.setdefault("has_header", True)
         if src.get("role") in ("features", "mixed") and desc.header_unit in ("nm", "cm-1"):
             params.setdefault("header_unit", desc.header_unit)
-        plan.params[Path(first).name] = {k: {"value": v, "score": round(desc.confidence.get(k, 0.5), 3)} for k, v in (("delimiter", desc.delimiter), ("has_header", desc.has_header))}
+        _record_description(desc, params, src["id"], Path(first).name, plan)
         if desc.is_wavelength_header and desc.axis_range:
             plan.axis = {"unit": desc.header_unit, "n": desc.n_cols, "range": list(desc.axis_range), "score": round(desc.confidence.get("header_unit", 0.8), 3)}
 
 
-def _infer_signal_and_task(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -> None:
+def _infer_signal_and_task(spec_dict: dict, plan: DatasetPlan, refs: dict[str, InputItem]) -> None:
     feature_src = next((s for s in spec_dict.get("sources", []) if s.get("role") in ("features", "mixed")), None)
     if feature_src is None:
         return
@@ -183,7 +210,7 @@ def _infer_signal_and_task(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -
     first = inp[0] if isinstance(inp, list) else inp
     if not isinstance(first, str):
         return
-    path = Path(first) if Path(first).is_absolute() else base_dir / first
+    path = Path(refs[first].identity)
     if not path.exists():
         return
     try:
@@ -209,13 +236,13 @@ def _infer_signal_and_task(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -
         sig, sscore, reason = detect_signal_type(x, wl)
         plan.signal_type = Decision(sig, sscore, [reason], ambiguous=sig == "unknown")
     # task type: from a target column in the feature source, OR a separate targets file
-    values, where = _first_target_values(spec_dict, feature_src, df, base_dir)
+    values, where = _first_target_values(spec_dict, feature_src, df, refs)
     if values is not None and values.size:
         task, tscore = detect_task_type(values)
         plan.task_type = Decision(task, tscore, [f"target {where} value distribution"])
 
 
-def _first_target_values(spec_dict: dict, feature_src: dict, feature_df: pd.DataFrame, base_dir: Path):
+def _first_target_values(spec_dict: dict, feature_src: dict, feature_df: pd.DataFrame, refs: dict[str, InputItem]):
     """Find a target column's values: inside the feature source, else a separate targets source."""
     in_feature = _resolve_role_columns(feature_src, feature_df, "targets")
     if in_feature and in_feature[0] in feature_df.columns:
@@ -230,7 +257,7 @@ def _first_target_values(spec_dict: dict, feature_src: dict, feature_df: pd.Data
         first = inp[0] if isinstance(inp, list) else inp
         if not isinstance(first, str):
             continue
-        p = Path(first) if Path(first).is_absolute() else base_dir / first
+        p = Path(refs[first].identity)
         if not p.exists():
             continue
         try:
@@ -244,59 +271,42 @@ def _first_target_values(spec_dict: dict, feature_src: dict, feature_df: pd.Data
     return None, ""
 
 
-def _absolutize_inputs(spec_dict: dict, base_dir: Path, iset) -> None:
-    """Rewrite source inputs to absolute paths so the resolved_spec is location-independent."""
-    name_to_abs = {it.ref: it.identity for it in iset.items}
-
-    def _abs(name: str) -> str:
-        return name_to_abs.get(name) or str(base_dir / name)
-
-    for src in spec_dict.get("sources", []):
-        value = src.get("input")
-        if isinstance(value, list):
-            src["input"] = [_abs(n) for n in value]
-        elif isinstance(value, str):
-            src["input"] = _abs(value)
-
-
 def _params_from(src: dict):
     from ..spec.dataset_spec import LoadingParams
 
     return LoadingParams.from_dict(src.get("params"))
 
 
-def _source_paths(src: dict, base_dir: Path) -> list[Path]:
-    import glob as _glob
-
-    out: list[Path] = []
-    inp = src.get("input")
-    for item in inp if isinstance(inp, list) else [inp]:
-        if not isinstance(item, str):
-            continue
-        if any(c in item for c in "*?["):
-            out.extend(Path(p) for p in sorted(_glob.glob(item) or _glob.glob(str(base_dir / item))))
-        else:
-            p = Path(item) if Path(item).is_absolute() else base_dir / item
-            out.append(p)
-    return [p for p in out if p.exists()]
+def _source_paths(src: dict, refs: dict[str, InputItem]) -> list[Path]:
+    value = src.get("input")
+    # A canonical identity or exact logical name must never be interpreted as a pattern.
+    return [Path(refs[item].identity) for item in (value if isinstance(value, list) else [value]) if isinstance(item, str)]
 
 
-def _read_source_df(src: dict, base_dir: Path) -> pd.DataFrame | None:
+def _read_source_df(src: dict, refs: dict[str, InputItem]) -> pd.DataFrame | None:
     """Read + concat ALL of a source's input files for id detection / coverage.
 
     A multi-file source also gets a per-row `filename_stem` (so vendor corpora,
     one file per sample, expose a usable identity).
     """
-    paths = _source_paths(src, base_dir)
+    paths = _source_paths(src, refs)
     if not paths:
         return None
     params = _params_from(src)
     frames, stems = [], []
     for p in paths:
         try:
-            df = read_table(p, params).df
+            if p.suffix.lower() in {".csv", ".tsv", ".txt"}:
+                preview = discovery_table(p, params)
+                if preview is None:
+                    return None
+                df = preview[0]
+            else:
+                # Preserve the existing Formats/compressed-reader delegation;
+                # the new bounded CSV proposal never parses vendor bytes.
+                df = read_table(p, params).df
         except Exception:  # noqa: BLE001 - best-effort
-            continue
+            return None
         frames.append(df)
         stems.extend([get_stem(p.name)] * len(df))
     if not frames:
@@ -308,7 +318,7 @@ def _read_source_df(src: dict, base_dir: Path) -> pd.DataFrame | None:
     return out
 
 
-def _infer_identity_and_alignment(spec_dict: dict, base_dir: Path, plan: DatasetPlan) -> None:
+def _infer_identity_and_alignment(spec_dict: dict, plan: DatasetPlan, refs: dict[str, InputItem]) -> None:
     """Detect a sample-id column; key the sources by it; audit y/metadata coverage."""
     if plan.identity is not None:  # already handled (single combined file)
         return
@@ -316,7 +326,7 @@ def _infer_identity_and_alignment(spec_dict: dict, base_dir: Path, plan: Dataset
     feature_src = next((s for s in sources if s.get("role") in ("features", "mixed") and s.get("kind") != "lookup"), None)
     if feature_src is None:
         return
-    fdf = _read_source_df(feature_src, base_dir)
+    fdf = _read_source_df(feature_src, refs)
     if fdf is None:
         return
     guess = detect_sample_id(fdf)
@@ -341,32 +351,59 @@ def _infer_identity_and_alignment(spec_dict: dict, base_dir: Path, plan: Dataset
             plan.identity = Decision(id_col, 0.7, ["one file per sample -> identity = filename stem"], ambiguous=not bool(fdf["filename_stem"].is_unique))
             spec_dict["sample_index"] = {"by": "id", "key": id_col}
     else:
-        return  # keep row-order indexing; alignment is positional (row-count checked at load)
+        key_sources_by_id(spec_dict, refs, plan)
+        return  # id-free groups retain convention row order
 
-    feature_src.setdefault("key", id_col)
+    if id_col == "filename_stem" or spec_dict.get("sample_index", {}).get("derive"):
+        feature_src.setdefault("key", id_col)
+        for s in sources:
+            if s.get("role") in ("features", "mixed") and s.get("kind") != "lookup":
+                sdf_feat = fdf if s.get("id") == feature_src.get("id") else _read_source_df(s, refs)
+                if sdf_feat is not None and id_col in sdf_feat.columns:
+                    s.setdefault("key", id_col)
+                continue
+            sdf = _read_source_df(s, refs)
+            if sdf is None:
+                continue
+            if s.get("role") == "targets":
+                if id_col in sdf.columns:
+                    s["key"] = id_col
+                    _key_join(s, id_col, "1:1")
+                    audit = coverage_audit(x_ids, sdf[id_col], other_name=s.get("id", "targets"))
+                    audit["role"] = "targets"
+                    plan.alignment.append(audit)
+                    if audit["n_missing"]:
+                        plan.warnings.append(f"{audit['n_missing']} sample(s) have NO target in '{s.get('id')}' (e.g. {audit['missing'][:3]})")
+            elif s.get("role") == "metadata" or s.get("kind") == "lookup":
+                rel = classify_metadata_relation(fdf, sdf, id_col)
+                if rel is None:
+                    continue
+                card, key, ev = rel
+                s["key"] = key
+                if card == "m:1":
+                    s["kind"] = "lookup"
+                _key_join(s, key, card)
+                if key in fdf.columns:
+                    audit = coverage_audit(fdf[key], sdf[key], other_name=s.get("id", "metadata"))
+                    audit.update({"role": "metadata", "relation": card, "evidence": ev})
+                    plan.alignment.append(audit)
+                    if audit["n_missing"]:
+                        plan.warnings.append(f"{audit['n_missing']} {key}(s) have NO metadata in '{s.get('id')}' (e.g. {audit['missing'][:3]})")
+        return
+
+    key_sources_by_id(spec_dict, refs, plan)
+    # Keep the existing infer-only shared-dimension classifier.
     for s in sources:
-        if s.get("role") in ("features", "mixed") and s.get("kind") != "lookup":
-            sdf_feat = fdf if s.get("id") == feature_src.get("id") else _read_source_df(s, base_dir)
-            if sdf_feat is not None and id_col in sdf_feat.columns:
-                s.setdefault("key", id_col)
-            continue
-        sdf = _read_source_df(s, base_dir)
+        sdf = _read_source_df(s, refs)
         if sdf is None:
             continue
-        if s.get("role") == "targets":
-            if id_col in sdf.columns:
-                s["key"] = id_col
-                _key_join(s, id_col, "1:1")
-                audit = coverage_audit(x_ids, sdf[id_col], other_name=s.get("id", "targets"))
-                audit["role"] = "targets"
-                plan.alignment.append(audit)
-                if audit["n_missing"]:
-                    plan.warnings.append(f"{audit['n_missing']} sample(s) have NO target in '{s.get('id')}' (e.g. {audit['missing'][:3]})")
-        elif s.get("role") == "metadata" or s.get("kind") == "lookup":
+        if s.get("role") == "metadata" or s.get("kind") == "lookup":
             rel = classify_metadata_relation(fdf, sdf, id_col)
             if rel is None:
                 continue
             card, key, ev = rel
+            if card == "1:1" and key == id_col and repetition_profile(fdf[id_col]).is_repetition:
+                card = "m:1"
             s["key"] = key
             if card == "m:1":
                 s["kind"] = "lookup"

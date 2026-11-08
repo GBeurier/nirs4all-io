@@ -37,8 +37,10 @@ def test_envelope_refuses_unknowns_and_nonportable_storage() -> None:
         Dataset.from_dict(record)
     with pytest.raises(ValueError, match='finite'):
         dataset({'spectra': [[float('nan')]]}, sample_ids=['a'])
+    # the blanket cap on TYPED integers was wrong (generic numeric int64 is exact); the object-dtype cap stays
+    assert dataset({'spectra': np.asarray([[2**60]], dtype='int64')}, sample_ids=['a']).sample_ids == ('a',)
     with pytest.raises(ValueError, match='JavaScript'):
-        dataset({'spectra': np.asarray([[2**60]], dtype='int64')}, sample_ids=['a'])
+        dataset({'spectra': np.asarray([[2**60]], dtype=object)}, sample_ids=['a'], representations={'spectra': 'tabular_mixed'})
     with pytest.raises(ValueError, match='coordinates.*JavaScript'):
         dataset({'spectra': [[1., 2.]]}, sample_ids=['a'],
                 axis_coordinates={'spectra': {'wavelength': [2**53, 2**53 + 2]}})

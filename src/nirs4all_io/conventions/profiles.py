@@ -14,7 +14,6 @@ translates them to ``(Role, Partition | None)`` pairs.
 
 from __future__ import annotations
 
-import json
 import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -22,6 +21,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from .. import strict_json
 from ..spec.enums import Partition, Role, SpecError
 
 # legacy role-bucket -> (Role, Partition | None). "folds" is handled separately
@@ -102,7 +102,7 @@ def load_profile(source: str | Path | dict) -> Profile:
     if not path.exists():
         raise SpecError(f"convention profile not found: {source!r} (known built-ins: {sorted(_builtin_names())})")
     raw = path.read_text(encoding="utf-8")
-    data = tomllib.loads(raw) if path.suffix.lower() == ".toml" else json.loads(raw)
+    data = tomllib.loads(raw) if path.suffix.lower() == ".toml" else strict_json.loads(raw)
     return Profile.from_dict(data)
 
 

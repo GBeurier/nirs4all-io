@@ -7,7 +7,8 @@ Pipeline: **Resolve -> Infer -> Configure -> Materialize**.
 - ``DatasetPlan``  -- a confidence-scored recommendation produced by ``infer``.
 - ``infer(input)`` -- inspect any input and propose a ``DatasetPlan``.
 - ``load(input)``  -- materialize a spec/plan/input into a target (default: SpectroDataset).
-- ``to_dataset_package(input)`` -- materialize into the v3 target-agnostic package.
+- ``to_dataset_package(input)`` -- materialize into the v4 target-agnostic package
+  (exact F64 execution IR; optional per-role ``features``/``targets``/``weights`` storage requests).
 
 This package is **self-contained**: it has no runtime dependency on ``nirs4all``.
 The only touch-point is a lazy import of the ``SpectroDataset`` class at
@@ -19,9 +20,18 @@ from ._version import __version__
 from .api import describe_dataset_package, load, to_dataset_package, to_spec
 from .infer import DatasetPlan, describe, infer
 from .materialize.assemble import AssembledDataset
+from .materialize.numeric import NumericContractError, NumericStorageOptions
 from .materialize.package import DatasetPackage
 from .multimodal import MultimodalDataset, TensorSource
 from .provider import DataProvider, ProviderBatches
+from .public_package import (
+    dense_dataset_package,
+    dense_dataset_package_with_storage,
+    masked_matrix_dataset_package,
+    masked_matrix_dataset_package_with_storage,
+    matrix_dataset_package,
+    matrix_dataset_package_with_storage,
+)
 from .ragged import RaggedSeriesBatch, RaggedSeriesSource
 from .spec import DatasetSpec, SpecError
 
@@ -37,6 +47,14 @@ __all__ = [
     "DatasetPlan",
     "AssembledDataset",
     "DatasetPackage",
+    "NumericContractError",
+    "dense_dataset_package",
+    "dense_dataset_package_with_storage",
+    "masked_matrix_dataset_package",
+    "masked_matrix_dataset_package_with_storage",
+    "matrix_dataset_package",
+    "matrix_dataset_package_with_storage",
+    "NumericStorageOptions",
     "MultimodalDataset",
     "TensorSource",
     "DataProvider",

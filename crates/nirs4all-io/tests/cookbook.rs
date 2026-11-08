@@ -504,3 +504,189 @@ fn index_file_case_loads() {
     assert_eq!(assembled.blocks["train"].n_samples, 5);
     assert_eq!(assembled.blocks["test"].n_samples, 3);
 }
+
+fn validation_partition_spec(partitions: Value) -> DatasetSpec {
+    build_spec(
+        &json!({"task_type":"regression","sources":[{"id":"d","role":"mixed","input":"all.csv",
+        "columns":[{"role":"features","select":["x"]},{"role":"targets","select":["y"]},{"role":"metadata","select":["set","row"]}]}],"partitions":partitions}),
+    )
+}
+
+fn write_validation_table(base: &std::path::Path) {
+    std::fs::write(base.join("all.csv"), "x;y;set;row\n10.0;100.0;train;r0\n11.0;101.0;test;r1\n12.0;102.0;val;r2\n13.0;103.0;predict;r3\n14.0;104.0;train;r4\n15.0;105.0;test;r5\n16.0;106.0;val;r6\n17.0;107.0;predict;r7\n").unwrap();
+}
+
+#[test]
+fn validation_all_three_modes_conserve_rows_through_facade() {
+    let dir = tempfile::tempdir().unwrap();
+    write_validation_table(dir.path());
+    for (name, values) in [
+        ("train", "[0,4]"),
+        ("test", "[1,5]"),
+        ("val", "[2,6]"),
+        ("predict", "[3,7]"),
+    ] {
+        std::fs::write(dir.path().join(format!("{name}.json")), values).unwrap();
+    }
+    for partitions in [
+        json!({"by":"column","column":"set","train_values":["train"],"test_values":["test"],"val_values":["VAL"],"predict_values":["predict"],"unknown_policy":"error"}),
+        json!({"by":"index","train":[0,4],"test":[1,5],"val":[2,6],"predict":[3,7]}),
+        json!({"by":"index_file","train_file":"train.json","test_file":"test.json","val_file":"val.json","predict_file":"predict.json"}),
+    ] {
+        let data = assemble(&validation_partition_spec(partitions), dir.path()).unwrap();
+        assert_eq!(
+            data.blocks.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["train", "test", "val", "predict"]
+        );
+        assert_eq!(
+            data.blocks
+                .values()
+                .map(|b| b.n_samples)
+                .collect::<Vec<_>>(),
+            vec![2, 2, 2, 2]
+        );
+        for (part, x, y) in [
+            ("train", vec![10.0, 14.0], vec![100.0, 104.0]),
+            ("test", vec![11.0, 15.0], vec![101.0, 105.0]),
+            ("val", vec![12.0, 16.0], vec![102.0, 106.0]),
+            ("predict", vec![13.0, 17.0], vec![103.0, 107.0]),
+        ] {
+            assert_eq!(data.blocks[part].x[0].data, x);
+            assert_eq!(data.blocks[part].y.as_ref().unwrap().data, y);
+        }
+    }
+}
+
+#[test]
+fn validation_only_file_and_missing_file_use_facade_preload() {
+    let dir = tempfile::tempdir().unwrap();
+    write_validation_table(dir.path());
+    std::fs::write(dir.path().join("val.json"), "[2,6]").unwrap();
+    let spec = validation_partition_spec(json!({"by":"index_file","val_file":"val.json"}));
+    nirs4all_io::core::spec::validate_spec(&spec).unwrap();
+    let data = assemble(&spec, dir.path()).unwrap();
+    assert_eq!(
+        data.blocks.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["val"]
+    );
+    assert_eq!(
+        data.blocks["val"].y.as_ref().unwrap().data,
+        vec![102.0, 106.0]
+    );
+    let missing =
+        validation_partition_spec(json!({"by":"index_file","val_file":"missing-val.txt"}));
+    assert!(assemble(&missing, dir.path())
+        .unwrap_err()
+        .message
+        .contains("missing-val.txt"));
+}
+
+#[test]
+fn validation_file_bad_rows_reuse_facade_index_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    write_validation_table(dir.path());
+    std::fs::write(dir.path().join("train.json"), "[0]").unwrap();
+    for (bad, diagnostic) in [
+        ("[2,2]", "duplicate"),
+        ("[8]", "out-of-range"),
+        ("[0]", "disjoint"),
+        ("[\"bad\"]", "index_file JSON"),
+    ] {
+        std::fs::write(dir.path().join("val.json"), bad).unwrap();
+        let spec = validation_partition_spec(
+            json!({"by":"index_file","train_file":"train.json","val_file":"val.json"}),
+        );
+        let error = assemble(&spec, dir.path()).unwrap_err();
+        assert!(error.message.contains(diagnostic), "{error:?}");
+    }
+}
+
+#[test]
+fn validation_file_is_relative_to_json_configuration_base() {
+    use nirs4all_io::api::{load_assembled, to_spec, Input};
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("source");
+    std::fs::create_dir(&base).unwrap();
+    write_validation_table(&base);
+    std::fs::write(base.join("val.json"), "[2,6]").unwrap();
+    std::fs::write(dir.path().join("val.json"), "[0]").unwrap();
+    let value = json!({"sources":[{"id":"d","role":"mixed","input":"all.csv","columns":[{"role":"features","select":["x"]},{"role":"targets","select":["y"]},{"role":"metadata","select":["set","row"]}]}],"partitions":{"by":"index_file","val_file":"val.json"}});
+    std::fs::write(
+        base.join("spec.json"),
+        serde_json::to_string_pretty(&value).unwrap(),
+    )
+    .unwrap();
+    let input = Input::Path(base.join("spec.json").to_string_lossy().into_owned());
+    let (_, resolved_base) = to_spec(&input, None, None).unwrap();
+    assert_eq!(resolved_base, base);
+    let data = load_assembled(&input, None, None).unwrap();
+    assert_eq!(
+        data.blocks.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["val"]
+    );
+    assert_eq!(
+        data.blocks["val"].y.as_ref().unwrap().data,
+        vec![102.0, 106.0]
+    );
+    std::fs::write(
+        base.join("spec.yaml"),
+        serde_json::to_string_pretty(&value).unwrap(),
+    )
+    .unwrap();
+    let yaml = Input::Path(base.join("spec.yaml").to_string_lossy().into_owned());
+    assert_eq!(
+        to_spec(&yaml, None, None).unwrap_err().message,
+        "YAML config support lands with the PyYAML-1.1 shim; use JSON for now"
+    );
+}
+
+#[test]
+fn strict_fold_files_keep_nonprefix_frame_ids_and_emit_train_positions() {
+    let dir = tempfile::tempdir().unwrap();
+    write_validation_table(dir.path());
+    for (name, text, expected) in [
+        (
+            "f.json",
+            r#"[{"train":[3,1],"val":[5]}]"#,
+            vec![(vec![1_i64, 0], vec![2])],
+        ),
+        ("f.txt", "3,1\n5\n", vec![(vec![1, 0], vec![2])]),
+        (
+            "train.csv",
+            "fold_0,fold_1\n3,5\n1,\n",
+            vec![(vec![1, 0], vec![2]), (vec![2], vec![0, 1])],
+        ),
+        (
+            "assignment.csv",
+            "sample_id,fold\n3,0\n1,0\n5,1\n",
+            vec![(vec![2], vec![1, 0]), (vec![0, 1], vec![2])],
+        ),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+        let mut value = validation_partition_spec(
+            json!({"by":"index","train":[1,3,5],"test":[0,2],"val":[4,6],"predict":[7]}),
+        )
+        .to_value();
+        value["sample_index"] = json!({"by":"id","key":"row","observation_id":"row"});
+        value["folds"] = json!({"file":name});
+        let data = assemble(&DatasetSpec::from_value(&value).unwrap(), dir.path()).unwrap();
+        assert_eq!(data.folds, expected);
+        assert_eq!(data.fold_provenance.len(), data.folds.len());
+        let ids = ["r1", "r3", "r5"];
+        for ((train, val), provenance) in data.folds.iter().zip(&data.fold_provenance) {
+            assert_eq!(
+                provenance.train_observation_ids,
+                train
+                    .iter()
+                    .map(|i| ids[*i as usize].to_string())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                provenance.validation_observation_ids,
+                val.iter()
+                    .map(|i| ids[*i as usize].to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}

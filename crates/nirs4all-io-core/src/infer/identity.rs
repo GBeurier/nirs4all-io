@@ -5,11 +5,11 @@
 //! vs shared/dimension (m:1), and audits coverage. Operates on the neutral
 //! [`TableProfile`] (facade-populated) — no pandas, no file IO.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use regex::{Regex, RegexBuilder};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::plan::DatasetPlan;
 use super::table::TableProfile;
@@ -256,9 +256,9 @@ pub fn classify_metadata_relation(
 /// Keys the sources by the detected sample id `id_col` of the feature source
 /// `feature_id` (`x`), as the oracle `_infer_identity_and_alignment` does after
 /// detection: features carrying the id are keyed by it; targets carrying it
-/// get a keyed join and a coverage audit, 1:1 when the feature rows are
-/// unique per id or aggregated by it, m:1 (one reference for every repeated
-/// spectrum) otherwise; metadata tables get the 1:1 or
+/// get a keyed join and a bounded coverage preview. Automatic joins are 1:1;
+/// inference proposes m:1 only for a visible systematic repetition profile.
+/// Metadata tables get the 1:1 or
 /// m:1 (lookup) relation of [`classify_metadata_relation`]. Without these keys
 /// a convention join stays positional and rows in a different order are
 /// paired wrongly. `profile` reads the table of another source.
@@ -269,14 +269,17 @@ pub fn key_sources_by_id(
     feature_id: &str,
     x: &TableProfile,
     mut profile: impl FnMut(&Value) -> Option<TableProfile>,
+    inference: bool,
 ) {
     let x_ids: Vec<String> = x
         .column(id_col)
         .map(|c| c.str_values.clone())
         .unwrap_or_default();
-    let aggregated = spec_dict["aggregate"]["by"].as_str() == Some(id_col);
-    let one_row_per_id = aggregated || x.column(id_col).is_some_and(|c| c.is_unique);
-    let target_cardinality = if one_row_per_id { "1:1" } else { "m:1" };
+    let repeated = inference
+        && x.column(id_col).is_some_and(|column| {
+            repetition_profile(x.n_rows, column.nunique_with_na).is_repetition
+        });
+    let target_cardinality = if repeated { "m:1" } else { "1:1" };
     let Some(sources) = spec_dict.get_mut("sources").and_then(Value::as_array_mut) else {
         return;
     };
@@ -311,14 +314,28 @@ pub fn key_sources_by_id(
             set_key(source, id_col, target_cardinality, None);
             let mut audit = coverage_audit(&x_ids, &column.str_values, &id);
             audit["role"] = Value::from("targets");
-            if let Some(missing) = missing_warning(&audit, "sample(s) have NO target", &id) {
+            audit["scope"] = Value::from("bounded_discovery_prefix");
+            audit["complete"] = Value::from(false);
+            if let Some(missing) = missing_warning(
+                &audit,
+                "sample(s) have NO target in the sampled prefix",
+                &id,
+            ) {
                 plan.warnings.push(missing);
             }
             plan.alignment.push(audit);
         } else if role == "metadata" || lookup {
-            let Some((card, key, evidence)) = classify_metadata_relation(x, &table, id_col) else {
+            if !inference {
+                set_key(source, id_col, "1:1", None);
+                continue;
+            }
+            let Some((mut card, key, evidence)) = classify_metadata_relation(x, &table, id_col)
+            else {
                 continue;
             };
+            if repeated && key == id_col && card == "1:1" {
+                card = "m:1".into();
+            }
             set_key(source, &key, &card, Some(card == "m:1"));
             if let (Some(xc), Some(mc)) = (x.column(&key), table.column(&key)) {
                 let mut audit = coverage_audit(&xc.str_values, &mc.str_values, &id);
@@ -365,6 +382,349 @@ fn missing_warning(audit: &Value, label: &str, id: &str) -> Option<String> {
             py_repr(&Value::Array(first))
         )
     })
+}
+
+/// Propose only partition-local identity, using every member's bounded prefix.
+/// No equality, full coverage or duplicate validation belongs to discovery.
+pub fn configure_generated_keys(
+    spec: &mut Value,
+    plan: &mut DatasetPlan,
+    mut inputs: impl FnMut(&Value) -> Option<Vec<Vec<u8>>>,
+    inference: bool,
+) {
+    use crate::infer::describe::proposed_decimal_evidence;
+    use crate::infer::plan::Decision;
+    use crate::materialize::join::concat_samples;
+    use crate::materialize::loaders::discovery_table;
+    use crate::spec::dataset_spec::LoadingParams;
+
+    fn recompute_decimal(
+        source: &mut Value,
+        plan: &mut DatasetPlan,
+        bytes: &[u8],
+        key: &str,
+        inference: bool,
+    ) {
+        let Ok(params) = LoadingParams::from_value(source.get("params")) else {
+            return;
+        };
+        let decimal = proposed_decimal_evidence(bytes, &params, Some(key));
+        if !source["params"].is_object() {
+            source["params"] = json!({});
+        }
+        source["params"]
+            .as_object_mut()
+            .unwrap()
+            .remove("decimal_separator");
+        if let Some((decimal, _)) = &decimal {
+            source["params"]["decimal_separator"] = json!(decimal);
+        }
+        if inference {
+            if let Some(name) = source["input"]
+                .as_str()
+                .and_then(|name| name.rsplit('/').next())
+            {
+                if let Some(entry) = plan.params[name].as_object_mut() {
+                    entry.remove("decimal_separator");
+                    if source["params"]["decimal_separator"] == "," {
+                        entry.insert(
+                            "decimal_separator".into(),
+                            json!({"value":",","score":py_round(decimal.as_ref().unwrap().1,3)}),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let Some(mut sources) = spec["sources"].as_array().cloned() else {
+        return;
+    };
+    if sources.iter().any(|s| s["kind"] == "lookup") {
+        return;
+    }
+    let mut partitions = Vec::new();
+    for source in &sources {
+        if !partitions.contains(&source["partition"]) {
+            partitions.push(source["partition"].clone());
+        }
+    }
+    let mut profiles: HashMap<usize, TableProfile> = HashMap::new();
+    let mut samples: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
+    let mut groups = Vec::new();
+    let mut filtered_labels = Vec::new();
+    for partition in partitions {
+        let indices: Vec<usize> = (0..sources.len())
+            .filter(|&i| sources[i]["partition"] == partition)
+            .collect();
+        let Some(anchor) = indices
+            .iter()
+            .copied()
+            .find(|&i| matches!(sources[i]["role"].as_str(), Some("features" | "mixed")))
+        else {
+            continue;
+        };
+        let complete = indices.iter().all(|&index| {
+            let Some(bytes) = inputs(&sources[index]) else {
+                return false;
+            };
+            let Ok(params) = LoadingParams::from_value(sources[index].get("params")) else {
+                return false;
+            };
+            let Some(frames) = bytes
+                .iter()
+                .map(|bytes| discovery_table(bytes, &params))
+                .collect::<Option<Vec<_>>>()
+            else {
+                return false;
+            };
+            if frames.is_empty()
+                || frames
+                    .iter()
+                    .any(|frame| frame.column_names() != frames[0].column_names())
+            {
+                return false;
+            }
+            let names: Vec<String> = (0..frames.len()).map(|i| i.to_string()).collect();
+            profiles.insert(index, concat_samples(&frames, &names).0.to_table_profile());
+            samples.insert(index, bytes);
+            true
+        });
+        if !complete {
+            continue;
+        }
+        let mut guesses = HashMap::new();
+        for &index in &indices {
+            let table = &profiles[&index];
+            let mut guess = (table.columns.len() > 1)
+                .then(|| detect_sample_id(table))
+                .flatten();
+            if index != anchor
+                && guess.as_ref().is_some_and(|guess| {
+                    !guess.unique
+                        || table
+                            .column(&guess.column)
+                            .is_some_and(|column| column.is_float_dtype())
+                })
+            {
+                guess = None;
+            }
+            if sources[index]["role"] == "metadata" {
+                if let Some(label) = guess.clone().filter(|label| {
+                    !indices.iter().any(|other| {
+                        sources[*other]["role"] != "metadata"
+                            && profiles[other].has_column(&label.column)
+                    })
+                }) {
+                    filtered_labels.push((index, label.column, partition.clone()));
+                    guess = None;
+                }
+            }
+            guesses.insert(index, guess);
+        }
+        let selected = guesses[&anchor]
+            .clone()
+            .or_else(|| indices.iter().find_map(|i| guesses[i].clone()));
+        groups.push((indices, anchor, selected));
+    }
+    for (index, column, partition) in filtered_labels {
+        if inference {
+            let partition = partition.as_str().unwrap_or("null");
+            let id = sources[index]["id"].as_str().unwrap_or("");
+            plan.warnings.push(format!("partition {partition}: metadata label '{column}' in source '{id}' is not shared with features or targets; rows stay positional and are not verified by id; declare a key or join to align by identity"));
+        }
+    }
+    let Some(selected) = groups.iter().find_map(|(_, _, guess)| guess.clone()) else {
+        // Neutral profiles affect only decimal voting after all groups failed
+        // identity selection. They never choose or promote a generated key.
+        for (indices, _, _) in &groups {
+            for &index in indices {
+                if sources[index]["role"] != "metadata"
+                    || sources[index]["params"]["decimal_separator"] != ","
+                    || samples[&index].len() != 1
+                {
+                    continue;
+                }
+                let Ok(mut params) = LoadingParams::from_value(sources[index].get("params")) else {
+                    continue;
+                };
+                params.decimal_separator = None;
+                let Some(neutral) = discovery_table(&samples[&index][0], &params) else {
+                    continue;
+                };
+                let neutral = neutral.to_table_profile();
+                if neutral.columns.len() <= 1 {
+                    continue;
+                }
+                let Some(label) = detect_sample_id(&neutral).filter(|candidate| {
+                    candidate.unique
+                        && neutral
+                            .column(&candidate.column)
+                            .is_some_and(|column| !column.is_float_dtype())
+                }) else {
+                    continue;
+                };
+                if indices.iter().any(|other| {
+                    sources[*other]["role"] != "metadata"
+                        && profiles[other].has_column(&label.column)
+                }) {
+                    continue;
+                }
+                recompute_decimal(
+                    &mut sources[index],
+                    plan,
+                    &samples[&index][0],
+                    &label.column,
+                    inference,
+                );
+                spec["sources"][index] = sources[index].clone();
+                if inference {
+                    let partition = sources[index]["partition"].as_str().unwrap_or("null");
+                    let id = sources[index]["id"].as_str().unwrap_or("");
+                    let column = &label.column;
+                    let warning = format!("partition {partition}: metadata label '{column}' in source '{id}' is not shared with features or targets; rows stay positional and are not verified by id; declare a key or join to align by identity");
+                    if !plan.warnings.contains(&warning) {
+                        plan.warnings.push(warning);
+                    }
+                    if sources[index]["params"]["decimal_separator"] == ","
+                        && profiles[&index]
+                            .column(column)
+                            .is_some_and(|column| column.is_numeric_dtype())
+                    {
+                        plan.warnings.push(format!("partition {partition}: metadata label '{column}' in source '{id}' also reads as numbers under decimal ','; source-wide decimals can rewrite or merge its values; declare decimal_separator '.' to keep comma-form values as text in this source"));
+                    }
+                }
+            }
+        }
+        return;
+    };
+    let key = selected.column;
+    spec["sample_index"] = json!({"by":"id","key":key});
+    if inference && plan.identity.is_none() {
+        plan.identity = Some(Decision {
+            value: json!(key),
+            score: selected.score,
+            evidence: selected.evidence,
+            ambiguous: !selected.unique,
+            alternatives: vec![],
+        });
+    }
+    for (indices, anchor, guess) in groups {
+        let x = &profiles[&anchor];
+        let anchor_id = sources[anchor]["id"].as_str().unwrap_or("");
+        if inference {
+            if let Some(column) = x.column(&key) {
+                let profile = repetition_profile(x.n_rows, column.nunique_with_na);
+                plan.params["identity_repetition"][anchor_id] = json!({"n_rows":profile.n_rows,"n_unique":profile.n_unique,"avg_reps":profile.avg_reps,"is_repetition":profile.is_repetition});
+            }
+            if guess.as_ref().is_none_or(|guess| guess.column != key)
+                || indices.iter().any(|i| !profiles[i].has_column(&key))
+            {
+                plan.warnings.push(format!("partition {}: incomplete identity '{key}'; declare the join/identity before loading", sources[anchor]["partition"]));
+            }
+        }
+        let mut group =
+            json!({"sources":indices.iter().map(|&i| sources[i].clone()).collect::<Vec<_>>()});
+        for (position, &index) in indices.iter().enumerate() {
+            let source = &mut group["sources"][position];
+            source["key"] = json!(key);
+            if index != anchor {
+                if !source["join"].is_object() {
+                    source["join"] = json!({"to":anchor_id});
+                }
+                source["join"]["on"] = json!(key);
+                source["join"]["how"] = json!("1:1");
+                source["join"]["coverage"] = json!("complete");
+            }
+        }
+        key_sources_by_id(
+            &mut group,
+            plan,
+            &key,
+            anchor_id,
+            x,
+            |source| {
+                let index = indices
+                    .iter()
+                    .find(|&&i| sources[i]["id"] == source["id"])?;
+                Some(profiles[index].clone())
+            },
+            inference,
+        );
+        for (position, &index) in indices.iter().enumerate() {
+            let source = &mut group["sources"][position];
+            let bytes = &samples[&index];
+            if bytes.len() == 1 {
+                recompute_decimal(source, plan, &bytes[0], &key, inference);
+            }
+            spec["sources"][index] = source.clone();
+        }
+    }
+}
+
+/// Check generated proposals at load, leaving explicit specs authoritative.
+pub fn refuse_generated_identity(
+    spec: &crate::spec::DatasetSpec,
+    mut inputs: impl FnMut(&Value) -> Option<Vec<Vec<u8>>>,
+) -> Result<(), crate::spec::SpecError> {
+    use crate::infer::describe::csv_rows;
+    use crate::materialize::loaders::{
+        dialect_text, discovery_prefix, discovery_table, is_comma_pair,
+    };
+    use crate::spec::dataset_spec::LoadingParams;
+    use crate::spec::SpecError;
+    let value = spec.to_value();
+    if value["sample_index"]["by"] != "id" {
+        return Ok(());
+    }
+    let Some(key) = value["sample_index"]["key"].as_str() else {
+        return Ok(());
+    };
+    for source in value["sources"].as_array().into_iter().flatten() {
+        if source["kind"] == "lookup" {
+            continue;
+        }
+        let Some(inputs) = inputs(source) else {
+            continue;
+        };
+        let params = LoadingParams::from_value(source.get("params"))?;
+        for bytes in inputs {
+            let Some(table) = discovery_table(&bytes, &params) else {
+                continue;
+            };
+            if !table.has_column(key) {
+                return Err(SpecError::new(format!("source '{}': file {} missing identity key '{key}'; declare compatible keys/partitions",source["id"],source["input"])));
+            }
+            if params.decimal_separator.as_deref() == Some(",") {
+                let Some(prefix) = discovery_prefix(&bytes, &params) else {
+                    continue;
+                };
+                let delimiter = params
+                    .delimiter
+                    .as_deref()
+                    .unwrap_or(";")
+                    .chars()
+                    .next()
+                    .unwrap_or(';');
+                let Ok(rows) = csv_rows(&dialect_text(&prefix), delimiter) else {
+                    continue;
+                };
+                if let Some(index) = rows
+                    .first()
+                    .and_then(|row| row.iter().position(|name| name == key))
+                {
+                    if rows
+                        .iter()
+                        .skip(1)
+                        .any(|row| row.get(index).is_some_and(|cell| is_comma_pair(cell)))
+                    {
+                        return Err(SpecError::new(format!("source '{}': file {} key '{key}' contains comma pairs under params.decimal_separator=','; declare an explicit identity/decimal policy",source["id"],source["input"])));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

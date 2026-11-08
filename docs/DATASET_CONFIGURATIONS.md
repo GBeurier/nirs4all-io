@@ -96,6 +96,8 @@ validation: { check_file_existence: true, allow_train_only: true, allow_test_onl
 
 ---
 
+Before V1, public target names now retain their source-native labels (for example, `y__0` becomes `0` and `y__a` becomes `a`); duplicate native target names retain their existing combined labels, and metadata and weight labels remain unchanged. Feature labels and ownership likewise follow the actual merged columns, correcting cases where declaration or selector order attached another source's values to a feature or target. Generated names that collide with an existing output name now refuse with a typed error: a bare column followed by a literal namespaced column can remain unique, while the reverse order can refuse. Saved target IDs or replay artifacts using the old names may no longer match; this pre-V1 correction provides no compatibility shim or replay guarantee. Assembled version 3 and package version 4 remain unchanged.
+
 ## 3. Sample identity — `sample_index`
 
 Identity is kept **distinct** from per-source alignment keys and join keys.
@@ -110,13 +112,12 @@ stored under `metadata.io.dataset_schema` because the coordinator envelope's
 native schema field is fingerprint-only; augmentation `origin_id` remains `None`
 because v1 assembly has no origin relation. Fold assignments are provenance
 metadata, not a `dag-ml-data` provider/FoldSet.
-`DatasetPackage` wire summaries use version 3 for this contract: their single
-`identity` object contains both `provenance` and `row_position_fallback`.
-`AssembledDataset` JSON summaries/full exports use explicit
-`assembled_schema_version: 2`; this replaces the former unversioned v1 artifact
-because identity, source ids, and stable fold provenance are now required.
-Consumers must reject the old artifact instead of assuming v3/package semantics
-are backwards compatible.
+`DatasetPackage` wire summaries use version 4: their single `identity` object
+contains both `provenance` and `row_position_fallback`. `AssembledDataset` JSON
+summaries and full exports use explicit `assembled_schema_version: 3` (see
+[VERSIONING](VERSIONING.md)). The summary is a rounded structural fingerprint;
+the full export retains exact selected bytes, masks and precision. Consumers
+must reject any other version instead of assuming backward compatibility.
 
 ```yaml
 sample_index:
@@ -344,7 +345,7 @@ params:
   encoding: utf-8
   na:
     policy: auto               # auto(=abort) | abort | remove_sample | remove_feature | replace | ignore
-    fill: { method: value, fill_value: 0, per_column: true }   # method: value|mean|median|forward_fill|backward_fill
+    fill: { method: value, fill_value: 0, per_column: true }   # method: value|forward_fill|backward_fill
   categorical: auto            # auto | preserve | none
   format:                      # format-specific
     sheet_name: 0              # Excel
@@ -354,6 +355,60 @@ params:
     key: null                  # .npz
     member: null               # archive member
 ```
+
+Native IO refuses explicit `mean` and `median` fill methods at spec admission,
+including under inactive `ignore` or drop policies and without missing data.
+Statistics across samples belong in fitted preprocessing within the training
+pipeline, where train/test partitions and cross-validation folds can be respected.
+Constant `value` fill and `forward_fill` / `backward_fill` remain supported; the
+latter copy between columns within the same sample. Drop and `ignore` policies
+are unchanged. `per_column` retains its serialization and has no effect for
+these supported fill methods. The identified Python oracle retains historical
+statistical-fill behavior; those requests are no longer native parity cases.
+
+Delimited text retains `;` as its default delimiter. The bounded reader guard
+uses up to 50 nonblank, quote-aware records within an 8 MiB prefix. Consistent
+undeclared comma, tab or `|` alternatives require `params.delimiter`.
+Comma-pair ambiguity examines trimmed data records after the header, including
+exponents such as `1,25e1` and rows containing only missing-value tokens.
+`Protein, %` followed by `12,5` / `13,1` and an all-integer `id,y` table both
+require a declaration. The diagnostic also asks for `params.decimal_separator`
+when comma is the decimal mark. Dot-decimal data remains unambiguous.
+
+`infer` first respects a structurally consistent semicolon table. It leaves an
+ambiguous separator unresolved instead of accepting a frequency-based guess:
+`plan.params[file].delimiter.value` is null and a warning names the source,
+file and candidates. The accepted spec omits the unresolved delimiter and
+decimal proposals; loading then refuses through the same owner guard. Other
+scorer choices and confidence values retain their existing ordering.
+
+Automatic directory, file-list and single-file inputs inspect logically named
+`.csv`, `.tsv` and `.txt` sources. `to_spec` records an unambiguous alternate
+separator per source. Both automatic configuration and inference may record
+`decimal_separator: ","` for one-input sources when the selected delimiter
+matches the inspected table. They never write a dot decimal proposal or apply
+one source's decimal to another. Thousands-like values such as `1,000` do not
+constitute a comma decimal proposal. Large fields that exceed the proposal
+reader's limit leave the decimal undeclared and retain the existing loader.
+
+Explicit specs, config files and legacy dicts remain caller-owned. Before
+automatic target label encoding, a column containing only comma-pair or dot
+numeric values, with at least one comma pair, refuses unless its owning source
+has an effective decimal declaration. This also applies to explicit specs with
+an undeclared decimal. Declaring `;` plus `,` reads `12,5` as 12.5; declaring
+`.` retains the existing label interpretation. Explicit categorical `preserve`
+or `none` bypasses this target guard. Ordinary labels and legitimate missing
+values retain their existing policies. Diagnostics identify source, file,
+column and the parameter to declare.
+
+Native materialization refuses heterogeneous declared numeric feature types (`float64` with `int64` or `float32`) even with explicit roles; the bare mixed Parquet file's infer-plan route also refuses, and the broader Python raw IR does not certify native parity.
+
+Raw table inspection retains its contract. Axes, partitions, identities,
+precision and materialization numerics are unchanged. Automatic configuration
+is not routed through `infer`; its known positional-ID alignment gap (Q-ROW)
+requires the separate next batch. Compressed decimal-comma sources,
+thousands-only X, explicit X with an undeclared decimal, ragged tables and
+space-delimited automatic loading remain separate gaps.
 
 Root-level shorthand (A.12/75): `delimiter`/`has_header`/… may be placed at the
 top level of a **legacy** dict and are folded into `params`. ✅
@@ -404,26 +459,78 @@ the split inside your pipeline's CV layer.
 
 ```yaml
 partitions:
-  by: column                 # column | index | index_file | files
+  by: column
   column: set
   train_values: [cal]
-  test_values: [val]
-  predict_values: []
+  test_values: [test]
+  val_values: [val]
+  predict_values: [predict]
   unknown_policy: train      # train | test | drop | error
-  train: [0, 1, 5, 7]        # index form: explicit row-index lists
-  test:  [2, 3, 4, 6]
+```
+
+```yaml
+partitions:
+  by: index
+  train: [0, 1, 5, 7]
+  test: [2, 3]
+  val: [4, 6]
   predict: [8, 9]
-  train_file: train_idx.txt  # index_file form: each file holds one index per
-  test_file:  test_idx.txt   # line (or a JSON array, or comma-separated)
+```
+
+```yaml
+partitions:
+  by: index_file
+  train_file: train_idx.txt  # JSON array, one-per-line text, or comma-separated
+  test_file: test_idx.txt
+  val_file: val_idx.txt
   predict_file: predict.txt
 ```
 
+Partition keys are closed: `by`, `column`, `train_values`, `test_values`,
+`val_values`, `predict_values`, `unknown_policy`, `train`, `test`, `val`,
+`predict`, `train_file`, `test_file`, `val_file`, `predict_file`.
+Unknown keys and non-array `*_values` refuse. Nonempty declarations must belong
+to the selected mode shown above; `files` and an absent `by` admit no nonempty
+declarations. Empty partition mappings and empty index lists remain valid.
+
 | `by` | Status | Meaning |
 |---|---|---|
-| `column` | ✅ | split on a column's values (`train_values`/`test_values`/`predict_values` + `unknown_policy`) |
+| `column` | ✅ | split on a column's values (`train_values`/`test_values`/`val_values`/`predict_values` + `unknown_policy`) |
 | `index` | ✅ | explicit row-index lists per partition (must be disjoint, in-range, no duplicates) |
-| `index_file` | ✅ | row-index lists read from `train_file` / `test_file` / `predict_file` (JSON array, one-per-line text, or comma-separated) |
+| `index_file` | ✅ | row-index lists read from `train_file` / `test_file` / `val_file` / `predict_file` (JSON array, one-per-line text, or comma-separated) |
 | `files` | ✅ (implicit) | use per-source `partition:` instead of a single combined source |
+
+Global partitions are emitted in `train`, `test`, `val`, `predict` order.
+Validation-only index lists or files are valid; no normalized value may appear
+in two of the four value lists (`str(value).lower()`, without trimming).
+Column partition labels must be strings, finite numbers or bools; null, array,
+object and nonfinite declarations refuse with the specific `*_values` list name.
+Matching uses lowercase scalar keys without trimming or case folding. Python
+retains the original column's `astype(str)` spellings before scalar lowercase.
+Decoded missing cells match no declared list and always follow `unknown_policy`
+(`train` by default, or `test`, `drop`, `error`). **With `test_values: ['nan']`,
+missing native CSV rows that previously entered test now enter TRAIN under the
+default policy.** Literal CSV `NAN` remains text and matches `nan`; empty cells,
+`NA` and quoted `"nan"` are decoded as missing by the unchanged CSV reader.
+Parquet can retain literal `nan`, `None` and empty strings separately from nulls;
+WASM Parquet remains unsupported. Error diagnostics identify the split column,
+observed unknown keys and a separate missing-row count in Python. Finite numeric split cells use exact owner numeric identity: `[1]` now selects
+numeric `1.0`, regardless of missing rows elsewhere in the column. Bool cells
+remain lexical `true`/`false` and never match numeric `1`/`0`. Numeric declarations
+and exact JSON-number-token strings such as `"1.0"` or `"1e0"` can match numeric
+cells; text cells remain lexical, so text `1`, `1.0` and `001` stay distinct.
+Whitespace, a leading plus, leading zeros, commas and parser-refused numeric
+strings are not coerced. Positive and negative zero remain distinct, and a
+float32 owner rounds declarations once through its existing storage conversion;
+a refused conversion cannot match. Observed infinity matches only lexical `inf`
+or `-inf`. If a row matches two lists numerically (for example `[1]` and
+`["1.0"]`), matching refuses with both list names before unknown routing, while
+that same declaration remains valid for distinct text rows or absent aliases.
+Leading-zero recovery by the decoder and original-file fold-index remapping
+remain separate work; this correction changes no schema or wire version.
+
+Same-list duplicates remain valid. `folds.val` still selects within-train
+cross-validation rows, and legacy `val_*` input aliases still map to test.
 
 > Train/test/val/predict as **separate files** is expressed by putting `partition:`
 > on each source (or by folder conventions), not by `partitions.by`.
@@ -431,6 +538,18 @@ partitions:
 ---
 
 ## 8. Folds — `folds`
+
+Declared fold indices address rows of the final post-join, post-row-removal
+frame. Every index must select a training row; without a combined frame,
+per-source folds address train-block positions. Emitted folds always use
+train-block positions, while provenance records the selected observation IDs
+before translation. Bool, float, string, negative, out-of-range, repeated or
+cross-side overlapping indices refuse. Empty sides are allowed. Column fold
+labels may occur only on train rows; unlabelled train rows remain on the fitting
+side. Folds require a train block and never admit retained test, val or predict
+rows. Row-removal remapping from original file indices is not implemented:
+callers must supply indices in the final post-removal frame namespace.
+
 
 ```yaml
 folds:
@@ -720,3 +839,93 @@ adapter consumes the same structure that `to_spectrodataset` does today. The
 Rust bridge is implemented in `crates/nirs4all-io-dagml`; `dag-ml-data` supports
 `AxisKind::Wavenumber` for cm⁻¹. See [API](API.md) and the
 [cross-binding qualification](IO_XLG_QUALIFICATION.md) for the supported surface.
+
+
+### Filesystem references, aliases and literal wildcard names
+
+A file keeps its canonical physical identity and content hash. Convention matching uses the caller's logical basename, or its logical path relative to a scanned directory. Inference reads each assigned source and external folds file through that exact reference binding; files may reside in different parents. Alias names assign roles and partitions, while actual table headers retain target/feature names.
+
+An assigned reference resolving to distinct physical files is ambiguous and refuses before reading. Unassigned duplicate names retain their warnings. Repeated occurrences of one identity retain each operation's existing semantics, including the known Python/Rust difference when loading the same file twice. These rules do not relax the separate confined role-tagged materialization route.
+
+A base-relative directory, including a literal name such as `d[1]`, retains its scoped path after any genuine base-pattern expansion and reaches the existing vendor reader or its refusal. A same-named CWD file cannot capture it. This rule adds no vendor parser or fallback.
+
+An existing exact file or named payload takes precedence over wildcard syntax, including a literal name `*.csv` beside `a.csv`: that item selects only `*.csv`. If no exact name exists, genuine patterns continue expanding. Filesystem materialization checks the exact base-relative file, then the pattern under the literal base, then any existing literal base-relative directory, then a direct file, then the direct pattern; a CWD literal never captures a successful base-relative pattern. Named-memory matching likewise checks exact names before genuine patterns, retaining existing pattern order/dedup and unique stem fallback for nonpatterns.
+
+Rust resolver `resolve_path`/`resolve_list` now return `Result<InputSet, SpecError>` so directory glob/comparison errors propagate. This is a Rust source-API break requiring a breaking-release version decision before release; no C ABI, dataset schema or package version is changed by the source correction. Linux filesystem aliases are tested explicitly; other platforms and current compiled host artifacts require their own qualification.
+
+
+For generated external folds, inference records the canonical physical file. If a logical `folds.csv` alias resolves to an extensionless store, the generated folds format is explicitly `csv`; an ordinary `folds.csv` retains `format: auto`. Both directory and explicit list inference remain loadable from a different working directory. Exact wildcard filenames (`*` and `?`) are Unix-specific filesystem controls and require separate platform qualification elsewhere.
+
+
+The filesystem facade's `resolve_named(input, base_dir)` resolves paths before `gather_sources` supplies `InMemorySource` values to the core. The core's `resolve_inputs_mem(input, sources)` matches names on Bytes, Frame, Sheets or Records payloads; this memory namespace has no directory existence operation. WASM calls `assemble_in_memory` directly, so the filesystem directory fallback does not apply there.
+
+The `binary-unparseable` fixture is a refusal control in Rust. Python takes its NumPy decoder route, while Rust has no equivalent NumPy decoder; a Rust refusal does not qualify the same decode operation.
+
+### Automatic identity proposals (Q-ROW / Q-DEC owner batch)
+
+Directory/list convention sources use the same bounded discovery prefix as the
+owner's dialect proposals: at most 50 complete nonblank CSV records and 8 MiB
+per input, with every member of a multi-input source participating. Unresolved
+sources are not partially used for key selection. Coverage and duplicate checks
+still run on the full materialized tables. Native `LoadLimits` apply before
+filesystem discovery; the Python oracle `load` has no `limits` keyword.
+
+The selected key never votes for a decimal separator. Automatic joins are `1:1`
+with complete left coverage; repeated spectra require a declared relation.
+`infer` may propose `m:1` only with a visible systematic repetition profile.
+Explicit `m:1`, roles, selectors, params and coverage options remain caller-owned.
+A source's sole column is not one-sided identity evidence. Non-anchor float or
+non-unique candidates do not establish a one-sided identity: a target named
+`Reference` remains a target. The existing limit for id-free X with duplicate
+ids only in Y remains open.
+
+A metadata-only label establishes neither dataset identity nor a shared join
+when its column is absent from every feature/target source in the partition.
+It keeps the declared/default row policy, whose rows are not verified by id;
+equal-sized reordered metadata can therefore remain incorrectly associated.
+Inference warns about this limit. Automatic routes have no plan warning channel:
+their sample identity stays null and the package reports row-position fallback.
+Different row counts, explicit missing keys and mixed keyed/id-free partitions
+still refuse. Declare compatible keys/joins to establish identity alignment.
+
+When no eligible identity exists anywhere, single-input metadata carrying a
+generated comma decimal may be re-profiled with neutral decimals solely to
+exclude a local label from the decimal vote. This can retain comma-form labels
+such as `12,1` and `12,10` as distinct text when no other column votes for comma;
+an ID-like numeric column such as `index` can therefore change from numbers to
+text. Neutral profiling never promotes identity or changes an existing shared
+column, a multi-input source, or an explicit caller configuration.
+If another column such as `ph` keeps comma decimals, source-wide numeric typing
+still applies to numeric-looking labels and can rewrite or merge them. Inference
+warns; automatic routes remain silent. Explicit `decimal_separator: "."` keeps
+comma-form values as text, including `ph`, but does not make dot numbers or
+leading-zero numeric tokens universally literal. Mixed per-column lexical and
+numeric metadata remains the open `Q-META-LEXEME` capability, alongside
+`Q-KEY-LEXEME`; this batch does not provide it.
+
+`to_spec` returns provisional join operands so the caller can edit them. Loading
+refuses missing operands, conflicting partition identities, mixed keyed/id-free
+partitions, and generated comma-pair keys that would be rewritten by comma
+decimals. The common scalar sample key is excluded from feature/target payloads
+and retained as metadata. Id-free data keeps its convention roles and positional
+semantics. Extra unique reference rows do not add observations; COMPLETE coverage
+requires every left observation to match. There is no new parser, aggregation,
+filename grouping or full inference fallback in automatic loading.
+
+A comma-punctuated header with exclusively one-column data is resolved as one
+column, including dot decimals, integers and text. A two-part comma header with
+comma-pair data and neutral one-column records is ambiguous and requires explicit
+parameters. Declaring `delimiter: ';'` and `decimal_separator: ','` recovers an
+intended one-column decimal-comma target. Source `categorical` overrides the
+global option at both the comma-target guard and the encoder.
+
+These changes do not qualify native bindings or close `Q-KEY-LEXEME`: an explicitly
+accepted spec under declared comma decimals can still rewrite a text key. The
+separate Formats N2 integer-lexeme gap is also open. Native confirmed-lock controls
+are supplied as source tests for the coherent qualification gate; no binding
+algorithm or `propose.rs` change belongs to this batch.
+
+Resolution retains its existing content hashes for provenance. Native automatic
+inputs pass a metadata-only file/byte admission check before those hash reads;
+the bounded-prefix rule applies to the added table discovery. It does not imply
+that existing provenance resolution performs no content reads.

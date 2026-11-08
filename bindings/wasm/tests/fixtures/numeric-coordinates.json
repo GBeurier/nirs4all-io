@@ -1,0 +1,101 @@
+{
+  "schema": "nirs4all.io.numeric-coordinates-corpus.v1",
+  "cases": [
+    {
+      "id": "finite-physical-order-and-signed-zero",
+      "packet": {
+        "kind": "numeric",
+        "count": 4,
+        "data_bytes_hex": "000000000000f83f000000000000008000000000000002c00000000000000000"
+      },
+      "expectedCount": 4,
+      "values": [1.5, -0.0, -2.25, 0.0],
+      "bits": ["3ff8000000000000", "8000000000000000", "c002000000000000", "0000000000000000"]
+    },
+    {
+      "id": "empty-numeric-axis",
+      "packet": {"kind": "numeric", "count": 0, "data_bytes_hex": ""},
+      "expectedCount": 0,
+      "values": [],
+      "bits": []
+    },
+    {
+      "id": "extra-coordinate-field",
+      "packet": {"kind": "numeric", "count": 1, "data_bytes_hex": "000000000000f83f", "extra": null},
+      "expectedCount": 1,
+      "refusal": "Coordinate dtype/count/bytes mismatch"
+    },
+    {
+      "id": "missing-count",
+      "packet": {"kind": "numeric", "data_bytes_hex": "000000000000f83f"},
+      "expectedCount": 1,
+      "refusal": "Invalid coordinate count"
+    },
+    {
+      "id": "unsupported-kind",
+      "packet": {"kind": "other", "count": 1, "data_bytes_hex": "000000000000f83f"},
+      "expectedCount": 1,
+      "refusal": "Unsupported coordinate kind"
+    },
+    {
+      "id": "negative-count",
+      "packet": {"kind": "numeric", "count": -1, "data_bytes_hex": ""},
+      "expectedCount": 1,
+      "refusal": "Invalid coordinate count"
+    },
+    {
+      "id": "fractional-count",
+      "packet": {"kind": "numeric", "count": 1.5, "data_bytes_hex": "000000000000f83f"},
+      "expectedCount": 1,
+      "refusal": "Invalid coordinate count"
+    },
+    {
+      "id": "boolean-count",
+      "packet": {"kind": "numeric", "count": true, "data_bytes_hex": "000000000000f83f"},
+      "expectedCount": 1,
+      "refusal": "Invalid coordinate count"
+    },
+    {
+      "id": "hex-string-required",
+      "packet": {"kind": "numeric", "count": 1, "data_bytes_hex": 0},
+      "expectedCount": 1,
+      "refusal": "Exact coordinate bytes required"
+    },
+    {
+      "id": "hex-length-mismatch",
+      "packet": {"kind": "numeric", "count": 1, "data_bytes_hex": "00000000000000"},
+      "expectedCount": 1,
+      "refusal": "Coordinate dtype/count/bytes mismatch"
+    },
+    {
+      "id": "uppercase-hex",
+      "packet": {"kind": "numeric", "count": 1, "data_bytes_hex": "000000000000F83F"},
+      "expectedCount": 1,
+      "refusal": "Coordinate dtype/count/bytes mismatch"
+    },
+    {
+      "id": "invalid-hex-character",
+      "packet": {"kind": "numeric", "count": 1, "data_bytes_hex": "000000000000f83g"},
+      "expectedCount": 1,
+      "refusal": "Coordinate dtype/count/bytes mismatch"
+    },
+    {
+      "id": "expected-column-count-mismatch",
+      "packet": {"kind": "numeric", "count": 1, "data_bytes_hex": "000000000000f83f"},
+      "expectedCount": 2,
+      "refusal": "Coordinate dtype/count/bytes mismatch"
+    },
+    {
+      "id": "nan-coordinate",
+      "packet": {"kind": "numeric", "count": 1, "data_bytes_hex": "000000000000f87f"},
+      "expectedCount": 1,
+      "refusal": "Observed coordinate is nonfinite"
+    },
+    {
+      "id": "infinite-coordinate",
+      "packet": {"kind": "numeric", "count": 1, "data_bytes_hex": "000000000000f07f"},
+      "expectedCount": 1,
+      "refusal": "Observed coordinate is nonfinite"
+    }
+  ]
+}

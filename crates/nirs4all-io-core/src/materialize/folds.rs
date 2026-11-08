@@ -25,7 +25,8 @@ pub fn parse_fold_str(text: &str, fmt: &str) -> Result<Vec<Fold>, SpecError> {
     match fmt {
         "csv" => parse_csv(text),
         "json" => parse_json(
-            &serde_json::from_str(text).map_err(|e| SpecError::new(format!("fold JSON: {e}")))?,
+            &crate::canonical_json::parse_json_value(text)
+                .map_err(|e| SpecError::new(format!("fold JSON: {e}")))?,
         ),
         "yaml" | "yml" => Err(SpecError::new(
             "YAML fold files land with the PyYAML-1.1 shim; use CSV/JSON/TXT for now",
@@ -45,12 +46,15 @@ fn parse_csv(text: &str) -> Result<Vec<Fold>, SpecError> {
     let mut records = rdr.records();
     let headers: Vec<String> = match records.next() {
         Some(Ok(r)) => r.iter().map(str::to_string).collect(),
-        _ => return Ok(vec![]),
+        Some(Err(e)) => return Err(SpecError::new(format!("fold CSV: {e}"))),
+        None => return Ok(vec![]),
     };
     let rows: Vec<Vec<String>> = records
-        .filter_map(Result::ok)
-        .map(|r| r.iter().map(str::to_string).collect())
-        .collect();
+        .map(|r| {
+            r.map(|r| r.iter().map(str::to_string).collect())
+                .map_err(|e| SpecError::new(format!("fold CSV: {e}")))
+        })
+        .collect::<Result<_, _>>()?;
     let lower: Vec<String> = headers.iter().map(|h| h.to_lowercase()).collect();
     if headers.iter().all(|h| h.starts_with("fold_")) {
         csv_nirs4all(&headers, &rows)
@@ -67,9 +71,11 @@ fn csv_nirs4all(headers: &[String], rows: &[Vec<String>]) -> Result<Vec<Fold>, S
     for row in rows {
         for (i, value) in row.iter().enumerate() {
             if i < n_folds && !value.trim().is_empty() {
-                if let Ok(v) = value.trim().parse::<i64>() {
-                    fold_train[i].push(v);
-                }
+                let index = value
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| SpecError::new(format!("non-integer fold index: {value:?}")))?;
+                fold_train[i].push(index);
             }
         }
     }
@@ -78,8 +84,7 @@ fn csv_nirs4all(headers: &[String], rows: &[Vec<String>]) -> Result<Vec<Fold>, S
         .iter()
         .map(|train| {
             let train_set: BTreeSet<i64> = train.iter().copied().collect();
-            let mut t: Vec<i64> = train_set.iter().copied().collect();
-            t.sort();
+            let t = train.clone();
             let val: Vec<i64> = all_ids
                 .iter()
                 .copied()
@@ -125,30 +130,41 @@ fn csv_assignment(headers: &[String], rows: &[Vec<String>]) -> Result<Vec<Fold>,
                 .copied()
                 .filter(|s| !mset.contains(s))
                 .collect();
-            let mut val: Vec<i64> = mset.iter().copied().collect();
-            val.sort();
+            let val = members.clone();
             (train, val)
         })
         .collect())
 }
 
-fn parse_json(data: &Value) -> Result<Vec<Fold>, SpecError> {
+pub(crate) fn parse_json(data: &Value) -> Result<Vec<Fold>, SpecError> {
     let arr = data
         .as_array()
         .ok_or_else(|| SpecError::new("fold JSON/YAML must be a list of {train, val} objects"))?;
-    let int_list = |v: Option<&Value>| -> Vec<i64> {
-        v.and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
-            .unwrap_or_default()
+    let int_list = |v: Option<&Value>| -> Result<Vec<i64>, SpecError> {
+        let Some(value) = v else {
+            return Ok(vec![]);
+        };
+        let values = value
+            .as_array()
+            .ok_or_else(|| SpecError::new("fold sides must be arrays of integer indices"))?;
+        values
+            .iter()
+            .map(|index| {
+                index.as_i64().ok_or_else(|| {
+                    SpecError::new("fold indices must be integers (not bool, float or string)")
+                })
+            })
+            .collect()
     };
     arr.iter()
         .map(|obj| {
             let m = obj.as_object().ok_or_else(|| {
                 SpecError::new("each fold entry must be a mapping with 'train' and 'val'/'test'")
             })?;
-            let train = int_list(m.get("train"));
-            let val = int_list(m.get("val").or_else(|| m.get("test")));
-            Ok((train, val))
+            Ok((
+                int_list(m.get("train"))?,
+                int_list(m.get("val").or_else(|| m.get("test")))?,
+            ))
         })
         .collect()
 }
@@ -159,7 +175,7 @@ fn parse_txt(text: &str) -> Result<Vec<Fold>, SpecError> {
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .collect();
-    if !lines.len().is_multiple_of(2) {
+    if lines.len() & 1 != 0 {
         return Err(SpecError::new(
             "TXT fold file must have an even number of non-empty lines (train/val pairs)",
         ));
@@ -206,5 +222,34 @@ mod tests {
     fn txt_alternating() {
         let folds = parse_fold_str("0,1,2\n3,4\n", "txt").unwrap();
         assert_eq!(folds, vec![(vec![0, 1, 2], vec![3, 4])]);
+    }
+}
+
+#[cfg(test)]
+mod strict_fold_parser_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_cells_never_disappear_or_coerce() {
+        for (fmt, text) in [
+            ("json", r#"[{"train":[true],"val":[5]}]"#),
+            ("json", r#"[{"train":[1.0],"val":[5]}]"#),
+            ("json", r#"[{"train":["1"],"val":[5]}]"#),
+            ("json", r#"[{"train":1,"val":[5]}]"#),
+            ("txt", "1.0\n5\n"),
+            ("csv", "fold_0\n1.0\n"),
+            ("csv", "sample_id,fold\n1.0,0\n5,1\n"),
+        ] {
+            assert!(parse_fold_str(text, fmt).is_err(), "{fmt}: {text}");
+        }
+        // Admission must see duplicates rather than a silently deduplicated side.
+        assert_eq!(
+            parse_fold_str("fold_0\n1\n1\n", "csv").unwrap(),
+            vec![(vec![1, 1], vec![])]
+        );
+        assert_eq!(
+            parse_fold_str("fold_0\n1\n3\n5\n", "csv").unwrap(),
+            vec![(vec![1, 3, 5], vec![])]
+        );
     }
 }

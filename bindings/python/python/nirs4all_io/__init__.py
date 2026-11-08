@@ -16,14 +16,18 @@ structural summary dict; ``target="spectrodataset"`` builds a real nirs4all
 
 from __future__ import annotations
 
+import glob
 import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import numpy as np
+
 from ._adapter import to_spectrodataset
-from ._assembled import require_assembled_dataset_v2
+from ._assembled import require_assembled_dataset
 from ._native import __version__, assembled_full, load_summary
+from ._native import detect_task_type as _native_detect_task_type
 from ._native import infer as _native_infer
 from ._native import to_spec as _native_to_spec
 from ._native import validate as _native_validate
@@ -42,6 +46,7 @@ from .public_dataset import Dataset, dataset
 from .ragged import RaggedSeriesBatch, RaggedSeriesSource
 
 __all__ = [
+    "detect_task_type",
     "infer",
     "Dataset",
     "dataset",
@@ -99,7 +104,12 @@ def _is_relative_local_ref(value: str) -> bool:
 
 def _absolutize_input_ref(value: Any, base_dir: Path) -> Any:
     if isinstance(value, str) and _is_relative_local_ref(value):
-        return str((base_dir / value).resolve())
+        exact = base_dir / value
+        if exact.is_file():
+            return str(exact.resolve())
+        if any(c in value for c in "*?["):
+            return str(Path(glob.escape(str(base_dir.resolve()))) / value)
+        return str(exact.resolve())
     if isinstance(value, list):
         return [_absolutize_input_ref(item, base_dir) for item in value]
     return value
@@ -117,7 +127,7 @@ def _absolutize_dataset_spec_refs(spec: dict[str, Any], base_dir: Path) -> None:
 
     partitions = spec.get("partitions")
     if isinstance(partitions, dict):
-        for key in ("train_file", "test_file", "predict_file"):
+        for key in ("train_file", "test_file", "val_file", "predict_file"):
             if key in partitions:
                 partitions[key] = _absolutize_input_ref(partitions[key], base_dir)
 
@@ -254,12 +264,27 @@ class DatasetPlan(dict):
         return f"DatasetPlan(overall_score={self.overall_score}, {decs})"
 
 
-def infer(input: Any, conventions: list[str] | None = None, *, hints: dict | None = None) -> DatasetPlan:
+def detect_task_type(y: Any, threshold: float = 0.05) -> tuple[str, float]:
+    """Return the IO owner's task token and confidence for numeric observations.
+
+    NumPy flattens convertible input in C order without modifying it. ``None``
+    becomes NaN; empty/all-NaN input returns ``("regression", 0.0)``. Conversion
+    warnings and errors propagate. The native owner receives an f64 threshold
+    without clamping and returns ``regression``, ``binary`` or ``multiclass``.
+    This scored pair is distinct from the SDK's ``TaskType`` enum.
+    """
+    return _native_detect_task_type(np.asarray(y).ravel().astype(float).tolist(), threshold)
+
+
+def infer(input: Any, conventions: list[str] | None = None, *, params: dict | None = None,
+          file_params: dict[str, dict] | None = None, hints: dict | None = None) -> DatasetPlan:
     """Inspect a data input and return a scored :class:`DatasetPlan`.
 
     Args:
         input: A path (``str`` or :class:`~pathlib.Path`) or a list of files.
         conventions: Optional convention names; ``None`` uses the default list.
+        params: Global loading parameters applied before the first table read.
+        file_params: Exact input names mapped to loading parameters overriding params.
 
     Returns:
         A :class:`DatasetPlan` (a ``dict`` subclass) with ``resolved_spec``,
@@ -269,7 +294,7 @@ def infer(input: Any, conventions: list[str] | None = None, *, hints: dict | Non
         raise TypeError("hints must be a mapping or None")
     if hints:
         raise ValueError("Non-empty inference hints are not implemented; edit the resolved_spec explicitly")
-    plan = _native_infer(_normalize_input(input), conventions)
+    plan = _native_infer(_normalize_input(input), conventions, params, file_params)
     return DatasetPlan(plan)
 
 
@@ -342,7 +367,9 @@ def load(
     memory = array_payload(input, name, limits)
     if memory is not None:
         spec, frames = memory
-        full = assemble_frames(spec, frames, limits=limits, summary=target == "assembled")
+        memory_options = {"storage": {"consumer": "SpectroDataset"}} if target == "spectrodataset" else {}
+        full = assemble_frames(spec, frames, limits=limits, summary=target == "assembled", **memory_options)
+        require_assembled_dataset(full)
         if target == "assembled":
             return full
         if target in {"dataset_package", "package"}:
@@ -358,12 +385,12 @@ def load(
     load_options = {} if limits is None else {"limits": limits}
     if target == "assembled":
         summary = load_summary(native_input, conventions, name, **load_options)
-        require_assembled_dataset_v2(summary)
+        require_assembled_dataset(summary)
         return summary
     if target in {"dataset_package", "package"}:
         return DatasetPackage(assembled_full(native_input, conventions, name, **load_options))
     if target == "spectrodataset":
-        full = assembled_full(native_input, conventions, name, **load_options)
+        full = assembled_full(native_input, conventions, name, storage={"consumer": "SpectroDataset"}, **load_options)
         return to_spectrodataset(full, spectro_dataset_cls=spectro_dataset_cls)
     if target in {"dag-ml-data", "dag_ml_data"}:
         raise NotImplementedError(
