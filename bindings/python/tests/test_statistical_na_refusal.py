@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
 """Require a rebuilt pyo3 candidate; the src/ historical oracle is not this API."""
 import pytest
+
 from nirs4all_io import _native
 
 A = "Sample_ID;set;1100;target\nS_missing;train;;1.0\nS_finite;train;2.0;2.0\nS_test;test;10.0;3.0\n"

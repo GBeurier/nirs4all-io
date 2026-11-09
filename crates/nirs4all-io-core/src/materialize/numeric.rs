@@ -294,7 +294,7 @@ pub(crate) fn decode_hex(value: &str, byte_count: usize) -> Result<Vec<u8>, Stri
     bytes
         .try_reserve_exact(byte_count)
         .map_err(|_| "Numeric wire allocation exceeds capacity")?;
-    for pair in value.as_bytes().chunks_exact(2) {
+    for pair in value.as_bytes().as_chunks::<2>().0 {
         bytes.push((digit(pair[0]).unwrap() << 4) | digit(pair[1]).unwrap());
     }
     Ok(bytes)
