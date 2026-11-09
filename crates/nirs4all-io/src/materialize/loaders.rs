@@ -19,7 +19,9 @@ use arrow_array::{
     StringViewArray,
 };
 use arrow_schema::DataType;
-use nirs4all_formats::{decode_xlsx_cells, XlsxCellValue, XlsxDecodeError, XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION};
+use nirs4all_formats::{
+    decode_xlsx_cells, XlsxCellValue, XlsxDecodeError, XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION,
+};
 use nirs4all_io_core::infer::table::{ColDtype, NumericKind};
 use nirs4all_io_core::materialize::loaders::{
     apply_na_policy, read_sheet, read_table_bytes_with_limits, Sheet, SheetCell,
@@ -61,7 +63,9 @@ pub(crate) fn read_workbook_with_budget(
     path: &Path,
     budget: &mut ReadBudget,
 ) -> Result<Vec<Sheet<SheetCell>>, SpecError> {
-    if path.extension().and_then(|ext| ext.to_str())
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("xls"))
     {
         return Err(SpecError::new(format!(
@@ -70,14 +74,20 @@ pub(crate) fn read_workbook_with_budget(
         )));
     }
     let raw = budget.read_raw(path)?;
-    let workbook = decode_xlsx_cells(&raw, &path.to_string_lossy(), budget.xlsx_limits())
-        .map_err(|error| match error {
+    let workbook = decode_xlsx_cells(&raw, &path.to_string_lossy(), budget.xlsx_limits()).map_err(
+        |error| match error {
             XlsxDecodeError::Limit { label, maximum } => limit_error(label, maximum),
-            error => SpecError::new(format!("spreadsheet read failed for {}: {error}", path.display())),
-        })?;
+            error => SpecError::new(format!(
+                "spreadsheet read failed for {}: {error}",
+                path.display()
+            )),
+        },
+    )?;
     check_xlsx_profile(path, &workbook.operation, workbook.version)?;
     let decoded = workbook.usage.archive_decoded_bytes;
-    let total = workbook.usage.total_decoded_bytes()
+    let total = workbook
+        .usage
+        .total_decoded_bytes()
         .ok_or_else(|| limit_error("decoded bytes overflow", budget.decoded_allowance()))?;
     budget.charge_decoded(total)?;
     let mut sheets = Vec::with_capacity(workbook.sheets.len());
@@ -95,7 +105,9 @@ pub(crate) fn read_workbook_with_budget(
         let mut rows = vec![vec![SheetCell::Cell(Cell::Na); width as usize]; height as usize];
         for cell in sheet.cells {
             let (row, col) = cell.position;
-            if u64::from(row) >= height || u64::from(col) >= width { continue; }
+            if u64::from(row) >= height || u64::from(col) >= width {
+                continue;
+            }
             rows[row as usize][col as usize] = project_xlsx_cell(cell.value);
         }
         sheets.push((sheet.name, rows));
@@ -110,7 +122,12 @@ fn project_xlsx_cell(value: XlsxCellValue) -> SheetCell {
         XlsxCellValue::Text(text) => SheetCell::Cell(Cell::Str(text)),
         XlsxCellValue::Bool(value) => SheetCell::Cell(Cell::Bool(value)),
         XlsxCellValue::Empty | XlsxCellValue::Error(_) => SheetCell::Cell(Cell::Na),
-        XlsxCellValue::Date { serial_bits, token, rendered, .. } => {
+        XlsxCellValue::Date {
+            serial_bits,
+            token,
+            rendered,
+            ..
+        } => {
             if let Some(text) = rendered {
                 return SheetCell::Cell(Cell::Str(text));
             }
@@ -132,7 +149,10 @@ fn project_xlsx_cell(value: XlsxCellValue) -> SheetCell {
 
 fn check_xlsx_profile(path: &Path, operation: &str, version: u32) -> Result<(), SpecError> {
     if operation != XLSX_CELLS_OPERATION || version != XLSX_CELLS_VERSION {
-        return Err(SpecError::new(format!("spreadsheet read failed for {}: unsupported typed-cell operation or version", path.display())));
+        return Err(SpecError::new(format!(
+            "spreadsheet read failed for {}: unsupported typed-cell operation or version",
+            path.display()
+        )));
     }
     Ok(())
 }
@@ -145,21 +165,36 @@ mod xlsx_profile_tests {
     fn date_mapping_uses_rendering_or_original_serial_bits() {
         use nirs4all_formats::XlsxDateKind;
         let date = |rendered| XlsxCellValue::Date {
-            kind: XlsxDateKind::DateTime, serial_bits: (-0.0_f64).to_bits(),
-            token: "-0".into(), epoch_1904: true, rendered,
+            kind: XlsxDateKind::DateTime,
+            serial_bits: (-0.0_f64).to_bits(),
+            token: "-0".into(),
+            epoch_1904: true,
+            rendered,
         };
-        assert!(matches!(project_xlsx_cell(date(Some("1904-01-01 00:00:00".into()))), SheetCell::Cell(Cell::Str(value)) if value == "1904-01-01 00:00:00"));
-        assert!(matches!(project_xlsx_cell(date(None)), SheetCell::Cell(Cell::Float(value)) if value.to_bits() == (-0.0_f64).to_bits()));
-        assert!(matches!(project_xlsx_cell(XlsxCellValue::Error("#N/A".into())), SheetCell::Cell(Cell::Na)));
+        assert!(
+            matches!(project_xlsx_cell(date(Some("1904-01-01 00:00:00".into()))), SheetCell::Cell(Cell::Str(value)) if value == "1904-01-01 00:00:00")
+        );
+        assert!(
+            matches!(project_xlsx_cell(date(None)), SheetCell::Cell(Cell::Float(value)) if value.to_bits() == (-0.0_f64).to_bits())
+        );
+        assert!(matches!(
+            project_xlsx_cell(XlsxCellValue::Error("#N/A".into())),
+            SheetCell::Cell(Cell::Na)
+        ));
     }
 
     #[test]
     fn rejects_unknown_operation_and_version_before_mapping() {
         let path = Path::new("profile.xlsx");
         assert!(check_xlsx_profile(path, XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION).is_ok());
-        for (operation, version) in [("unknown", XLSX_CELLS_VERSION), (XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION + 1)] {
+        for (operation, version) in [
+            ("unknown", XLSX_CELLS_VERSION),
+            (XLSX_CELLS_OPERATION, XLSX_CELLS_VERSION + 1),
+        ] {
             let error = check_xlsx_profile(path, operation, version).unwrap_err();
-            assert!(error.message.contains("profile.xlsx: unsupported typed-cell operation or version"));
+            assert!(error
+                .message
+                .contains("profile.xlsx: unsupported typed-cell operation or version"));
         }
     }
 
@@ -167,7 +202,12 @@ mod xlsx_profile_tests {
     fn workbook_budget_is_cumulative_and_charged_once() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/spectra_refs.xlsx");
         let bytes = std::fs::read(&path).unwrap();
-        let workbook = decode_xlsx_cells(&bytes, "spectra_refs.xlsx", nirs4all_formats::XlsxDecodeLimits::unlimited()).unwrap();
+        let workbook = decode_xlsx_cells(
+            &bytes,
+            "spectra_refs.xlsx",
+            nirs4all_formats::XlsxDecodeLimits::unlimited(),
+        )
+        .unwrap();
         let decoded = workbook.usage.total_decoded_bytes().unwrap();
         let limits = LoadLimits {
             max_files: 2,
@@ -180,10 +220,19 @@ mod xlsx_profile_tests {
         let mut budget = ReadBudget::new(limits).unwrap();
         read_workbook_with_budget(&path, &mut budget).unwrap();
         read_workbook_with_budget(&path, &mut budget).unwrap();
-        assert!(read_workbook_with_budget(&path, &mut budget).unwrap_err().message.contains("max_files"));
+        assert!(read_workbook_with_budget(&path, &mut budget)
+            .unwrap_err()
+            .message
+            .contains("max_files"));
         for constrained in [
-            LoadLimits { max_total_bytes: 2 * bytes.len() as u64 - 1, ..limits },
-            LoadLimits { max_decoded_total_bytes: 2 * decoded - 1, ..limits },
+            LoadLimits {
+                max_total_bytes: 2 * bytes.len() as u64 - 1,
+                ..limits
+            },
+            LoadLimits {
+                max_decoded_total_bytes: 2 * decoded - 1,
+                ..limits
+            },
         ] {
             let mut budget = ReadBudget::new(constrained).unwrap();
             read_workbook_with_budget(&path, &mut budget).unwrap();

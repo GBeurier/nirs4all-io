@@ -106,7 +106,9 @@ fn role_tagged_request_reaches_the_same_owner_refusal() {
         statistical["na_fill_config"]["method"] = json!(method);
         let error = role_tagged_config_to_spec(&statistical).unwrap_err();
         assert!(
-            error.message.starts_with(&format!("na.fill.method: '{method}' is refused:")),
+            error
+                .message
+                .starts_with(&format!("na.fill.method: '{method}' is refused:")),
             "{error}"
         );
         assert_refusal(error);
@@ -115,7 +117,10 @@ fn role_tagged_request_reaches_the_same_owner_refusal() {
 
 #[test]
 fn accepted_fill_vocabulary_and_serialization_stay_canonical() {
-    assert_eq!(FillMethod::VALUES, &["value", "forward_fill", "backward_fill"]);
+    assert_eq!(
+        FillMethod::VALUES,
+        &["value", "forward_fill", "backward_fill"]
+    );
     for (method, canonical) in [
         ("value", "value"),
         (" Forward-Fill ", "forward_fill"),
@@ -145,10 +150,19 @@ fn supported_probe_controls_preserve_train_bytes_masks_identity_and_partitions()
     });
     for (label, na) in [
         ("ignore", json!({"policy": "ignore"})),
-        ("value", json!({"policy": "replace", "fill": {"method": "value", "fill_value": 0}})),
+        (
+            "value",
+            json!({"policy": "replace", "fill": {"method": "value", "fill_value": 0}}),
+        ),
         ("remove_sample", json!({"policy": "remove_sample"})),
-        ("forward_fill", json!({"policy": "replace", "fill": {"method": "forward_fill"}})),
-        ("backward_fill", json!({"policy": "replace", "fill": {"method": "backward_fill"}})),
+        (
+            "forward_fill",
+            json!({"policy": "replace", "fill": {"method": "forward_fill"}}),
+        ),
+        (
+            "backward_fill",
+            json!({"policy": "replace", "fill": {"method": "backward_fill"}}),
+        ),
     ] {
         let spec = probe_spec(na);
         let a = assemble(&spec, A).unwrap();
@@ -162,11 +176,7 @@ fn supported_probe_controls_preserve_train_bytes_masks_identity_and_partitions()
         } else {
             vec!["S_missing", "S_finite"]
         };
-        let targets = if removed {
-            vec![2.0]
-        } else {
-            vec![1.0, 2.0]
-        };
+        let targets = if removed { vec![2.0] } else { vec![1.0, 2.0] };
         let validity = if removed {
             vec![true]
         } else {
@@ -187,14 +197,23 @@ fn supported_probe_controls_preserve_train_bytes_masks_identity_and_partitions()
             assert_eq!(assembled.identity.sample_id.as_deref(), Some("Sample_ID"));
             let train = &assembled.blocks["train"];
             let test = &assembled.blocks["test"];
-            assert_eq!(train.metadata.as_ref().unwrap().str_column("Sample_ID"), ids);
-            assert_eq!(test.metadata.as_ref().unwrap().str_column("Sample_ID"), ["S_test"]);
+            assert_eq!(
+                train.metadata.as_ref().unwrap().str_column("Sample_ID"),
+                ids
+            );
+            assert_eq!(
+                test.metadata.as_ref().unwrap().str_column("Sample_ID"),
+                ["S_test"]
+            );
             assert_eq!(train.y.as_ref().unwrap().data, targets);
             assert_eq!(train.y.as_ref().unwrap().validity, vec![true; ids.len()]);
             assert_eq!(test.y.as_ref().unwrap().data, [3.0]);
             assert_eq!(test.y.as_ref().unwrap().validity, [true]);
             assert_eq!(train.n_samples, ids.len());
-            assert_eq!(wire["blocks"]["train"]["x"][0]["data_bytes_hex"], train_bytes);
+            assert_eq!(
+                wire["blocks"]["train"]["x"][0]["data_bytes_hex"],
+                train_bytes
+            );
             assert_eq!(train.x[0].validity, validity);
             assert_eq!(wire["blocks"]["train"]["x"][0]["validity"], json!(validity));
             assert_eq!(train.x[0].data.last(), Some(&2.0));
