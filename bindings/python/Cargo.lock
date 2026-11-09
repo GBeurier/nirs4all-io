@@ -798,7 +798,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -822,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "csv",
  "indexmap",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-py"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "nirs4all-io",
  "pyo3",
