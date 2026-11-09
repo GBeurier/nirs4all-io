@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { numericCoordinates } from '../numeric-wire.mjs';
+const { numericCoordinates } = await import(process.env.NIRS4ALL_IO_NUMERIC_WIRE ?? '../numeric-wire.mjs');
 
 // The Rust unit test includes these exact bytes; neither side generates answers.
 const corpus = JSON.parse(readFileSync(new URL('./fixtures/numeric-coordinates.json', import.meta.url), 'utf8'));
