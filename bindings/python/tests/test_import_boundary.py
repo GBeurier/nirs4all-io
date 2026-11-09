@@ -8,7 +8,7 @@ import sys
 def test_import_does_not_load_nirs4all(tmp_path):
     code = r'''
 import hashlib, importlib.metadata, json, sys
-from importlib.machinery import ExtensionFileLoader
+from importlib.machinery import EXTENSION_SUFFIXES, ExtensionFileLoader
 from pathlib import Path
 
 def sdk_modules():
@@ -22,7 +22,7 @@ assert isinstance(_native.__spec__.loader, ExtensionFileLoader)
 for value in [nio.__file__, _native.__file__]:
     origin = Path(value).resolve()
     assert origin.is_relative_to(Path(sys.prefix).resolve()) and "site-packages" in origin.parts, origin
-assert Path(_native.__file__).name == "_native.abi3.so"
+assert Path(_native.__file__).name in {"_native" + suffix for suffix in EXTENSION_SUFFIXES}
 native_sha = hashlib.sha256(Path(_native.__file__).read_bytes()).hexdigest()
 assert native_sha != "2363375525b8a99daf68f1c9685603efc09b64e66ecec87a1f40a629157c4ffd"
 assert nio.__version__ == _native.__version__ == importlib.metadata.version("nirs4all-io")
