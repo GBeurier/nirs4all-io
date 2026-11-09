@@ -2,6 +2,8 @@
 
 ## 0.3.0 - Unreleased
 
+- Package and export the WASM numeric-coordinate accessor and its declaration.
+
 - Refuse explicit NA `mean`/`median` methods at native spec admission under
   every policy; direct statistics to fitted preprocessing and retain constant,
   row-local, drop and ignore options. The identified Python oracle retains its

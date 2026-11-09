@@ -348,6 +348,8 @@ manifest.files = [...new Set([
   "idiomatic.d.ts",
   "public-dataset.mjs",
   "public-dataset.d.ts",
+  "numeric-wire.mjs",
+  "numeric-wire.d.ts",
   "types/nirs4all-io.d.ts",
   "LICENSE",
   "LICENSES",
@@ -367,6 +369,11 @@ manifest.exports = {
     import: "./idiomatic.mjs",
     default: "./idiomatic.mjs",
   },
+  "./numeric-wire": {
+    types: "./numeric-wire.d.ts",
+    import: "./numeric-wire.mjs",
+    default: "./numeric-wire.mjs",
+  },
   "./types": { types: "./types/nirs4all-io.d.ts" },
   "./public-dataset": {
     types: "./public-dataset.d.ts",
@@ -381,6 +388,8 @@ fs.mkdirSync(path.join(pkgDir, "LICENSES"), { recursive: true });
 fs.copyFileSync(path.join(wasm, "idiomatic.d.ts"), path.join(pkgDir, "idiomatic.d.ts"));
 fs.copyFileSync(path.join(wasm, "public-dataset.mjs"), path.join(pkgDir, "public-dataset.mjs"));
 fs.copyFileSync(path.join(wasm, "public-dataset.d.ts"), path.join(pkgDir, "public-dataset.d.ts"));
+fs.copyFileSync(path.join(wasm, "numeric-wire.mjs"), path.join(pkgDir, "numeric-wire.mjs"));
+fs.copyFileSync(path.join(wasm, "numeric-wire.d.ts"), path.join(pkgDir, "numeric-wire.d.ts"));
 fs.copyFileSync(
   path.join(wasm, "types/nirs4all-io.d.ts"),
   path.join(pkgDir, "types/nirs4all-io.d.ts"),

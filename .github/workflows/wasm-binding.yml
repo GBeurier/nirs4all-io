@@ -32,3 +32,5 @@ jobs:
         run: wasm-pack build bindings/wasm --target nodejs --out-dir pkg --locked
       - name: Node smoke
         run: node bindings/wasm/tests/node_smoke.cjs
+      - name: Numeric coordinate corpus
+        run: node --test bindings/wasm/tests/numeric-wire.mjs

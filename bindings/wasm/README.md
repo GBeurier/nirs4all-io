@@ -57,6 +57,8 @@ Require it from Node:
 const wasm = require("./bindings/wasm/pkg/nirs4all_io_wasm.js");
 ```
 
+The npm subpath `@nirs4all/io-wasm/numeric-wire` exports `numericCoordinates` and its packet type.
+
 ## Usage
 
 ```js

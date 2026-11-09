@@ -147,6 +147,24 @@ jobs:
             const nio = await import("./exact-npm/package/idiomatic.mjs");
             if (!/^\d+\.\d+\.\d+/.test(nio.version())) throw new Error("packed idiomatic wrapper failed");
           '
+          consumer="$(mktemp -d "${RUNNER_TEMP}/io-numeric-wire.XXXXXX")"
+          printf '%s\n' '{"type":"module","private":true}' > "${consumer}/package.json"
+          npm install --prefix "${consumer}" --ignore-scripts --no-audit --no-fund "$(realpath "${PACKAGES[0]}")"
+          cmp bindings/wasm/numeric-wire.mjs "${consumer}/node_modules/@nirs4all/io-wasm/numeric-wire.mjs"
+          cmp bindings/wasm/numeric-wire.d.ts "${consumer}/node_modules/@nirs4all/io-wasm/numeric-wire.d.ts"
+          mkdir -p "${consumer}/fixtures"
+          cp bindings/wasm/tests/numeric-wire.mjs "${consumer}/numeric-wire-test.mjs"
+          cp bindings/wasm/tests/fixtures/numeric-coordinates.json "${consumer}/fixtures/"
+          (cd "${consumer}" && NIRS4ALL_IO_NUMERIC_WIRE=@nirs4all/io-wasm/numeric-wire node --test numeric-wire-test.mjs)
+          cat > "${consumer}/check.mts" <<'EOF'
+          import { numericCoordinates, type NumericCoordinatesPacket } from "@nirs4all/io-wasm/numeric-wire";
+          import type { AssembledAxisCoordinates } from "@nirs4all/io-wasm/types";
+          const packet: NumericCoordinatesPacket = { kind: "numeric", count: 0, data_bytes_hex: "" };
+          const coordinates: Float64Array = numericCoordinates(packet, 0);
+          const axis: AssembledAxisCoordinates = packet;
+          void [coordinates, axis];
+          EOF
+          (cd "${consumer}" && npx --yes --package typescript@5.7.3 tsc --noEmit --strict --module nodenext --moduleResolution nodenext check.mts)
           python scripts/scan_artifact_paths.py "${PACKAGES[0]}"
 
       - uses: actions/upload-artifact@v7.0.1
