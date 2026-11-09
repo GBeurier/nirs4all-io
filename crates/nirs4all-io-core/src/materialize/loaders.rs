@@ -847,8 +847,9 @@ pub fn undeclared_delimiter(bytes: &[u8]) -> DelimiterVerdict {
     if default_rows.len() < 2 || default_rows.iter().any(|row| row.0 > 1) {
         return DelimiterVerdict::Default;
     }
-    let candidates: Vec<u8> = [b',', b'\t', b'|']
-        .into_iter()
+    let candidates: Vec<u8> = b",\t|"
+        .iter()
+        .copied()
         .filter(|&delimiter| {
             let rows = dialect_records(bytes, delimiter, truncated);
             rows.len() >= 2 && rows[0].0 >= 2 && rows.iter().all(|r| r.0 == rows[0].0)
@@ -868,7 +869,7 @@ pub fn undeclared_delimiter(bytes: &[u8]) -> DelimiterVerdict {
         }
         return DelimiterVerdict::Default;
     }
-    let comma_pair = candidates == [b',']
+    let comma_pair = candidates.as_slice() == b","
         && default_rows
             .iter()
             .skip(1)

@@ -762,7 +762,7 @@ pub(crate) fn axes_from_full(value: &Value, columns: usize) -> Result<Vec<Value>
                     return Err("Coordinate dtype/count/bytes mismatch".into());
                 }
                 let mut values = Vec::with_capacity(count);
-                for chunk in text.as_bytes().chunks_exact(16) {
+                for chunk in text.as_bytes().as_chunks::<16>().0 {
                     let mut bytes = [0; 8];
                     for i in 0..8 {
                         bytes[i] = u8::from_str_radix(

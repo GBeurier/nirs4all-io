@@ -100,7 +100,7 @@ fn mixed_header_native_inference_preserves_scientific_contents() {
             .map(|i| (1000 + i * 5).to_string())
             .collect::<Vec<_>>()
     );
-    for row in block.x[0].data.chunks_exact(12) {
+    for row in block.x[0].data.as_chunks::<12>().0 {
         assert_eq!(
             row,
             &[0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3]

@@ -30,6 +30,20 @@ _(rows are appended as each piece is copied)_
 | 15 | `data/config.py::_load_dataset`, `data/dataset.py` add_*/set_* | `materialize/spectrodataset.py` (build flow), `materialize/assemble.py` | COPY-LOGIC + EMIT(lazy) | build orchestration; SpectroDataset class imported lazily only |
 | Studio role adapter | `nirs4all-studio/api/shared/dataset_config.py::build_nirs4all_config` at `cdb9f46de1643ab170934481cd9471e54ed3701c` | `crates/nirs4all-io-core/src/spec/role_tagged.rs::studio_legacy_config` | PORT + STRICT | permissive last-write behavior is retained only in a frozen oracle intermediate; the public adapter closes unknown/conflicting input first. Oracle source SHA-256 and generated corpus live in `tests/fixtures/role_tagged/studio_oracle_corpus.json`. |
 
+## V1-RUST-MIXED-SPECTRAL-HEADER
+
+Root authorized a native-only correction to the ported wavelength recognizer:
+use the ordered cells that parse with the existing numeric expression, retaining
+all existing thresholds and the outer header gate. The Python oracle and shared
+cross-language goldens remain frozen. The exact mixed-header inference/metadata
+divergence and separate native expectations are documented in `COMPAT.md`;
+bounded-delta tests preserve row values, selections, identity and folds.
+Native inference/proposals/inspection use one declared-first header selection,
+retaining the oracle's true default for unrecognized headers and warning about
+the ambiguity. Explicit Rust/binding loading options now reach the first parse;
+the frozen oracle has no such options. No parser/numeric kernel, threshold or
+target-name rule is copied or added.
+
 ## Float64 owner contract deltas (3 November 2026)
 
 Intentional departures from the copied `nirs4all` logic, made to satisfy the accepted

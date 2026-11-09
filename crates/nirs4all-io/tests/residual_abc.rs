@@ -177,7 +177,9 @@ fn reviewer_concat_numeric_role_keeps_checked_conversion_and_exact_bits() {
             assert_eq!(
                 matrix
                     .data
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|row| row[column].to_bits())
                     .collect::<Vec<_>>(),
                 expected.map(f64::to_bits)

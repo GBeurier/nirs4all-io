@@ -207,9 +207,9 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
 name = "calamine"
-version = "0.37.0"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9ca341b94bc4b29e08970b1a03914fad2dfe177e2ecb67fcd6de9046004aafb"
+checksum = "f431b67cba6122a1f7d26b7adafc71bbdf07026095fe811f5efc025d8748e1d8"
 dependencies = [
  "atoi_simd",
  "byteorder",
@@ -804,9 +804,9 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "nirs4all-formats"
-version = "0.2.15"
+version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a43c96c388a453ae0e0f83b6f3de021190a101a627b8457e4cd31bf143f54f0e"
+checksum = "c072dc98c1f054b3ea47f44371adb1d4f2741901016811dc8d53d2168ec80bd3"
 dependencies = [
  "calamine",
  "cfb",
@@ -821,9 +821,9 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-formats-core"
-version = "0.2.15"
+version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35508e6594f48988f5458c9f344ddccbbc7d31f91f43222f53d2aabc36a14f69"
+checksum = "6862024cf9ddcaa51586b59943f7768ec35c682f3af58108fe878a6222fee82e"
 dependencies = [
  "serde",
  "serde_json",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-capi"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "nirs4all-io",
  "serde_json",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "nirs4all-io-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "csv",
  "indexmap",
@@ -1340,9 +1340,9 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "uuid"
-version = "1.29.2"
+version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
