@@ -27,17 +27,28 @@ on:
         description: "Build artifacts without publishing"
         required: false
         default: "true"
+      repair_031:
+        description: "Repair v0.3.1 Windows wheel using the original release run"
+        type: boolean
+        default: false
+      expected_source_sha:
+        description: "Reviewed repair source commit SHA"
+        type: string
+        required: false
 
 permissions:
   contents: write   # attach release assets
   id-token: write   # PyPI trusted publishing (OIDC)
+  actions: read     # retrieve reviewed artifacts from the original run
 
 jobs:
   release-validation:
+    if: ${{ !inputs.repair_031 }}
     uses: ./.github/workflows/release-validation.yml
 
   rust-security:
     name: Rust security (all lockfiles)
+    if: ${{ !inputs.repair_031 }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
@@ -55,15 +66,39 @@ jobs:
   python-wheels:
     name: Python wheels (${{ matrix.os }})
     needs: rust-security
+    if: ${{ !cancelled() && (needs.rust-security.result == 'success' || (inputs.repair_031 && needs.rust-security.result == 'skipped')) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # io's Rust core is pure-Rust (glob/flate2/zip/csv/regex/serde/sha2),
         # so macOS wheels build cleanly — ship all three OSes.
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.repair_031 && '["windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Bind Windows repair to the immutable release source
+        if: ${{ inputs.repair_031 }}
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_EVENT_NAME}" = workflow_dispatch
+          [[ "${EXPECTED_SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${GITHUB_SHA}" = "${EXPECTED_SOURCE_SHA}"
+          tag_sha=$(git rev-parse 'refs/tags/v0.3.1^{commit}')
+          test "$tag_sha" = 28e47c9d6491b83a31dd36a25f2b0a35eeab9860
+          git merge-base --is-ancestor "$tag_sha" "$GITHUB_SHA"
+          git diff --quiet "$tag_sha" "$GITHUB_SHA" -- . \
+            ':(exclude).gitattributes' \
+            ':(exclude)bindings/python/tests/test_import_boundary.py' \
+            ':(exclude).github/workflows/cross-binding.yml' \
+            ':(exclude).github/workflows/release.yml'
+          original=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/42564486877" --jq '[.head_sha,.event,.head_branch,.status] | join(" ")')
+          test "$original" = "$tag_sha push v0.3.1 completed"
       - name: Verify release tag identity
         run: python scripts/verify_release_tag.py
       - name: Configure reproducible Rust paths
@@ -96,6 +131,7 @@ jobs:
 
   python-sdist:
     name: Python sdist
+    if: ${{ !inputs.repair_031 }}
     needs: rust-security
     runs-on: ubuntu-latest
     steps:
@@ -116,6 +152,7 @@ jobs:
 
   c-abi-archive:
     name: C-ABI archive (${{ matrix.target }})
+    if: ${{ !inputs.repair_031 }}
     needs: rust-security
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -159,7 +196,7 @@ jobs:
     # e.g. v0.1.0-alpha.1) are excluded so they never reach PyPI; and never on
     # a workflow_dispatch dry run — only a real tag push publishes. Mirrors the
     # nirs4all-formats / nirs4all-methods convention.
-    if: ${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && github.event_name != 'workflow_dispatch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false') }}
+    if: ${{ !cancelled() && needs.python-wheels.result == 'success' && ((inputs.repair_031 && needs.release-validation.result == 'skipped' && needs.python-sdist.result == 'skipped' && needs.c-abi-archive.result == 'skipped') || (!inputs.repair_031 && needs.release-validation.result == 'success' && needs.python-sdist.result == 'success' && needs.c-abi-archive.result == 'success')) && ((startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && github.event_name != 'workflow_dispatch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false')) }}
     # Use the `pypi` GitHub environment so the OIDC token carries an
     # `environment: pypi` claim — matching the Trusted Publisher configured on
     # pypi.org with Environment = `pypi`. This is the SAME convention as
@@ -171,6 +208,8 @@ jobs:
       url: https://pypi.org/p/nirs4all-io
     permissions:
       id-token: write
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7.0.0
         with:
@@ -186,11 +225,19 @@ jobs:
             test "${GITHUB_REF_NAME}" = "${release_tag}"
           else
             git rev-parse --verify "refs/tags/${release_tag}^{commit}" >/dev/null
-            git diff --quiet "${release_tag}" -- . \
-              ':(exclude).github/workflows/release.yml' \
-              ':(exclude).github/workflows/release-npm.yml' \
-              ':(exclude)scripts/build_capi_archive.py' \
-              ':(exclude)scripts/normalize_wheel.py'
+            if [ "${{ inputs.repair_031 }}" = "true" ]; then
+              git diff --quiet "${release_tag}" -- . \
+                ':(exclude).github/workflows/release.yml' \
+                ':(exclude).github/workflows/cross-binding.yml' \
+                ':(exclude).gitattributes' \
+                ':(exclude)bindings/python/tests/test_import_boundary.py'
+            else
+              git diff --quiet "${release_tag}" -- . \
+                ':(exclude).github/workflows/release.yml' \
+                ':(exclude).github/workflows/release-npm.yml' \
+                ':(exclude)scripts/build_capi_archive.py' \
+                ':(exclude)scripts/normalize_wheel.py'
+            fi
             echo "Manual repair matches ${release_tag} outside release infrastructure."
           fi
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
@@ -207,11 +254,29 @@ jobs:
           path: dist
           pattern: wheels-*
           merge-multiple: true
+      - name: Download original Linux and macOS wheels for repair
+        if: ${{ inputs.repair_031 }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: dist
+          artifact-ids: 13650672538,13651072310
+          merge-multiple: true
+          run-id: 42564486877
+          github-token: ${{ github.token }}
       - name: Download Python sdist
+        if: ${{ !inputs.repair_031 }}
         uses: actions/download-artifact@v8.0.1
         with:
           name: sdist
           path: dist
+      - name: Download original sdist for repair
+        if: ${{ inputs.repair_031 }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: sdist
+          path: dist
+          run-id: 42564486877
+          github-token: ${{ github.token }}
       - name: Validate tag matches the built wheel/sdist version
         run: |
           set -euo pipefail
@@ -262,12 +327,21 @@ jobs:
     runs-on: ubuntu-latest
     # Same gate as publish-pypi: production tags only, pre-release tags ('-')
     # excluded so a pre-release never cuts a public GitHub Release.
-    if: ${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && github.event_name != 'workflow_dispatch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false') }}
+    if: ${{ !cancelled() && needs.python-wheels.result == 'success' && needs.publish-pypi.result == 'success' && ((inputs.repair_031 && needs.python-sdist.result == 'skipped' && needs.c-abi-archive.result == 'skipped') || (!inputs.repair_031 && needs.python-sdist.result == 'success' && needs.c-abi-archive.result == 'success')) && ((startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && github.event_name != 'workflow_dispatch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false')) }}
     steps:
       - uses: actions/download-artifact@v8.0.1
         with:
           path: assets
           merge-multiple: true
+      - name: Download original release artifacts for repair
+        if: ${{ inputs.repair_031 }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: assets
+          artifact-ids: 13650672538,13651072310,13650871502,13650584508,13650669240,13651360803
+          merge-multiple: true
+          run-id: 42564486877
+          github-token: ${{ github.token }}
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.publish-pypi.outputs.release_tag }}

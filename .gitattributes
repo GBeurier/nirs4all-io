@@ -1,3 +1,4 @@
 *.sh text eol=lf
 bindings/r/configure text eol=lf
 *.canonical text eol=lf
+src/nirs4all_io/infer/detectors.py text eol=lf
