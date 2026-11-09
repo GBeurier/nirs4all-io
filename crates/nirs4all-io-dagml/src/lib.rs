@@ -41,8 +41,8 @@ use dag_ml_data_provider::{DagMlDataProvider, InMemoryProvider};
 use nirs4all_io_core::infer::{ColDtype, NumericKind};
 pub use nirs4all_io_core::materialize::package::DatasetPackage;
 use nirs4all_io_core::materialize::package::PayloadBlock;
-use nirs4all_io_core::spec::SpecError;
 use nirs4all_io_core::materialize::{AssembledDataset, Cell, PartitionBlock};
+use nirs4all_io_core::spec::SpecError;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -826,9 +826,7 @@ fn emit_target_specs(
     Ok(targets)
 }
 
-fn metadata_value_kind(
-    column: &nirs4all_io_core::materialize::frame::Column,
-) -> MetadataValueKind {
+fn metadata_value_kind(column: &nirs4all_io_core::materialize::frame::Column) -> MetadataValueKind {
     match column.dtype {
         ColDtype::Bool => MetadataValueKind::Boolean,
         ColDtype::Datetime => MetadataValueKind::Datetime,
@@ -2098,6 +2096,7 @@ mod tests {
             output_representation: envelope.plan.output_representation.clone(),
             source_ids: vec![SourceId::new("spectra").unwrap()],
             require_relations: true,
+            predict_cohort: None,
         };
         let handle = provider.materialize(&request).unwrap();
         provider
@@ -2645,7 +2644,32 @@ mod tests {
             output_representation: envelope.plan.output_representation.clone(),
             source_ids: vec![SourceId::new("spectra").unwrap()],
             require_relations: true,
+            predict_cohort: None,
         };
+        // PackageProvider constructs a V1 envelope with no prediction-cohort
+        // authority. A companion read must be refused rather than falling back
+        // to the training relations.
+        assert!(envelope.predict_cohort.is_none());
+        let mut companion = request.clone();
+        companion.phase = "fit_cv".into();
+        companion.predict_cohort = Some(
+            dag_ml_data::PredictCohort::from_relations(
+                dag_ml_data::PredictCohortRole::ExternalTest,
+                envelope.coordinator_relations.clone().unwrap(),
+                vec!["protein".into()],
+                "a".repeat(64),
+                Some("b".repeat(64)),
+            )
+            .unwrap(),
+        );
+        let error = provider.materialize(&companion).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("request predict_cohort does not match envelope authority"),
+            "unexpected materialization error: {error}"
+        );
+
         let data = provider.materialize(&request).unwrap();
         let view = provider
             .make_view(

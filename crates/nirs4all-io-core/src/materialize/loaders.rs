@@ -514,7 +514,9 @@ pub enum SheetCell {
 }
 
 impl From<Cell> for SheetCell {
-    fn from(cell: Cell) -> Self { Self::Cell(cell) }
+    fn from(cell: Cell) -> Self {
+        Self::Cell(cell)
+    }
 }
 
 /// A worksheet, parameterized so existing callers can supply ordinary cells.
@@ -523,8 +525,14 @@ pub type Sheet<C = SheetCell> = (String, Vec<Vec<C>>);
 fn canonical_integer(token: &str) -> String {
     let negative = token.starts_with('-');
     let digits = token.trim_start_matches(['+', '-']).trim_start_matches('0');
-    if digits.is_empty() { return "0".to_string(); }
-    if negative { format!("-{digits}") } else { digits.to_string() }
+    if digits.is_empty() {
+        return "0".to_string();
+    }
+    if negative {
+        format!("-{digits}")
+    } else {
+        digits.to_string()
+    }
 }
 
 fn sheet_cell_text(cell: &SheetCell) -> String {
@@ -534,7 +542,9 @@ fn sheet_cell_text(cell: &SheetCell) -> String {
             let value = f64::from_bits(*bits);
             if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
                 (value as i64).to_string()
-            } else { value.to_string() }
+            } else {
+                value.to_string()
+            }
         }
         SheetCell::Cell(cell) => match cell {
             Cell::Str(text) => text.clone(),
@@ -561,7 +571,9 @@ fn project_sheet_cell(cell: SheetCell) -> (Cell, bool) {
             let value = f64::from_bits(bits);
             if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
                 (Cell::Int(value as i64), false)
-            } else { (Cell::Float(value), false) }
+            } else {
+                (Cell::Float(value), false)
+            }
         }
     }
 }
@@ -579,7 +591,9 @@ fn sheet_bool_word(text: &str) -> Option<bool> {
 /// width of an 8-byte value.
 fn sheet_cell_bytes(cell: &SheetCell) -> u64 {
     match cell {
-        SheetCell::IntegerLexeme(token) | SheetCell::Float64 { token, .. } => (token.len() as u64).max(8),
+        SheetCell::IntegerLexeme(token) | SheetCell::Float64 { token, .. } => {
+            (token.len() as u64).max(8)
+        }
         SheetCell::Cell(Cell::Str(text)) => text.len() as u64,
         SheetCell::Cell(Cell::Na) => 0,
         SheetCell::Cell(_) => 8,
@@ -641,7 +655,12 @@ pub fn read_sheet<C: Clone + Into<SheetCell>>(
     if let Some(limits) = limits {
         limits.check_shape(data.len() as u64, ncols as u64)?;
         for record in records {
-            if record.iter().map(|cell| sheet_cell_bytes(&cell.clone().into())).sum::<u64>() > limits.max_record_bytes {
+            if record
+                .iter()
+                .map(|cell| sheet_cell_bytes(&cell.clone().into()))
+                .sum::<u64>()
+                > limits.max_record_bytes
+            {
                 return Err(SpecError::new(format!(
                     "tabular record exceeds the {}-byte record budget",
                     limits.max_record_bytes
@@ -675,12 +694,21 @@ pub fn read_sheet<C: Clone + Into<SheetCell>>(
         .enumerate()
         .map(|(j, name)| {
             let physical_text = data.iter().any(|record| {
-                matches!(record.get(j).cloned().map(Into::into), Some(SheetCell::Cell(Cell::Str(_))))
+                matches!(
+                    record.get(j).cloned().map(Into::into),
+                    Some(SheetCell::Cell(Cell::Str(_)))
+                )
             });
             let projected: Vec<(Cell, bool)> = data
                 .iter()
-                .map(|record| record.get(j).cloned().map(Into::into)
-                    .map(project_sheet_cell).unwrap_or((Cell::Na, false)))
+                .map(|record| {
+                    record
+                        .get(j)
+                        .cloned()
+                        .map(Into::into)
+                        .map(project_sheet_cell)
+                        .unwrap_or((Cell::Na, false))
+                })
                 .collect();
             let (mut cells, numeric_text): (Vec<Cell>, Vec<bool>) = projected.into_iter().unzip();
             // pandas reads a column of boolean words as booleans.
@@ -701,7 +729,11 @@ pub fn read_sheet<C: Clone + Into<SheetCell>>(
             if numeric_text.iter().any(|value| *value) {
                 if !physical_text {
                     column.dtype = ColDtype::Numeric;
-                    column.numeric_kind = if column.values.iter().any(|cell| matches!(cell, Cell::Float(_) | Cell::Na)) {
+                    column.numeric_kind = if column
+                        .values
+                        .iter()
+                        .any(|cell| matches!(cell, Cell::Float(_) | Cell::Na))
+                    {
                         NumericKind::Float
                     } else {
                         NumericKind::NonFloatNumeric

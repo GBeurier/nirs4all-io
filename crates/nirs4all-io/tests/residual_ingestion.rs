@@ -273,13 +273,20 @@ fn residual_ingestion_shared_vectors() {
             }
             if pinned.contains(id) {
                 let value = parse_json_value(
-                    case["input"]["spec_text"].as_str().ok_or("spec_text required")?,
+                    case["input"]["spec_text"]
+                        .as_str()
+                        .ok_or("spec_text required")?,
                 )
                 .map_err(|error| error.to_string())?;
                 let error = DatasetSpec::from_value(&value)
                     .expect_err("historical statistical NA request must refuse at spec admission");
-                if !error.message.contains("na.fill.method") || !error.message.contains("is refused") {
-                    return Err(format!("unexpected statistical NA refusal: {}", error.message));
+                if !error.message.contains("na.fill.method")
+                    || !error.message.contains("is refused")
+                {
+                    return Err(format!(
+                        "unexpected statistical NA refusal: {}",
+                        error.message
+                    ));
                 }
                 statistical_spec_refusals += 1;
                 return Ok(());
