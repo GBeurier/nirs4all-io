@@ -11,6 +11,7 @@
 pub mod api;
 pub mod infer;
 pub mod materialize;
+pub mod multimodal_import;
 pub mod resolve;
 
 pub use api::{
