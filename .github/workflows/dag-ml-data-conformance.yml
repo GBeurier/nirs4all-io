@@ -18,12 +18,23 @@ on:
 jobs:
   cross-cli:
     runs-on: ubuntu-latest
+    env:
+      # Immutable qualified 0.2.16 peer; moving main is a separate cohort.
+      DMD_CONFORMANCE_SHA: eb2ad7835ca85feebf6f626d9f43f61575a1c9a9
+      # Paired, published 0.4.0 CLI; qualify newer peers in a separate batch.
+      DAG_CONFORMANCE_SHA: beaba0b62f9a65bca86c2f521fc482bd80092ba3
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
       - name: Fetch sibling repos
         run: |
-          git clone --filter=blob:none --depth 1 https://github.com/GBeurier/dag-ml-data.git ../dag-ml-data
-          git clone --filter=blob:none --depth 1 https://github.com/GBeurier/dag-ml.git ../dag-ml
+          git init ../dag-ml-data
+          git -C ../dag-ml-data fetch --filter=blob:none --depth 1 https://github.com/GBeurier/dag-ml-data.git "$DMD_CONFORMANCE_SHA"
+          git -C ../dag-ml-data checkout --detach FETCH_HEAD
+          test "$(git -C ../dag-ml-data rev-parse HEAD)" = "$DMD_CONFORMANCE_SHA"
+          git init ../dag-ml
+          git -C ../dag-ml fetch --filter=blob:none --depth 1 https://github.com/GBeurier/dag-ml.git "$DAG_CONFORMANCE_SHA"
+          git -C ../dag-ml checkout --detach FETCH_HEAD
+          test "$(git -C ../dag-ml rev-parse HEAD)" = "$DAG_CONFORMANCE_SHA"
       - name: Cross-CLI conformance
         run: bash scripts/dag_ml_data_conformance.sh
