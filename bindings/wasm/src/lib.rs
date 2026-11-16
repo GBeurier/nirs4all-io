@@ -24,6 +24,111 @@ use serde_json::Value;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
+/// Explicit multimodal file profile. IO parses declarations/CSV and aligns IDs;
+/// the supplied synchronous Formats owner callback decodes non-spectral bytes.
+#[wasm_bindgen(js_name = assembleMultimodalFiles)]
+pub fn assemble_multimodal_files(
+    manifest_json: &str,
+    files: JsValue,
+    decode: &js_sys::Function,
+    max_decoded_bytes: u32,
+) -> Result<JsValue, JsError> {
+    use nirs4all_io_core::materialize::loaders::TabularReadLimits;
+    use nirs4all_io_core::multimodal_import::{
+        assemble_multimodal_files, multimodal_decode_requests, DecodedAsset, ImportManifest,
+    };
+    use std::collections::BTreeMap;
+
+    if max_decoded_bytes == 0 {
+        return Err(JsError::new("host decode budget must be positive"));
+    }
+    let manifest: ImportManifest = canonical_json::parse_json_value(manifest_json)
+        .and_then(serde_json::from_value)
+        .map_err(|error| JsError::new(&error.to_string()))?;
+    let inputs: Vec<WasmFile> =
+        serde_wasm_bindgen::from_value(files).map_err(|error| JsError::new(&error.to_string()))?;
+    let mut raw = BTreeMap::new();
+    let mut total = 0_usize;
+    for file in inputs {
+        total = total
+            .checked_add(file.bytes.len())
+            .ok_or_else(|| JsError::new("input byte count overflow"))?;
+        if total > max_decoded_bytes as usize {
+            return Err(JsError::new("multimodal input exceeds host byte budget"));
+        }
+        if file.name.is_empty() || raw.insert(file.name, file.bytes).is_some() {
+            return Err(JsError::new(
+                "named input files must be nonempty and unique",
+            ));
+        }
+    }
+    let budget = u64::from(max_decoded_bytes);
+    let limits = TabularReadLimits::new(budget, budget, budget, budget, budget / 8);
+    let requests = multimodal_decode_requests(&manifest, &raw, limits)
+        .map_err(|error| JsError::new(&error.message))?;
+    let mut decoded = BTreeMap::new();
+    let mut decoded_total = 0_usize;
+    for (name, profile) in requests {
+        let bytes = raw
+            .get(&name)
+            .ok_or_else(|| JsError::new(&format!("declared file '{name}' is missing")))?;
+        let array = js_sys::Uint8Array::from(bytes.as_slice());
+        let result = decode
+            .call3(
+                &JsValue::NULL,
+                &profile.into(),
+                &array,
+                &max_decoded_bytes.into(),
+            )
+            .map_err(|error| {
+                JsError::new(&format!("Formats decode failed for '{name}': {error:?}"))
+            })?;
+        let asset: DecodedAsset = serde_wasm_bindgen::from_value(result)
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        decoded_total = asset
+            .decoded_bytes()
+            .and_then(|bytes| decoded_total.checked_add(bytes))
+            .ok_or_else(|| JsError::new("aggregate decoded payload size overflow"))?;
+        if decoded_total > max_decoded_bytes as usize {
+            return Err(JsError::new(
+                "aggregate decoded payloads exceed host byte budget",
+            ));
+        }
+        decoded.insert(name, asset);
+    }
+    let assembled = assemble_multimodal_files(&manifest, &raw, &decoded, limits)
+        .map_err(|error| JsError::new(&error.message))?;
+    let object = to_js(
+        &serde_json::to_value(&assembled).map_err(|error| JsError::new(&error.to_string()))?,
+    )?;
+    let sources = get(&object, "sources")?;
+    for (index, source) in assembled.sources.iter().enumerate() {
+        let target = js_sys::Reflect::get_u32(&sources, index as u32).map_err(js_err)?;
+        js_sys::Reflect::set(&target, &"data".into(), &float64_array(&source.data))
+            .map_err(js_err)?;
+        js_sys::Reflect::set(
+            &target,
+            &"validity".into(),
+            &js_sys::Uint8Array::from(source.validity.as_slice()),
+        )
+        .map_err(js_err)?;
+    }
+    let target = get(&object, "target")?;
+    let target_values = assembled.target["values"]
+        .as_array()
+        .ok_or_else(|| JsError::new("assembled target values are absent"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_f64()
+                .ok_or_else(|| JsError::new("assembled target must be numeric"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    js_sys::Reflect::set(&target, &"values".into(), &float64_array(&target_values))
+        .map_err(js_err)?;
+    Ok(object)
+}
+
 #[derive(Deserialize)]
 struct WasmFile {
     name: String,

@@ -964,26 +964,14 @@ pub fn read_table_bytes_with_limits(
     read_table_bytes_impl(bytes, params, Some(limits))
 }
 
-fn read_table_bytes_impl(
+/// Decode exact delimited cell lexemes without dtype inference or NA policy.
+/// Identity-aware import adapters use the same CSV parser as table loading.
+pub fn read_delimited_records(
     bytes: &[u8],
-    params: &LoadingParams,
+    delimiter: char,
+    has_header: bool,
     limits: Option<TabularReadLimits>,
-) -> Result<Frame, SpecError> {
-    let delimiter = params
-        .delimiter
-        .as_deref()
-        .unwrap_or(";")
-        .chars()
-        .next()
-        .unwrap_or(';');
-    let decimal = params
-        .decimal_separator
-        .as_deref()
-        .unwrap_or(".")
-        .chars()
-        .next()
-        .unwrap_or('.');
-    let has_header = params.has_header.unwrap_or(true);
+) -> Result<Vec<Vec<String>>, SpecError> {
     let latin1;
     let text = match std::str::from_utf8(bytes) {
         Ok(_) => bytes,
@@ -1073,6 +1061,30 @@ fn read_table_bytes_impl(
                 .collect(),
         );
     }
+    Ok(records)
+}
+
+fn read_table_bytes_impl(
+    bytes: &[u8],
+    params: &LoadingParams,
+    limits: Option<TabularReadLimits>,
+) -> Result<Frame, SpecError> {
+    let delimiter = params
+        .delimiter
+        .as_deref()
+        .unwrap_or(";")
+        .chars()
+        .next()
+        .unwrap_or(';');
+    let decimal = params
+        .decimal_separator
+        .as_deref()
+        .unwrap_or(".")
+        .chars()
+        .next()
+        .unwrap_or('.');
+    let has_header = params.has_header.unwrap_or(true);
+    let records = read_delimited_records(bytes, delimiter, has_header, limits)?;
     let first_width = if has_header {
         records.first().map(|row| (0, row.len()))
     } else {
