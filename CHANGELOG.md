@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.5 - Unreleased
 
 - Read missing-value tokens without regard to case, for features, targets and
   metadata alike: `na`, `Na`, `Nan`, `NAN`, `none` and every other case variant
@@ -24,6 +24,14 @@
   the ignored targets had other gaps) and no longer refuse the load under the
   default `auto`/`abort` policy. Sample identities stay aligned across
   features, targets and metadata after removal.
+- Behaviour change: because every recognised spelling is a missing value in
+  text columns too, in any case for `na`/`nan` and the other tokens, a literal
+  `NAN` or `none` cell is no longer a class label or a partition value.
+  Datasets that used such a cell as a label must rename it.
+- Accept the informational `RUSTSEC-2026-0543` advisory ("chrono is
+  unmaintained", no patched release; chrono is mandatory in Arrow/Parquet and
+  in the pinned Formats release) in `.cargo/audit.toml`, with its justification
+  and removal condition. Every other advisory and warning stays denied.
 
 ## 0.3.4 - Unreleased
 
