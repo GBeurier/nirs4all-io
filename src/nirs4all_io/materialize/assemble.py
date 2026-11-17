@@ -931,16 +931,19 @@ def _apply_role_na_policy(df: pd.DataFrame, roles: dict[str, str], na: NaConfig)
     column or encoded as a class. Every other column follows the policy
     (``auto`` = ``abort``).
 
+    Columns assigned to ``ignore`` take no part in any policy.
+
     Returns the treated frame and roles, and the rows ``remove_sample`` removes
     once all sources are joined.
     """
     if na.policy is NaPolicy.IGNORE:
         return df, roles, None
+    # a column assigned to ``ignore`` is not part of the dataset: its missing cells never remove a sample, abort or get filled
     if na.policy is NaPolicy.REMOVE_SAMPLE:
-        return df, roles, df.isna().any(axis=1).to_numpy()
+        return df, roles, df[[c for c in df.columns if roles.get(c) != "ignore"]].isna().any(axis=1).to_numpy()
     if na.policy is NaPolicy.ABORT:
         apply_na_policy(df[[c for c in df.columns if roles.get(c) == "targets"]], na)
-    policy_cols = [c for c in df.columns if roles.get(c) not in ("targets", "metadata")]
+    policy_cols = [c for c in df.columns if roles.get(c) not in ("targets", "metadata", "ignore")]
     if not policy_cols:
         return df, roles, None
     treated, _ = apply_na_policy(df[policy_cols], na)

@@ -15,6 +15,7 @@ import codecs
 import datetime
 import gzip
 import io
+import itertools
 import re
 import struct
 import zipfile
@@ -35,9 +36,12 @@ _Decimals = str | tuple[str, ...] | list[str]
 
 _CSV_EXTS = {".csv", ".tsv", ".txt"}
 _CSV_COMPOUND = (".csv.gz", ".csv.zip")
-_NA_VALUES = ["NA", "N/A", ""]
-# pandas' own default missing-value tokens (``keep_default_na=True``); the reader passes ``_NA_VALUES`` on top of them
-_PANDAS_NA_TOKENS = frozenset({"", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null"}) | frozenset(_NA_VALUES)
+# pandas' own default missing-value tokens (``keep_default_na=True``) plus io's ``NA`` / ``N/A`` / empty cell
+_NA_SPELLINGS = ("", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null")
+# a missing-value token matches without regard to ASCII case (``na``, ``Nan``, ``NULL``): every case variant is named
+# explicitly because pandas compares ``na_values`` verbatim
+_PANDAS_NA_TOKENS = frozenset("".join(variant) for token in _NA_SPELLINGS for variant in itertools.product(*((char.lower(), char.upper()) for char in token)))
+_NA_VALUES = sorted(_PANDAS_NA_TOKENS)
 _VENDOR_HINT_EXTS = {".0", ".1", ".2", ".dx", ".jdx", ".spc", ".spa", ".asd", ".sed", ".sig", ".sli", ".0a"}
 _VENDOR_META_COLUMNS = {"sample_id"}
 _VENDOR_META_PREFIXES = ("nirs4all_formats.",)
@@ -669,7 +673,7 @@ def _read_excel(path: Path, params: LoadingParams) -> tuple[pd.DataFrame, str, p
         kwargs["usecols"] = fmt["usecols"]
     if fmt.get("skiprows") is not None:
         kwargs["skiprows"] = fmt["skiprows"]
-    df = pd.read_excel(path, **kwargs)
+    df = pd.read_excel(path, **kwargs, na_values=_NA_VALUES)
     if isinstance(df, dict):
         kwargs["sheet_name"], df = next(iter(df.items()))
     labels = list(df.columns)

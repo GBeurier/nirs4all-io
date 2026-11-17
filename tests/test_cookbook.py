@@ -990,24 +990,25 @@ def _partition_contract_public_spec(path, **partitions):
 
 
 @pytest.mark.parametrize("policy", [None, "train", "test", "drop", "error"])
-def test_partition_contract_public_csv_literal_nan_and_decoded_missing(tmp_path, policy):
+def test_partition_contract_public_csv_missing_spellings_never_match_a_declared_nan_label(tmp_path, policy):
     from nirs4all_io.spec.enums import SpecError
 
     path = tmp_path / "partition-missing.csv"
     path.write_text('x;y;set;row\n1;101;cal;r0\n2;102;NAN;r1\n3;103;;r2\n4;104;NA;r3\n5;105;none;r4\n6;106;val;r5\n7;107;"nan";r6\n', encoding="utf-8")
-    options = {"train_values": ["cal"], "test_values": ["nan"]}
+    # NAN, the empty cell, NA, none and quoted "nan" are all decoded as missing: none matches the declared "nan" label
+    options = {"train_values": ["cal"], "test_values": ["nan", "val"]}
     if policy is not None:
         options["unknown_policy"] = policy
     spec = _partition_contract_public_spec(path, **options)
     if policy == "error":
-        with pytest.raises(SpecError, match="set.*missing rows: 3"):
+        with pytest.raises(SpecError, match="set.*missing rows: 5"):
             nio.load(spec, target="assembled")
         return
-    expected = {"train": ["r0"], "test": ["r1"]}
+    expected = {"train": ["r0"], "test": ["r5"]}
     if policy is None or policy == "train":
-        expected["train"] += ["r2", "r3", "r4", "r5", "r6"]
+        expected["train"] += ["r1", "r2", "r3", "r4", "r6"]
     elif policy == "test":
-        expected["test"] += ["r2", "r3", "r4", "r5", "r6"]
+        expected["test"] = ["r1", "r2", "r3", "r4", "r5", "r6"]
     for target in ("assembled", "dataset_package"):
         result = nio.load(spec, target=target)
         assembled = result.to_assembled() if target == "dataset_package" else result
@@ -1060,8 +1061,8 @@ def test_partition_contract_public_unicode_test_label_under_default_train(tmp_pa
 
 def test_partition_contract_public_adapter_retains_exact_selected_rows(tmp_path):
     path = tmp_path / "adapter.csv"
-    path.write_text("x;y;set;row\n1;101;cal;r0\n2;102;NAN;r1\n3;103;;r2\n")
-    spec = _partition_contract_public_spec(path, train_values=["cal"], test_values=["nan"], unknown_policy="drop")
+    path.write_text("x;y;set;row\n1;101;cal;r0\n2;102;VAL;r1\n3;103;;r2\n")
+    spec = _partition_contract_public_spec(path, train_values=["cal"], test_values=["val"], unknown_policy="drop")
     record = nio.load(spec, target="spectrodataset", spectro_dataset_cls=_NativeTargetRecorder)
     assert [part for part, _, _ in record.samples] == ["train", "test"]
     np.testing.assert_array_equal(record.targets[:, 0], [101, 102])

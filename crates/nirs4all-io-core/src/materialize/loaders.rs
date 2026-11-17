@@ -125,19 +125,19 @@ pub fn effective_params(global: &LoadingParams, source: &LoadingParams) -> Loadi
     }
 }
 
-/// pandas `keep_default_na=True` default set ∪ io's `_NA_VALUES`.
-pub(crate) static NA_TOKENS: LazyLock<std::collections::HashSet<&'static str>> =
-    LazyLock::new(|| {
-        [
-            "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN",
-            "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null", "",
-        ]
-        .into_iter()
-        .collect()
-    });
+/// Missing-value vocabulary: pandas' `keep_default_na=True` default set ∪ io's
+/// `_NA_VALUES`, in lowercase. Cells match it without regard to ASCII case, so
+/// `NA`, `na`, `NaN`, `Nan` and `NULL` all spell a missing value.
+const NA_TOKENS: [&str; 15] = [
+    "", "#n/a", "#n/a n/a", "#na", "-1.#ind", "-1.#qnan", "-nan", "1.#ind", "1.#qnan", "<na>",
+    "n/a", "na", "nan", "none", "null",
+];
 
-fn is_na(cell: &str) -> bool {
-    NA_TOKENS.contains(cell)
+/// Whether an untrimmed cell spells a missing value, ignoring ASCII case.
+pub(crate) fn is_na(cell: &str) -> bool {
+    NA_TOKENS
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case(cell))
 }
 
 fn parse_float(s: &str) -> Option<f64> {
@@ -825,11 +825,11 @@ pub(crate) fn dialect_text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
 
 pub(crate) fn is_na_record(raw: &str) -> bool {
     let token = raw.trim();
-    NA_TOKENS.contains(token)
+    is_na(token)
         || token
             .strip_prefix('"')
             .and_then(|s| s.strip_suffix('"'))
-            .is_some_and(|s| NA_TOKENS.contains(s))
+            .is_some_and(is_na)
 }
 
 pub(crate) fn is_comma_pair(value: &str) -> bool {

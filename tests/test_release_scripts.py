@@ -226,6 +226,22 @@ def test_rust_security_gate_audits_every_lockfile() -> None:
         assert "bash scripts/audit_rust_locks.sh" in workflow_source
 
 
+def test_rust_security_gate_exceptions_are_explicit_and_documented() -> None:
+    script = (ROOT / "scripts" / "audit_rust_locks.sh").read_text(encoding="utf-8")
+    assert 'cd "${repo_root}"' in script
+    assert "--ignore" not in script
+
+    config_source = (ROOT / ".cargo" / "audit.toml").read_text(encoding="utf-8")
+    config = tomllib.loads(config_source)
+    assert set(config) == {"advisories"}
+    assert set(config["advisories"]) == {"ignore"}
+    assert config["advisories"]["ignore"] == ["RUSTSEC-2026-0543"]
+
+    process = (ROOT / "docs" / "dev" / "release_process.md").read_text(encoding="utf-8")
+    for advisory in config["advisories"]["ignore"]:
+        assert advisory in process
+
+
 def test_python_candidate_version_is_development_only(tmp_path: Path) -> None:
     files = (
         "Cargo.toml",

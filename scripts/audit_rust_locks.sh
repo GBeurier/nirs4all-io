@@ -4,9 +4,14 @@
 # Audit every independently resolved Rust dependency graph shipped by this
 # repository.  A clean root lock does not cover the Python, WASM, or reduced R
 # workspaces, so omitting one of these files can hide binding-only advisories.
+#
+# Every warning is denied.  The only exceptions are the advisories listed, each
+# with its justification and removal condition, in `.cargo/audit.toml`;
+# cargo-audit reads that file from the working directory, hence the `cd`.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${repo_root}"
 readonly lock_files=(
   "Cargo.lock"
   "bindings/python/Cargo.lock"

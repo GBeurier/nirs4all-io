@@ -32,5 +32,9 @@ jobs:
         run: wasm-pack build bindings/wasm --target nodejs --out-dir pkg --locked
       - name: Node smoke
         run: node bindings/wasm/tests/node_smoke.cjs
+      - name: Missing-value token cases
+        run: node bindings/wasm/tests/missing_token_case.mjs
+      - name: Column subset selection
+        run: node bindings/wasm/tests/target_subset_selection.mjs
       - name: Numeric coordinate corpus
         run: node --test bindings/wasm/tests/numeric-wire.mjs

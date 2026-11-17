@@ -38,7 +38,7 @@ The numeric profile requires explicit ordered `features` and its `sampleId`
 column; spectral sources also require an independent finite monotonic axis,
 unit and kind. Genetics dosage CSV uses modality `genetics`, profile
 `numeric_csv`, and accepts only 0/1/2 or declared missing tokens (`NA`, `N/A`,
-`NaN`, empty). Missing source cells retain zero storage plus validity=false;
+`NaN` in any case, or empty). Missing source cells retain zero storage plus validity=false;
 targets must be complete. No missing value is silently filled for training.
 
 `png_manifest` declares image modality, a fixed `shape:[H,W,C]`, and a mapping
