@@ -155,11 +155,12 @@ node() {
     assert (result.returncode == 0) is accepted, result.stdout + result.stderr
 
 
-def test_formats_python_oracle_uses_current_exact_pin() -> None:
-    expected = "0.2.14"
+def test_formats_python_oracle_uses_a_minor_level_range() -> None:
+    # Cross-repository owners are declared at minor granularity (docs/VERSIONING.md).
+    expected = "nirs4all-formats>=0.2,<0.3"
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    assert project["optional-dependencies"]["formats"] == [f"nirs4all-formats=={expected}"]
-    assert f"nirs4all-formats=={expected}" in project["optional-dependencies"]["dev"]
+    assert project["optional-dependencies"]["formats"] == [expected]
+    assert expected in project["optional-dependencies"]["dev"]
 
 
 def test_formats_vendored_web_snapshot_retains_its_exact_version() -> None:
@@ -217,7 +218,7 @@ def test_rust_security_gate_audits_every_lockfile() -> None:
         "bindings/r/Cargo.lock.rust",
     ):
         assert f'"{lock_file}"' in source
-    assert 'cargo audit --deny warnings --file "${repo_root}/${lock_file}"' in source
+    assert 'cargo audit --deny unsound --file "${repo_root}/${lock_file}"' in source
 
     for workflow in ("ci.yml", "release.yml"):
         workflow_source = (ROOT / ".github" / "workflows" / workflow).read_text(
@@ -226,20 +227,11 @@ def test_rust_security_gate_audits_every_lockfile() -> None:
         assert "bash scripts/audit_rust_locks.sh" in workflow_source
 
 
-def test_rust_security_gate_exceptions_are_explicit_and_documented() -> None:
+def test_rust_security_gate_keeps_no_per_advisory_exceptions() -> None:
     script = (ROOT / "scripts" / "audit_rust_locks.sh").read_text(encoding="utf-8")
-    assert 'cd "${repo_root}"' in script
     assert "--ignore" not in script
-
-    config_source = (ROOT / ".cargo" / "audit.toml").read_text(encoding="utf-8")
-    config = tomllib.loads(config_source)
-    assert set(config) == {"advisories"}
-    assert set(config["advisories"]) == {"ignore"}
-    assert config["advisories"]["ignore"] == ["RUSTSEC-2026-0543"]
-
-    process = (ROOT / "docs" / "dev" / "release_process.md").read_text(encoding="utf-8")
-    for advisory in config["advisories"]["ignore"]:
-        assert advisory in process
+    assert "--deny warnings" not in script
+    assert not (ROOT / ".cargo" / "audit.toml").exists()
 
 
 def test_python_candidate_version_is_development_only(tmp_path: Path) -> None:

@@ -5,9 +5,9 @@
 # repository.  A clean root lock does not cover the Python, WASM, or reduced R
 # workspaces, so omitting one of these files can hide binding-only advisories.
 #
-# Every warning is denied.  The only exceptions are the advisories listed, each
-# with its justification and removal condition, in `.cargo/audit.toml`;
-# cargo-audit reads that file from the working directory, hence the `cd`.
+# Vulnerabilities and unsound advisories fail.  Informational advisories
+# (unmaintained, notice, yanked) are printed as warnings without failing, and
+# no per-advisory ignore list is kept (docs/dev/release_process.md).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,5 +25,5 @@ for lock_file in "${lock_files[@]}"; do
     exit 1
   fi
   echo ">> cargo audit --file ${lock_file}"
-  cargo audit --deny warnings --file "${repo_root}/${lock_file}"
+  cargo audit --deny unsound --file "${repo_root}/${lock_file}"
 done

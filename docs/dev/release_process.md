@@ -121,17 +121,17 @@ Run these before tagging or publishing anything:
    `crates/nirs4all-io-capi/abi/expected_symbols_*.txt` (`abi-check.yml`). Bump
    `N4IO_ABI_VERSION` only on an ABI change.
 
-### Accepted RustSec advisories
+### RustSec advisories
 
-`scripts/audit_rust_locks.sh` denies every advisory and warning. An advisory is
-resolved by updating the dependency in each lockfile that carries it. Only when
-no fixed release exists, or an exact owner pin prevents the update, may it be
-listed in `.cargo/audit.toml`, with its justification and removal condition
-there and in this table. `tests/test_release_scripts.py` pins the list.
-
-| Advisory | Lockfiles | Why it cannot be updated away | Remove when |
-| --- | --- | --- | --- |
-| `RUSTSEC-2026-0543` chrono is unmaintained (informational, no vulnerability) | root, Python binding, R binding | No patched chrono release exists (`patched = []`, 0.4.45 is the latest). chrono is mandatory in `arrow-array`/`parquet` up to 60.1.0 and in `calamine` 0.38.0 `dates` through the exact `nirs4all-formats` pin. IO does not depend on chrono directly. | Arrow/Parquet and the pinned Formats release resolve without chrono, or the advisory is withdrawn. |
+`scripts/audit_rust_locks.sh` runs `cargo audit --deny unsound` on every
+lockfile (root, Python, WASM and R bindings). A vulnerability or an unsound
+advisory fails the gate and is resolved by updating the dependency in each
+lockfile that carries it. Informational advisories (unmaintained, notice,
+yanked) are ecosystem-wide non-blocking: they are printed in the job log as
+warnings and do not fail it, so no per-advisory ignore list is kept (for
+example RUSTSEC-2026-0543, chrono unmaintained through Arrow/Parquet and
+Formats' `calamine`, stays visible as a warning).
+`tests/test_release_scripts.py` checks that the gate keeps this form.
 
 After assembling a local candidate directory, generate its canonical receipt with
 `python scripts/write_release_receipt.py <release-dir>`. The writer refuses a dirty
