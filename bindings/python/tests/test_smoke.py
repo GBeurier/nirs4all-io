@@ -111,10 +111,11 @@ def _partition_label_spec(path, **partitions):
 
 
 @pytest.mark.parametrize("policy", [None, "train", "test", "drop", "error"])
-def test_partition_labels_csv_literal_nan_is_separate_from_missing(tmp_path, policy):
+def test_partition_labels_csv_missing_spellings_never_match_a_declared_nan_label(tmp_path, policy):
     path = tmp_path / "missing-labels.csv"
     path.write_text('x;y;set;row\n1;101;cal;r0\n2;102;NAN;r1\n3;103;;r2\n4;104;NA;r3\n5;105;none;r4\n6;106;val;r5\n7;107;"nan";r6\n', encoding="utf-8")
-    options = {"train_values": ["cal"], "test_values": ["nan"]}
+    # NAN, the empty cell, NA, none and quoted "nan" are all decoded as missing: none matches the declared "nan" label
+    options = {"train_values": ["cal"], "test_values": ["nan", "val"]}
     if policy is not None:
         options["unknown_policy"] = policy
     spec = _partition_label_spec(path, **options)
@@ -122,11 +123,11 @@ def test_partition_labels_csv_literal_nan_is_separate_from_missing(tmp_path, pol
         with pytest.raises(ValueError, match="set"):
             nio.load(spec, target="dataset_package")
         return
-    expected = {"train": ["r0"], "test": ["r1"]}
+    expected = {"train": ["r0"], "test": ["r5"]}
     if policy is None or policy == "train":
-        expected["train"] += ["r2", "r3", "r4", "r5", "r6"]
+        expected["train"] += ["r1", "r2", "r3", "r4", "r6"]
     elif policy == "test":
-        expected["test"] += ["r2", "r3", "r4", "r5", "r6"]
+        expected["test"] = ["r1", "r2", "r3", "r4", "r5", "r6"]
     assembled = nio.load(spec, target="dataset_package").to_assembled()
     assert {part: block.metadata["row"].tolist() for part, block in assembled.blocks.items()} == expected
     for block in assembled.blocks.values():
@@ -172,8 +173,8 @@ class _PartitionRecorder(_RecordingDataset):
 
 def test_partition_labels_adapter_retains_exact_selected_rows(tmp_path):
     path = tmp_path / "adapter.csv"
-    path.write_text("x;y;set;row\n1;101;cal;r0\n2;102;NAN;r1\n3;103;;r2\n")
-    spec = _partition_label_spec(path, train_values=["cal"], test_values=["nan"], unknown_policy="drop")
+    path.write_text("x;y;set;row\n1;101;cal;r0\n2;102;VAL;r1\n3;103;;r2\n")
+    spec = _partition_label_spec(path, train_values=["cal"], test_values=["val"], unknown_policy="drop")
     result = nio.load(spec, target="spectrodataset", spectro_dataset_cls=_PartitionRecorder)
     assert [meta["partition"] for meta in result.add_samples_calls] == ["train", "test"]
     assert result.target_values == [101, 102]
