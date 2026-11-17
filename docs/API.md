@@ -168,11 +168,25 @@ let provider = PackageProvider::from_package_source(&package, "nir")?;
 
 let names = provider.target_names();
 let features = provider.feature_block_f64(view_handle)?;
+// Several scalar targets: per-target values and explicit validity.
+let targets = provider.multi_target_block(view_handle)?;
 ```
 
 The provider retains the package manifest root as the exact data-content
 fingerprint (and target-content fingerprint when targets exist), preserves
 stable target-column order, and exposes a typed row-major f64 feature block.
+
+Targets keep their observation masks. A complete record with several targets
+of one kind is one DMD matrix target (`targets`, one vector per sample) served
+by `target_block`. When any target cell is unobserved, each column is instead
+its own scalar DMD target whose table holds exactly that column's observed
+samples; `target_ids()` lists them in `target_names()` order. Unobserved cells
+are never stored as values: `multi_target_block` returns, for every view
+sample, each target's value or `null` with a `false` validity bit, and
+`target_block` serves a single target only for views whose samples all observe
+it. A target observed on no sample stays declared and is entirely invalid.
+Fitting only on a target's observed training rows, and refusing a target
+without one, belong to the runtime (DAG-ML).
 DATA-002 accepts one selected dense numeric matrix; it refuses N-D, sequence,
 record, mask, URI and processing-stack payloads rather than flattening them.
 Multi-source fusion remains an explicit `dag-ml-data` provider concern. This
