@@ -22,6 +22,13 @@
   scalar target per column instead of a refusal. Consumers read its values
   and observation masks with `multi_target_block`; fitting only on a target's
   observed training rows remains the runtime's responsibility.
+- Declare cross-repository owners at minor granularity (`nirs4all-formats`
+  `0.2`, `dag-ml-data`/`dag-ml-data-provider` `0.2`, Python `>=0.2,<0.3`); the
+  exact qualified versions stay in the lockfiles. See `docs/VERSIONING.md`.
+- `cargo audit` now fails on vulnerabilities and unsound advisories only
+  (`--deny unsound`); informational advisories such as `RUSTSEC-2026-0543`
+  are reported without blocking, and `.cargo/audit.toml` with its
+  per-advisory exception is removed.
 
 ## 0.3.5 - Unreleased
 
