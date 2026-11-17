@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.4 - Unreleased
+
+- Install the R package on Windows again with Rust 1.100 and later:
+  `src/Makevars.win` links `-lsynchronization`, which the Rust standard library
+  now requires from the final linker (`undefined reference to WaitOnAddress` /
+  `WakeByAddressSingle`, `no DLL was created`). The 0.3.3 release has no R
+  source tarball for that reason; 0.3.4 is otherwise identical to 0.3.3.
+- Run the Windows `R CMD check` on pull requests and print the tail of
+  `00install.out` when an R check fails.
+
 ## 0.3.0 - Unreleased
 
 - Package and export the WASM numeric-coordinate accessor and its declaration.
