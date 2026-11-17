@@ -17,7 +17,7 @@ dynamic = ["version"]
 dependencies = ["numpy>=1.23", "pandas>=1.5", "PyYAML>=6.0"]
 
 [project.optional-dependencies]
-dagml = ["dag-ml-data>=0.2.13"]
+dagml = ["dag-ml-data>=0.2,<0.3"]
 
 [tool.maturin]
 # Mixed layout: the Rust extension is `nirs4all_io._native`; the Python package

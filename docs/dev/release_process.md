@@ -131,7 +131,7 @@ there and in this table. `tests/test_release_scripts.py` pins the list.
 
 | Advisory | Lockfiles | Why it cannot be updated away | Remove when |
 | --- | --- | --- | --- |
-| `RUSTSEC-2026-0543` chrono is unmaintained (informational, no vulnerability) | root, Python binding, R binding | No patched chrono release exists (`patched = []`, 0.4.45 is the latest). chrono is mandatory in `arrow-array`/`parquet` up to 60.1.0 and in `calamine` 0.38.0 `dates` through the exact `nirs4all-formats` pin. IO does not depend on chrono directly. | Arrow/Parquet and the pinned Formats release resolve without chrono, or the advisory is withdrawn. |
+| `RUSTSEC-2026-0543` chrono is unmaintained (informational, no vulnerability) | root, Python binding, R binding | No patched chrono release exists (`patched = []`, 0.4.45 is the latest). chrono is mandatory in `arrow-array`/`parquet` up to 60.1.0 and in `calamine` 0.38.0 `dates` through `nirs4all-formats` (locked at 0.2.17). IO does not depend on chrono directly. | Arrow/Parquet and the locked Formats release resolve without chrono, or the advisory is withdrawn. |
 
 After assembling a local candidate directory, generate its canonical receipt with
 `python scripts/write_release_receipt.py <release-dir>`. The writer refuses a dirty

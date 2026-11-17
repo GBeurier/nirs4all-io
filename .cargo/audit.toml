@@ -13,8 +13,8 @@ ignore = [
     # latest). It reports maintenance status, not a vulnerability. chrono is a
     # mandatory dependency of arrow-array and parquet up to their latest
     # release (60.1.0, the Parquet reader), and of calamine 0.38.0 `dates`
-    # through the exact owner pin `nirs4all-formats = "=0.2.17"` (unchanged in
-    # Formats 0.2.19). IO has no direct chrono dependency to replace.
+    # through `nirs4all-formats` (locked at 0.2.17; unchanged in Formats
+    # 0.2.19). IO has no direct chrono dependency to replace.
     # Remove when Arrow/Parquet and the pinned Formats release resolve without
     # chrono, or when the advisory is withdrawn. A chrono vulnerability gets
     # its own advisory identifier and is still denied.

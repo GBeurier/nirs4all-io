@@ -26,6 +26,40 @@ the docs and the code cannot drift.
 3. **Crate semver != ABI version.** The cargo workspace version
    (`0.3.0`) tracks the Rust crates; the C ABI tracks
    `N4IO_ABI_VERSION`. They move independently.
+4. **A contract change is never a patch release.** Any change to a contract in
+   the table above (or to the C ABI) ships in at least a crate **minor**
+   release; see the next section.
+
+## Cross-repository version constraints
+
+nirs4all packages from different repositories depend on each other at **minor**
+granularity, never more precisely: Rust `"0.3"` (`>=0.3.0, <0.4.0`; `"1.3"` for
+1.x), Python `>=0.3,<0.4` (`>=1.3,<2` for 1.x), npm `^0.3.0` (`^1.3.0`), R
+`pkg (>= 0.3.0), pkg (< 0.4.0)`. Exact, reproducible versions live only in
+lockfiles (`Cargo.lock`, `bindings/*/Cargo.lock`, `bindings/r/Cargo.lock.rust`,
+uv/pip locks, `package-lock.json`) and in the release order. This repository
+consumes `nirs4all-formats = "0.2"`, `dag-ml-data`/`dag-ml-data-provider =
+"0.2"` and, in the Python packages, `dag-ml-data>=0.2,<0.3` and
+`nirs4all-formats>=0.2,<0.3`. Its own crates and bindings (`nirs4all-io-core`,
+`nirs4all-io`, `nirs4all-io-dagml`, the C ABI, CLI, Python, WASM, R and MATLAB
+bindings) are versioned in lockstep by `scripts/bump_version.sh`; those
+internal pins are not cross-repository constraints.
+
+In return, a **patch** release of `nirs4all-io` is backward compatible and
+changes no wire format, byte contract, persisted schema, `.n4a` payload
+semantics, C ABI or shared fixture/golden; any such change needs at least a
+**minor** release (for 0.x, every minor is breaking). Consumers (Datasets, Core,
+the SDK, Studio, Web) therefore never release just to accept an IO patch. A
+consumer needing a fix from a specific patch gets it from its lockfile and the
+release order, not from a patch floor. The full policy is
+`docs/contracts/release/VERSION_CONSTRAINTS.md` in `nirs4all-ecosystem`.
+
+Enforcement in this repository: the contract-constant tests
+(`crates/nirs4all-io-core/tests/versions.rs`, `tests/test_versions.py`), the
+append-only goldens, the `abi-check` workflow, `scripts/bump_version.sh --check`
+with the `version-sync`/`version-guard` workflows, and the cross-CLI
+`dag-ml-data` conformance gate. A guard that fails when a contract constant or
+golden changes without a crate minor bump is not automated yet.
 
 ## Float64 owner batch: pre-V1 semantic corrections
 
