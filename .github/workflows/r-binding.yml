@@ -16,3 +16,46 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
       - name: Build capi + install R package + smoke
         run: bash bindings/r/build_and_test.sh
+
+  # The Windows install links the Rust static library with the Rtools linker, so
+  # it depends on the current stable Rust and Rtools, not only on this tree.
+  # Run the same vendored, offline R CMD check as the windows-release leg of
+  # release-r.yml on every pull request so a break is seen before a release tag.
+  windows-check:
+    name: R CMD check (Windows)
+    runs-on: windows-2022
+    env:
+      R_KEEP_PKG_SOURCE: yes
+      _R_CHECK_CRAN_INCOMING_REMOTE_: false
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dtolnay/rust-toolchain@stable
+      # src/Makevars.win builds the staticlib for the gnu ABI; the runner's
+      # stable toolchain only carries the MSVC host std (see release-r.yml).
+      - name: Add the gnu Rust target (Windows staticlib ABI)
+        run: rustup target add x86_64-pc-windows-gnu
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "release"
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: bindings/r
+          extra-packages: |
+            any::rcmdcheck
+            any::jsonlite
+      - name: Vendor the Rust core into the R package
+        shell: bash
+        run: cd bindings/r && N4IO_R_VENDOR=1 ./configure
+      - name: R CMD check --as-cran
+        uses: r-lib/actions/check-r-package@v2
+        env:
+          CARGO_NET_OFFLINE: "true"   # the INSTALL build is offline from the bundle
+        with:
+          working-directory: bindings/r
+          args: 'c("--no-manual", "--as-cran")'
+          error-on: '"error"'
+      - name: Show the install log on failure
+        if: failure()
+        shell: bash
+        run: tail -n 80 bindings/r/check/*.Rcheck/00install.out

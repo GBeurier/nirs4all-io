@@ -111,7 +111,7 @@ def test_r_link_uses_the_runtime_for_its_target(tmp_path: Path, target: str, nee
     libraries = result.stdout.split()
     assert ("-lgcc" in libraries) is needs_gcc
     assert ("-lunwind" in libraries) is not needs_gcc
-    assert all(library in libraries for library in ["-lkernel32", "-lntdll", "-luserenv", "-lws2_32", "-ldbghelp"])
+    assert all(library in libraries for library in ["-lkernel32", "-lntdll", "-luserenv", "-lws2_32", "-ldbghelp", "-lsynchronization"])
     assert f"/{target}/release/{LIBRARY}" in result.stdout
 
 
