@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Read missing-value tokens without regard to case, for features, targets and
+  metadata alike: `na`, `Na`, `Nan`, `NAN`, `none` and every other case variant
+  of the existing vocabulary (`NA`, `N/A`, `NaN`, `NULL`, `None`, `#N/A`, ...)
+  are now missing values in inspection, inference and materialization. A
+  numeric target containing `na` used to be read as a text label column
+  (refusing regression), and `Nan`/`NAN` refused with "Observed numeric values
+  must be finite". In a text column such a cell is missing and is never a class
+  or partition label: literal CSV `NAN`/`none` no longer match a declared
+  partition value and follow `unknown_policy`. The Python oracle applies the
+  same rule; the multimodal `numeric_csv` tokens (`NA`, `N/A`, `NaN`) also
+  ignore case. Whitespace-only cells, `-`, `?` and `.` are unchanged (text).
+
 ## 0.3.4 - Unreleased
 
 - Install the R package on Windows again with Rust 1.100 and later:

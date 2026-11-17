@@ -413,6 +413,16 @@ space-delimited automatic loading remain separate gaps.
 Root-level shorthand (A.12/75): `delimiter`/`has_header`/… may be placed at the
 top level of a **legacy** dict and are folded into `params`. ✅
 
+Delimited-text and spreadsheet text cells are missing when they are empty or
+spell one of the missing-value tokens `NA`, `N/A`, `NaN`, `-NaN`, `NULL`,
+`None`, `#N/A`, `#N/A N/A`, `#NA`, `<NA>`, `1.#IND`, `-1.#IND`, `1.#QNAN`,
+`-1.#QNAN`. Matching ignores ASCII case (`na`, `Nan`, `null` and `NONE` are
+missing) and does not trim: a whitespace-only cell, `-`, `?` and `.` stay text.
+The same vocabulary serves inspection, inference and materialization for
+features, targets and metadata. A token in an otherwise numeric column is a
+missing value and the column stays numeric; in a text column the cell is
+missing and the other labels stay text, so a token is never a class label.
+
 The policy is applied per column role, once columns are assigned. Loading is
 lossless for **targets**: a missing target stays `NaN` and its sample is kept,
 whatever the policy, unless the policy is `remove_sample` (remove the sample)
@@ -510,8 +520,9 @@ retains the original column's `astype(str)` spellings before scalar lowercase.
 Decoded missing cells match no declared list and always follow `unknown_policy`
 (`train` by default, or `test`, `drop`, `error`). **With `test_values: ['nan']`,
 missing native CSV rows that previously entered test now enter TRAIN under the
-default policy.** Literal CSV `NAN` remains text and matches `nan`; empty cells,
-`NA` and quoted `"nan"` are decoded as missing by the unchanged CSV reader.
+default policy.** The CSV reader decodes empty cells and every missing-value
+token as missing, without regard to case (`NA`, `na`, `NAN`, `none`, quoted
+`"nan"`): no CSV cell matches a declared `nan` label.
 Parquet can retain literal `nan`, `None` and empty strings separately from nulls;
 WASM Parquet remains unsupported. Error diagnostics identify the split column,
 observed unknown keys and a separate missing-row count in Python. Finite numeric split cells use exact owner numeric identity: `[1]` now selects

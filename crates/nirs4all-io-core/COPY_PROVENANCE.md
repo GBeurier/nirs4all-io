@@ -180,6 +180,12 @@ NA fill (`loaders._exact_decimal_columns`). This oracle-owned precision delta
 preserves binary64 bits, including signed zero, across pandas versions; integer
 and object columns and the later raw-token domain checks retain their rules.
 
+### Missing-value tokens ignore ASCII case (19)
+
+| Block | Delta | Reason |
+|---|---|---|
+| `loaders._NA_SPELLINGS` / `_PANDAS_NA_TOKENS` / `_NA_VALUES`, `_csv_options`, `_read_excel` | the copied `na_values` (`NA`, `N/A`, empty) plus pandas' `keep_default_na` set is expanded to every ASCII case variant of those same tokens and passed to the CSV and Excel readers; no new spelling is added | `na` in a numeric target was read as a text label column and `Nan`/`NAN` refused natively; the Rust owner matches the same lowercase vocabulary with `eq_ignore_ascii_case` (`materialize::loaders::is_na`, shared by `infer::memory`) |
+
 ### Residual ingestion owner closure (approved A1–A5)
 
 The Python loader routes StringDtype numeric-role cells through the existing
