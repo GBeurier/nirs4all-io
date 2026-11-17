@@ -121,6 +121,18 @@ Run these before tagging or publishing anything:
    `crates/nirs4all-io-capi/abi/expected_symbols_*.txt` (`abi-check.yml`). Bump
    `N4IO_ABI_VERSION` only on an ABI change.
 
+### Accepted RustSec advisories
+
+`scripts/audit_rust_locks.sh` denies every advisory and warning. An advisory is
+resolved by updating the dependency in each lockfile that carries it. Only when
+no fixed release exists, or an exact owner pin prevents the update, may it be
+listed in `.cargo/audit.toml`, with its justification and removal condition
+there and in this table. `tests/test_release_scripts.py` pins the list.
+
+| Advisory | Lockfiles | Why it cannot be updated away | Remove when |
+| --- | --- | --- | --- |
+| `RUSTSEC-2026-0543` chrono is unmaintained (informational, no vulnerability) | root, Python binding, R binding | No patched chrono release exists (`patched = []`, 0.4.45 is the latest). chrono is mandatory in `arrow-array`/`parquet` up to 60.1.0 and in `calamine` 0.38.0 `dates` through the exact `nirs4all-formats` pin. IO does not depend on chrono directly. | Arrow/Parquet and the pinned Formats release resolve without chrono, or the advisory is withdrawn. |
+
 After assembling a local candidate directory, generate its canonical receipt with
 `python scripts/write_release_receipt.py <release-dir>`. The writer refuses a dirty
 checkout, stale commit/tree evidence, missing required package surfaces, failed
