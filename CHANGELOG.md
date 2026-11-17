@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.6 - Unreleased
+
+- Bridge records whose targets are observed on different rows to DAG-ML again.
+  Since 0.3.0 `PackageProvider` refused them ("Partial target matrix validity
+  is unsupported by this DMD matrix-target API"), so a multi-target dataset
+  with targets missing on different rows could only be trained after cutting
+  its target columns at load. When any target cell is unobserved, each target
+  column is now its own scalar DMD target whose table holds exactly that
+  column's observed samples; unobserved cells are never stored as values (IO
+  0.2.x stored zeros there and kept the mask only in an audit entry).
+- Add `PackageProvider::multi_target_block`: per-target values and explicit
+  validity over a view, in target-column order, following DMD's multi-target
+  block. A target observed on no sample stays declared and is entirely
+  invalid; `target_block` on it refuses with "has no observed value".
+- `PackageProvider::target_ids` follows `target_names` order instead of sorted
+  target ids. Complete homogeneous multi-target records keep their single
+  `targets` matrix target, and their bridged envelope, fingerprints and target
+  blocks are unchanged.
+- Behaviour change for consumers: a partial multi-target record exposes one
+  scalar target per column instead of a refusal. Consumers read its values
+  and observation masks with `multi_target_block`; fitting only on a target's
+  observed training rows remains the runtime's responsibility.
+
 ## 0.3.5 - Unreleased
 
 - Read missing-value tokens without regard to case, for features, targets and

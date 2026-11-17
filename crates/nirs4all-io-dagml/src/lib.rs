@@ -29,12 +29,13 @@ use dag_ml_data::{
     target_categorical_matrix, target_numeric, target_numeric_matrix, AxisKind, AxisSpec,
     CoordinateDType, CoordinateSpec, CoordinateValues, CoordinatorDataHandleRecord,
     CoordinatorDataMaterializationRequest, CoordinatorDataPlanEnvelope, CoordinatorDataViewRecord,
-    CoordinatorFeatureBlock, CoordinatorRelationSet, CoordinatorTargetBlock,
-    CoordinatorTargetTable, CoordinatorTargetValue, DataPlan, DataPlanStep, DataPlanStepKind,
-    DataView, DatasetSchema, FitScope, FoldSpec, GroupId, GroupKind, GroupSpec, MetadataFieldSpec,
-    MetadataSchema, MetadataValueKind, NumericFeatureBufferStore, NumericFeatureMatrixF64,
-    ObservationId, RepetitionId, RepresentationId, RepresentationSpec, SampleId, SampleRelation,
-    SampleRelationTable, SignalKind, SourceDescriptor, SourceGranularity, SourceId, TargetId,
+    CoordinatorFeatureBlock, CoordinatorMultiTargetBlock, CoordinatorRelationSet,
+    CoordinatorTargetBlock, CoordinatorTargetTable, CoordinatorTargetValue, DataError, DataPlan,
+    DataPlanStep, DataPlanStepKind, DataView, DatasetSchema, FitScope, FoldSpec, GroupId,
+    GroupKind, GroupSpec, MetadataFieldSpec, MetadataSchema, MetadataValueKind,
+    NumericFeatureBufferStore, NumericFeatureMatrixF64, ObservationId, RepetitionId,
+    RepresentationId, RepresentationSpec, SampleId, SampleRelation, SampleRelationTable,
+    SignalKind, SourceDescriptor, SourceGranularity, SourceId, TargetId,
     REPRESENTATION_FEATURE_BLOCK_SET, REPRESENTATION_SAMPLE_METADATA,
 };
 use dag_ml_data_provider::{DagMlDataProvider, InMemoryProvider};
@@ -780,6 +781,22 @@ fn target_is_categorical(
         )
 }
 
+/// Whether any target cell of the record is unobserved.
+///
+/// A DMD matrix target carries one complete vector per sample and no per-cell
+/// validity, so a record with partial target validity is bridged as one scalar
+/// target per column instead: each scalar table then holds exactly that
+/// column's observed samples, and DMD's multi-target block reports the rest as
+/// missing rather than as stored values.
+fn has_partial_target_validity(assembled: &AssembledDataset) -> bool {
+    assembled.blocks.values().any(|block| {
+        block
+            .y
+            .as_ref()
+            .is_some_and(|matrix| matrix.validity.iter().any(|valid| !valid))
+    })
+}
+
 fn emit_target_specs(
     assembled: &AssembledDataset,
     n_samples: usize,
@@ -807,7 +824,7 @@ fn emit_target_specs(
         .first()
         .is_some_and(|first| target_kinds.iter().all(|kind| kind == first));
 
-    if headers.len() > 1 && all_same_kind {
+    if headers.len() > 1 && all_same_kind && !has_partial_target_validity(assembled) {
         let id = TargetId::new("targets").map_err(err)?;
         targets.insert(
             id,
@@ -1461,6 +1478,7 @@ pub struct PackageProvider {
     feature_set_id: String,
     target_ids: Vec<TargetId>,
     target_names: Vec<String>,
+    target_tables: BTreeMap<TargetId, CoordinatorTargetTable>,
     provider: InMemoryProvider,
     executed_projection: nirs4all_io_core::materialize::ExecutedProjectionIdentityV1,
 }
@@ -1542,8 +1560,8 @@ impl PackageProvider {
         let feature_store =
             NumericFeatureBufferStore::from_f64_matrices(vec![feature_matrix]).map_err(err)?;
         let target_tables = package_target_tables(&assembled, &schema, &identity_rows)?;
-        let target_ids = target_tables.keys().cloned().collect();
         let target_names = package_target_names(&assembled)?;
+        let target_ids = package_target_ids(&schema, &target_names)?;
         let mut envelope = envelope_from_parts(&assembled, &schema, plan, relations.as_ref())?;
         let selected = assembled.identity.source_ids.clone();
         let (executed_projection, _, _) = package.executed_projection(&selected).map_err(err)?;
@@ -1560,15 +1578,97 @@ impl PackageProvider {
         );
         envelope.validate().map_err(err)?;
         let provider =
-            InMemoryProvider::new(envelope.clone(), target_tables, feature_store).map_err(err)?;
+            InMemoryProvider::new(envelope.clone(), target_tables.clone(), feature_store)
+                .map_err(err)?;
 
         Ok(Self {
             envelope,
             feature_set_id,
             target_ids,
             target_names,
+            target_tables,
             provider,
             executed_projection,
+        })
+    }
+
+    fn is_matrix_target(&self) -> bool {
+        self.target_ids.len() == 1 && self.target_names.len() > 1
+    }
+
+    /// Per-target values and explicit validity over one view, for every
+    /// declared scalar target in [`Self::target_ids`] order.
+    ///
+    /// Samples follow the view's relation order (deduplicated per sample, as
+    /// in DMD's `CoordinatorHandleArena::multi_target_values`). A sample with
+    /// no observed value for a target is `null` with a `false` validity bit;
+    /// no value is ever substituted. A target observed on no sample of the
+    /// package is entirely invalid. A complete homogeneous multi-target record
+    /// keeps its DMD matrix target, which [`DagMlDataProvider::target_block`]
+    /// serves, so this projection refuses it.
+    pub fn multi_target_block(
+        &self,
+        view_handle: u64,
+    ) -> dag_ml_data::Result<CoordinatorMultiTargetBlock> {
+        if self.target_ids.is_empty() {
+            return Err(DataError::Validation(
+                "multi-target projection requires at least one declared target".into(),
+            ));
+        }
+        if self.is_matrix_target() {
+            return Err(DataError::Validation(
+                "complete multi-target records keep one DMD matrix target; project it with target_block".into(),
+            ));
+        }
+        let relations = self.provider.view_identity(view_handle)?;
+        let universe = self.target_ids.iter().collect::<BTreeSet<_>>();
+        let mut seen = BTreeSet::new();
+        let sample_ids = relations
+            .records
+            .iter()
+            .filter(|relation| {
+                relation
+                    .target_id
+                    .as_ref()
+                    .is_none_or(|target_id| universe.contains(target_id))
+            })
+            .filter(|relation| seen.insert(relation.sample_id.clone()))
+            .map(|relation| relation.sample_id.clone())
+            .collect::<Vec<_>>();
+        if sample_ids.is_empty() {
+            return Err(DataError::Validation(format!(
+                "view `{view_handle}` contains no samples for requested targets"
+            )));
+        }
+        let mut values = Vec::with_capacity(self.target_ids.len());
+        let mut validity_masks = Vec::with_capacity(self.target_ids.len());
+        for target_id in &self.target_ids {
+            let observed = self
+                .target_tables
+                .get(target_id)
+                .map(|table| {
+                    table
+                        .values
+                        .iter()
+                        .map(|value| (&value.sample_id, &value.value))
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .unwrap_or_default();
+            let (target_values, validity): (Vec<_>, Vec<_>) = sample_ids
+                .iter()
+                .map(|sample_id| match observed.get(sample_id) {
+                    Some(value) => ((*value).clone(), true),
+                    None => (Value::Null, false),
+                })
+                .unzip();
+            values.push(target_values);
+            validity_masks.push(validity);
+        }
+        Ok(CoordinatorMultiTargetBlock {
+            target_ids: self.target_ids.clone(),
+            sample_ids,
+            values,
+            validity_masks,
         })
     }
 
@@ -1588,7 +1688,9 @@ impl PackageProvider {
         &self.feature_set_id
     }
 
-    /// Target ids accepted by [`Self::target_block`].
+    /// Declared DMD target ids: the single `targets` matrix id of a complete
+    /// homogeneous multi-target record, otherwise one scalar id per target
+    /// column in [`Self::target_names`] order.
     pub fn target_ids(&self) -> &[TargetId] {
         &self.target_ids
     }
@@ -1713,6 +1815,23 @@ fn package_target_names(assembled: &AssembledDataset) -> Result<Vec<String>, Spe
     Ok(names.unwrap_or_default())
 }
 
+/// Declared target ids in target-column order (see [`PackageProvider::target_ids`]).
+fn package_target_ids(
+    schema: &DatasetSchema,
+    target_names: &[String],
+) -> Result<Vec<TargetId>, SpecError> {
+    if schema.targets.is_empty() || (schema.targets.len() == 1 && target_names.len() > 1) {
+        return Ok(schema.targets.keys().cloned().collect());
+    }
+    target_names
+        .iter()
+        .enumerate()
+        .map(|(column, name)| {
+            TargetId::new(sanitize(name, &format!("target{column}"))).map_err(err)
+        })
+        .collect()
+}
+
 impl DagMlDataProvider for PackageProvider {
     fn materialize(
         &self,
@@ -1738,6 +1857,11 @@ impl DagMlDataProvider for PackageProvider {
         view_handle: u64,
         target_id: &TargetId,
     ) -> dag_ml_data::Result<CoordinatorTargetBlock> {
+        if self.target_ids.contains(target_id) && !self.target_tables.contains_key(target_id) {
+            return Err(DataError::Validation(format!(
+                "target `{target_id}` has no observed value in this package; multi_target_block reports its validity"
+            )));
+        }
         self.provider.target_block(view_handle, target_id)
     }
 
@@ -1863,9 +1987,8 @@ fn package_target_tables(
         if matrix.validity.len() != matrix.data.len() {
             return Err(SpecError::new("Target validity length mismatch"));
         }
-        if matrix_target && matrix.validity.iter().any(|v| !v) {
-            return Err(SpecError::new("Partial target matrix validity is unsupported by this DMD matrix-target API; select supported scalar targets"));
-        }
+        // `emit_target_specs` declares a matrix target only for complete
+        // records; partial validity is bridged as observed-only scalar tables.
         let target_value = |row: usize, column: usize| -> Result<Value, SpecError> {
             let header = &block.y_headers[column];
             let value = matrix.data[row * matrix.n_cols + column];
@@ -1961,8 +2084,12 @@ fn package_target_tables(
         identity_offset += block.n_samples;
     }
 
+    // A declared target observed on no sample has no DMD table (DMD refuses an
+    // empty one). It stays declared in the schema and in `target_ids`, and
+    // `PackageProvider::multi_target_block` reports every sample as missing.
     values
         .into_iter()
+        .filter(|(_, target_values)| !target_values.is_empty())
         .map(|(target_id, target_values)| {
             let table = CoordinatorTargetTable {
                 target_id: target_id.clone(),
@@ -2211,11 +2338,25 @@ mod tests {
         matrix.y_headers = vec!["a".into(), "b".into()];
         matrix.y.as_mut().unwrap().validity[0] = false;
         let package = to_dataset_package(&assembled_with_block(matrix)).unwrap();
-        assert!(PackageProvider::from_package(&package)
-            .err()
-            .unwrap()
-            .message
-            .contains("Partial target matrix"));
+        // Partial validity is bridged as one observed-only scalar target per
+        // column; the unobserved cell is never served as a value.
+        let provider = PackageProvider::from_package(&package).unwrap();
+        let targets = &provider.envelope().metadata["io.dataset_schema"]["targets"];
+        assert_eq!(targets["a"]["id"], REPRESENTATION_TARGET_NUMERIC);
+        assert_eq!(targets["b"]["id"], REPRESENTATION_TARGET_NUMERIC);
+        let both = all_rows_view(&provider, &["S1", "S2"]);
+        let block = provider.multi_target_block(both).unwrap();
+        assert_eq!(
+            block.validity_masks,
+            vec![vec![false, true], vec![true, true]]
+        );
+        assert_eq!(
+            block.values,
+            vec![
+                vec![Value::Null, Value::from(3.0)],
+                vec![Value::from(2.0), Value::from(4.0)],
+            ]
+        );
     }
 
     #[test]
