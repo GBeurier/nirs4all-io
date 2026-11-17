@@ -4468,13 +4468,13 @@ mod partition_label_contract_tests {
     }
 
     #[test]
-    fn public_csv_nan_literal_matches_but_decoded_missing_obeys_policy() {
+    fn public_csv_missing_spellings_never_match_a_declared_nan_label() {
         let text = b"x;y;set;row\n1;101;cal;r0\n2;102;NAN;r1\n3;103;;r2\n4;104;NA;r3\n5;105;none;r4\n6;106;val;r5\n7;107;\"nan\";r6\n";
         for policy in ["default", "train", "test", "drop", "error"] {
             let mut value = json!({
                 "task_type":"regression",
                 "sources":[{"id":"d","input":"d.csv","role":"mixed","params":{"delimiter":";","has_header":true},"columns":[{"role":"features","select":["x"]},{"role":"targets","select":["y"]},{"role":"metadata","select":["set","row"]}]}],
-                "partitions":{"by":"column","column":"set","train_values":["cal"],"test_values":["nan"]}
+                "partitions":{"by":"column","column":"set","train_values":["cal"],"test_values":["nan","val"]}
             });
             if policy != "default" {
                 value["partitions"]["unknown_policy"] = json!(policy);
@@ -4494,15 +4494,17 @@ mod partition_label_contract_tests {
                 continue;
             }
             let data = result.unwrap();
+            // `NAN`, the empty cell, `NA`, `none` and quoted `"nan"` are all decoded
+            // as missing: none of them matches the declared `nan` label.
             let expected_train = if matches!(policy, "default" | "train") {
-                vec!["r0", "r2", "r3", "r4", "r5", "r6"]
+                vec!["r0", "r1", "r2", "r3", "r4", "r6"]
             } else {
                 vec!["r0"]
             };
             let expected_test = if policy == "test" {
                 vec!["r1", "r2", "r3", "r4", "r5", "r6"]
             } else {
-                vec!["r1"]
+                vec!["r5"]
             };
             for (part, expected) in [("train", expected_train), ("test", expected_test)] {
                 let block = &data.blocks[part];

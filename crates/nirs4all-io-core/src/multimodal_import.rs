@@ -188,7 +188,10 @@ fn table(
 }
 
 fn numeric(value: &str) -> Result<Option<f64>, SpecError> {
-    if matches!(value, "" | "NA" | "N/A" | "NaN") {
+    if ["", "na", "n/a", "nan"]
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case(value))
+    {
         return Ok(None);
     }
     // Reuse the owner's checked numeric storage conversion, preserving refusal

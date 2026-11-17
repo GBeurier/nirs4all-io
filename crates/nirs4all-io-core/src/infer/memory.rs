@@ -22,6 +22,7 @@ use crate::infer::identity::{configure_generated_keys, detect_sample_id, repetit
 use crate::infer::plan::{DatasetPlan, Decision};
 use crate::infer::table::{ColDtype, ColumnProfile, NumericKind, TableProfile};
 use crate::infer::InferOptions;
+use crate::materialize::loaders::is_na;
 use crate::pyfmt::{py_round, py_str_scalar};
 use crate::spec::dataset_spec::LoadingParams;
 use crate::spec::selectors::Selector;
@@ -2253,31 +2254,6 @@ fn mangle_dupes(header: &[String], ncols: usize) -> Vec<String> {
         out.push(name);
     }
     out
-}
-
-fn is_na(cell: &str) -> bool {
-    matches!(
-        cell,
-        "#N/A"
-            | "#N/A N/A"
-            | "#NA"
-            | "-1.#IND"
-            | "-1.#QNAN"
-            | "-NaN"
-            | "-nan"
-            | "1.#IND"
-            | "1.#QNAN"
-            | "<NA>"
-            | "N/A"
-            | "NA"
-            | "NULL"
-            | "NaN"
-            | "None"
-            | "n/a"
-            | "nan"
-            | "null"
-            | ""
-    )
 }
 
 fn parse_int_literal(s: &str) -> Option<i64> {
