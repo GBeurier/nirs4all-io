@@ -451,18 +451,20 @@ fn defer_sample_removal(params: &mut LoadingParams) {
 /// column or encoded as a class. Every other column follows the policy
 /// (`auto` = `abort`).
 ///
+/// Columns assigned to `ignore` take no part in any policy.
+///
 /// Returns the source rows `remove_sample` removes once all sources are joined.
 fn apply_role_na_policy(
     df: &mut Frame,
     roles: &mut Vec<(String, String)>,
     na: &NaConfig,
 ) -> Result<Option<Vec<bool>>, SpecError> {
-    match na.policy {
-        NaPolicy::Ignore => return Ok(None),
-        NaPolicy::RemoveSample => return Ok(Some(missing_rows(df))),
-        _ => {}
+    if na.policy == NaPolicy::Ignore {
+        return Ok(None);
     }
-    let (target_idx, policy_idx): (Vec<usize>, Vec<usize>) = {
+    // A column assigned to `ignore` is not part of the dataset: its missing
+    // cells never remove a sample, abort the load or get filled.
+    let (target_idx, policy_idx, selected_idx): (Vec<usize>, Vec<usize>, Vec<usize>) = {
         let role_of: HashMap<&str, &str> = roles
             .iter()
             .map(|(column, role)| (column.as_str(), role.as_str()))
@@ -475,8 +477,10 @@ fn apply_role_na_policy(
                 .filter(|idx| role(idx) == Some("targets"))
                 .collect(),
             indices
-                .filter(|idx| !matches!(role(idx), Some("targets" | "metadata")))
+                .clone()
+                .filter(|idx| !matches!(role(idx), Some("targets" | "metadata" | "ignore")))
                 .collect(),
+            indices.filter(|idx| role(idx) != Some("ignore")).collect(),
         )
     };
     let sub_frame = |idx: &[usize]| Frame {
@@ -484,6 +488,9 @@ fn apply_role_na_policy(
         n_rows: df.n_rows,
         header_unit: df.header_unit.clone(),
     };
+    if na.policy == NaPolicy::RemoveSample {
+        return Ok(Some(missing_rows(&sub_frame(&selected_idx))));
+    }
 
     if na.policy == NaPolicy::Abort {
         apply_na_policy(&sub_frame(&target_idx), na)?;
