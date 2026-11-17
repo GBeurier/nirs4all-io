@@ -186,6 +186,8 @@ def legacy_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
                     src["strict_columns"] = False
                     cols = [{"role": "targets", "select": y_filter}]
                     cols.append({"role": "features", "select": x_filter if x_filter is not None else "rest"})
+                    if x_filter is not None:
+                        cols.append({"role": "ignore", "select": "rest"})
                     src["columns"] = cols
                 elif x_filter is not None:
                     src["role"] = "mixed"
@@ -201,7 +203,7 @@ def legacy_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
             if params:
                 ysrc["params"] = params
             if y_filter is not None:
-                ysrc["columns"] = [{"role": "targets", "select": y_filter}]
+                ysrc["columns"] = [{"role": "targets", "select": y_filter}, {"role": "ignore", "select": "rest"}]
                 ysrc["role"] = "mixed"
             if anchor:
                 ysrc["join"] = {"to": anchor, "how": "1:1"}
@@ -212,7 +214,7 @@ def legacy_to_spec_dict(config: dict[str, Any]) -> dict[str, Any]:
             if params:
                 gsrc["params"] = params
             if g_filter is not None:
-                gsrc["columns"] = [{"role": "metadata", "select": g_filter}]
+                gsrc["columns"] = [{"role": "metadata", "select": g_filter}, {"role": "ignore", "select": "rest"}]
                 gsrc["role"] = "mixed"
             if anchor:
                 gsrc["join"] = {"to": anchor, "how": "1:1"}

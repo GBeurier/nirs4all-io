@@ -62,7 +62,8 @@ def test_legacy_group_filter_applied():
     spec = validate_dict(legacy_to_spec_dict(cfg))
     msrc = next(s for s in spec.sources if s.id == "train_m")
     assert msrc.role.value == "mixed"
-    assert [c.select.to_spec() for c in msrc.columns] == [["site", "date"]]
+    # the selected columns are metadata; every other column of the file is ignored
+    assert [(c.role.value, c.select.to_spec()) for c in msrc.columns] == [("metadata", ["site", "date"]), ("ignore", "rest")]
 
 
 def test_load_accepts_datasetplan(tmp_path):

@@ -498,6 +498,9 @@ pub fn legacy_to_spec_dict(config: &Map<String, Value>) -> Value {
                         "role": "features",
                         "select": x_filter.clone().unwrap_or(Value::from("rest"))
                     }));
+                    if x_filter.is_some() {
+                        cols.push(serde_json::json!({"role": "ignore", "select": "rest"}));
+                    }
                     src.insert("columns".into(), Value::Array(cols));
                 } else if let Some(xf) = &x_filter {
                     src.insert("role".into(), Value::from("mixed"));
@@ -532,7 +535,10 @@ pub fn legacy_to_spec_dict(config: &Map<String, Value>) -> Value {
             if let Some(yf) = &y_filter {
                 ysrc.insert(
                     "columns".into(),
-                    serde_json::json!([{"role": "targets", "select": yf}]),
+                    serde_json::json!([
+                        {"role": "targets", "select": yf},
+                        {"role": "ignore", "select": "rest"}
+                    ]),
                 );
                 ysrc.insert("role".into(), Value::from("mixed"));
             }
@@ -557,7 +563,10 @@ pub fn legacy_to_spec_dict(config: &Map<String, Value>) -> Value {
             if let Some(gf) = &g_filter {
                 gsrc.insert(
                     "columns".into(),
-                    serde_json::json!([{"role": "metadata", "select": gf}]),
+                    serde_json::json!([
+                        {"role": "metadata", "select": gf},
+                        {"role": "ignore", "select": "rest"}
+                    ]),
                 );
                 gsrc.insert("role".into(), Value::from("mixed"));
             }
