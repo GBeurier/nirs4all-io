@@ -155,11 +155,12 @@ node() {
     assert (result.returncode == 0) is accepted, result.stdout + result.stderr
 
 
-def test_formats_python_oracle_uses_current_exact_pin() -> None:
-    expected = "0.2.14"
+def test_formats_python_oracle_uses_a_minor_level_range() -> None:
+    # Cross-repository owners are declared at minor granularity (docs/VERSIONING.md).
+    expected = "nirs4all-formats>=0.2,<0.3"
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    assert project["optional-dependencies"]["formats"] == [f"nirs4all-formats=={expected}"]
-    assert f"nirs4all-formats=={expected}" in project["optional-dependencies"]["dev"]
+    assert project["optional-dependencies"]["formats"] == [expected]
+    assert expected in project["optional-dependencies"]["dev"]
 
 
 def test_formats_vendored_web_snapshot_retains_its_exact_version() -> None:
