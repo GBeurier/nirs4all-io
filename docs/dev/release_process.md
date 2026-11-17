@@ -325,8 +325,10 @@ corrected tag.
   MSVC `.lib` Rtools' mingw `ld` can't link — MSVC-mangled `type_info`,
   CRT-mismatched `__imp_WSAGetLastError`). Build **staticlib-only** (Rtools45 ships
   no `libgcc_eh.a`, so a cdylib emit fails on `-lgcc_eh`) and link
-  `-lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lgcc` (the `--print
-  native-static-libs` set; `-lgcc` carries EH/unwind/`__chkstk`).
+  `-lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lsynchronization -lgcc` (the
+  `--print native-static-libs` set; `-lgcc` carries EH/unwind/`__chkstk`). That
+  set follows the Rust release: 1.100 added `-lsynchronization`, and a missing
+  entry fails the install with `undefined reference` in `00install.out`.
 - **npm**: same Automation-token + `@nirs4all` org-write requirement as the other
   repos; the `release-npm` dispatch `publish` input defaults to a dry run.
 

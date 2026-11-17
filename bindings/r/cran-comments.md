@@ -75,7 +75,8 @@ On Windows the Rust core is compiled for the `x86_64-pc-windows-gnu` target so
 its ABI matches Rtools' mingw-w64 gcc (which performs the final link of the Rust
 archive into `nirs4allio.dll`). The static library is referenced by exact path
 and the Rust-std native system libs (`-lkernel32 -lntdll -luserenv -lws2_32
--ldbghelp -lgcc`) are appended after it (mingw `ld` is order-sensitive). Rtools45
+-ldbghelp -lsynchronization -lgcc`) are appended after it (mingw `ld` is
+order-sensitive). Rtools45
 ships no separate `libgcc_eh.a` — the unwinder, `__gcc_personality_seh0`, and
 `__chkstk` live inside `libgcc.a` — so `-lgcc` (not `-lgcc_eh`) resolves them; a
 `libgcc_mock/libgcc_eh.a` shim is kept on `LIBRARY_PATH` defensively.
