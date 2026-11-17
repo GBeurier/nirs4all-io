@@ -423,7 +423,10 @@ features, targets and metadata. A token in an otherwise numeric column is a
 missing value and the column stays numeric; in a text column the cell is
 missing and the other labels stay text, so a token is never a class label.
 
-The policy is applied per column role, once columns are assigned. Loading is
+The policy is applied per column role, once columns are assigned. A column
+assigned to `ignore` (explicitly, or left out by a legacy `*_filter`) is not
+part of the dataset: its missing cells never remove a sample, refuse the load
+or get filled. Loading is
 lossless for **targets**: a missing target stays `NaN` and its sample is kept,
 whatever the policy, unless the policy is `remove_sample` (remove the sample)
 or `abort` (refuse the load). A target is never imputed, never dropped as a

@@ -13,6 +13,17 @@
   partition value and follow `unknown_policy`. The Python oracle applies the
   same rule; the multimodal `numeric_csv` tokens (`NA`, `N/A`, `NaN`) also
   ignore case. Whitespace-only cells, `-`, `?` and `.` are unchanged (text).
+- Load a subset of the columns of a file through the legacy filters:
+  `train_y_filter` / `test_y_filter` (by index or by name) and
+  `*_group_filter` now ignore the unselected columns instead of refusing with
+  "columns [...] are unassigned and no 'rest' selector is present"; the same
+  holds for `*_x_filter` beside targets carried by the feature file.
+- Apply the missing-value policy to selected columns only. Missing cells in
+  columns assigned to `ignore` no longer remove samples under `remove_sample`
+  (one selected target with 1 missing value of 6 kept 3 rows instead of 5 when
+  the ignored targets had other gaps) and no longer refuse the load under the
+  default `auto`/`abort` policy. Sample identities stay aligned across
+  features, targets and metadata after removal.
 
 ## 0.3.4 - Unreleased
 
