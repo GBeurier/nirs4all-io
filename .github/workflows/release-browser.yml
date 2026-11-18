@@ -1,0 +1,141 @@
+# SPDX-License-Identifier: CeCILL-2.1 OR AGPL-3.0-or-later
+# Browser (wasm-pack `web` target) build attached to every release tag.
+#
+# nirs4all-web stages IO's browser payload from GitHub Release assets, not from
+# the npm package (which carries the `nodejs` target). This workflow builds
+# that payload from the exact tagged source with a pinned wasm-pack and Rust
+# toolchain, a locked dependency graph and canonical source-path remapping,
+# then attaches it under the established names
+#   nirs4all-io-browser-web-<generated file, "/" -> "__">
+# together with its receipt nirs4all-io-browser-web.provenance.json
+# (schema nirs4all.owner-browser-release.v1: source identity, build recipe and
+# the size/SHA-256/URL of every asset), plus keyless build-provenance
+# attestations.
+#
+# Trigger: tag push v*.*.* (attach gated on a non-rc tag), or workflow_dispatch
+# for a dry run (build the artifact, no Release upload).
+name: release-browser
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write       # attach the assets to the Release
+  id-token: write       # keyless Sigstore provenance (OIDC)
+  attestations: write   # actions/attest-* records
+
+env:
+  # Pinned so the browser bytes do not drift with the runner's toolchain.
+  # wasm-pack fetches the wasm-bindgen CLI matching the locked crate and its
+  # own pinned wasm-opt.
+  WASM_PACK_VERSION: "0.15.0"
+  RUST_TOOLCHAIN: "1.96.0"
+
+jobs:
+  release-validation:
+    uses: ./.github/workflows/release-validation.yml
+
+  browser-package:
+    needs: release-validation
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0   # the tag object anchors the receipt
+
+      - uses: actions/setup-python@v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify release tag identity
+        run: python scripts/verify_release_tag.py
+
+      - name: Resolve version
+        id: meta
+        run: |
+          # Single source of truth: [workspace.package] version in root Cargo.toml.
+          VER=$(sed -nE '/^\[workspace\.package\]/,/^\[/{s/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p}' Cargo.toml | head -n1)
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Configure reproducible Rust paths
+        run: python scripts/configure_release_env.py
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: v${{ env.WASM_PACK_VERSION }}
+
+      - name: Verify WASM Cargo lock
+        run: |
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cargo metadata --manifest-path bindings/wasm/Cargo.toml --locked --format-version 1 > /dev/null
+
+      - name: Build the browser module (wasm-pack, web target)
+        run: wasm-pack build bindings/wasm --target web --release -- --locked
+
+      - name: Stage the Release assets and receipt
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DRY_RUN: ${{ github.event_name != 'push' && '--dry-run' || '' }}
+        run: |
+          set -euo pipefail
+          python scripts/stage_browser_release.py bindings/wasm/pkg dist-browser \
+            --version "${{ steps.meta.outputs.ver }}" --tag "${{ steps.meta.outputs.tag }}" \
+            --wasm-pack "${WASM_PACK_VERSION}" --run-url "${RUN_URL}" ${DRY_RUN}
+          python scripts/scan_artifact_paths.py dist-browser/*
+          ls -la dist-browser
+
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Smoke-test the browser module
+        # The web target needs no bundler: instantiate it from its own bytes
+        # under Node with the exact staged files.
+        run: |
+          set -euo pipefail
+          smoke="$(mktemp -d "${RUNNER_TEMP}/io-browser.XXXXXX")"
+          cp dist-browser/nirs4all-io-browser-web-nirs4all_io_wasm.js "${smoke}/nirs4all_io_wasm.js"
+          cp dist-browser/nirs4all-io-browser-web-nirs4all_io_wasm_bg.wasm "${smoke}/nirs4all_io_wasm_bg.wasm"
+          printf '%s\n' '{"type":"module","private":true}' > "${smoke}/package.json"
+          cd "${smoke}"
+          node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const io = await import("./nirs4all_io_wasm.js");
+            await io.default({ module_or_path: await readFile("./nirs4all_io_wasm_bg.wasm") });
+            if (!/^\d+\.\d+\.\d+/.test(io.version())) throw new Error("browser module failed to initialise");
+            console.log(`browser module ${io.version()}`);
+          '
+
+      - name: Attest build provenance for the browser assets
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+        uses: actions/attest-build-provenance@v4.1.1
+        with:
+          subject-path: dist-browser/*
+
+      - name: Upload to the matching Release
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-browser/*
+          fail_on_unmatched_files: true
+
+      - name: Upload artifact (always, for dry runs / inspection)
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: nirs4all-io-browser-web-${{ steps.meta.outputs.ver }}
+          path: dist-browser/
+          if-no-files-found: error
