@@ -10,7 +10,8 @@ are documented below.
 The authoritative Python/C-ABI build workflow is
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml); the
 per-surface workflows are `release-crates.yml`, `release-npm.yml`,
-`release-r.yml`, `release-matlab.yml`, and `release-source.yml`.
+`release-browser.yml`, `release-r.yml`, `release-matlab.yml`, and
+`release-source.yml`.
 
 > **No macOS deferral.** Unlike `nirs4all-formats` (which links the system
 > HDF5), io's Rust core is **pure-Rust** (`glob`/`flate2`/`zip`/`csv`/`regex`/
@@ -82,6 +83,7 @@ the `n4io_` exported-symbol surface is diffed by `.github/workflows/abi-check.ym
 | R | `nirs4allio` | **R-universe / GitHub Release** (CRAN deferred) | **Build CI-automated** — `release-r.yml` installs + smokes across the matrix, then builds a self-contained vendored source tarball. **R-universe is a one-time registry entry; CRAN is a deferred manual web-form step** (see *R → CRAN*). | tag push attaches the tarball |
 | JS / WASM | `@nirs4all/io-wasm` | npm | **Automated** — `release-npm.yml` (wasm-pack nodejs build, raw + idiomatic smokes, authored types, licenses, scoped name + provenance) publishes via `npm publish` and retains the exact `.tgz` | push tag `v*` (non-pre-release) + `NPM_TOKEN` |
 | MATLAB / Octave | `nirs4all-io-matlab-octave-<version>.zip` | GitHub Release | **Automated** — `release-matlab.yml` (`scripts/build_matlab_archive.sh`, commit-timestamped and byte-reproducible in a pinned tool environment) | push tag `v*` (non-pre-release) |
+| Browser WASM | `nirs4all-io-browser-web-*` + `nirs4all-io-browser-web.provenance.json` | GitHub Release | **Automated** — `release-browser.yml` (pinned wasm-pack and Rust toolchain, `--locked`, canonical path remapping, `scripts/stage_browser_release.py` receipt, Node smoke, keyless provenance) | push tag `v*` (non-pre-release) |
 | Rust crates | `nirs4all-io-core`, `nirs4all-io`, `nirs4all-io-dagml`, `nirs4all-io-capi`, `nirs4all-io-cli` | crates.io | **Automated** — `release-crates.yml` publishes leaf-first | push tag `v*` (non-pre-release) + `CARGO_REGISTRY_TOKEN` |
 | Source + provenance | — | GitHub Release | **Automated** — `release-source.yml` (reproducible git-archive tar.gz + zip, pinned Syft action, canonical CycloneDX SBOM, `SHA256SUMS`, keyless Sigstore provenance) | push tag `v*` (non-pre-release) |
 
@@ -97,6 +99,7 @@ they are downloadable from one place.
 | R `nirs4allio` | R-universe / Release | **`nirs4allio_<version>.tar.gz`** (source tarball) | **Automated to the Release** (R-universe builds from Git). The release tarball is self-contained for CRAN; submission remains manual — see *R → CRAN*. |
 | JS / WASM `@nirs4all/io-wasm` | npm | `nirs4all-io-wasm-<version>.tgz` containing raw WASM/JS, the idiomatic ESM wrapper, detailed types, and the license inventory | **Automated** — `release-npm.yml` (needs `NPM_TOKEN` + the `@nirs4all` scope) |
 | MATLAB / Octave | GitHub Release | `nirs4all-io-matlab-octave-<version>.zip` (binding sources plus project license/notice inventory) | **Automated** — `release-matlab.yml` |
+| Browser WASM | GitHub Release | the wasm-pack `web` target as `nirs4all-io-browser-web-<file>` (`nirs4all_io_wasm.js`, `.d.ts`, `_bg.wasm`, `_bg.wasm.d.ts`, `package.json`; nested paths flattened with `__`) plus the `nirs4all.owner-browser-release.v1` receipt `nirs4all-io-browser-web.provenance.json` that nirs4all-web pins | **Automated** — `release-browser.yml` |
 | C-ABI archive | GitHub Release | `nirs4all-io-capi-<target-triple>.tar.gz` (lib + `nirs4all_io.h` + target/source metadata + project license/provenance inventory), pinned Linux x86_64 / macOS arm64 / Windows x86_64 targets; built and canonicalized by `scripts/build_capi_archive.py` | **Automated** — `release.yml` |
 | Source + provenance | GitHub Release | `nirs4all-io-<version>-src.tar.gz` · `…-src.zip` · `nirs4all-io-<version>.cdx.json` (SBOM) · `SHA256SUMS` | **Automated** — `release-source.yml` |
 

@@ -2,6 +2,14 @@
 
 ## 0.3.6 - Unreleased
 
+- Release tags now build and attach the browser payload themselves: the new
+  `release-browser.yml` runs `wasm-pack build bindings/wasm --target web
+  --release -- --locked` with pinned wasm-pack 0.15.0 and Rust 1.96.0 and
+  canonical source-path remapping, then attaches the
+  `nirs4all-io-browser-web-*` assets and their
+  `nirs4all.owner-browser-release.v1` receipt
+  (`nirs4all-io-browser-web.provenance.json`) that nirs4all-web pins. These
+  were attached by hand for v0.3.3 and v0.3.6.
 - Bridge records whose targets are observed on different rows to DAG-ML again.
   Since 0.3.0 `PackageProvider` refused them ("Partial target matrix validity
   is unsupported by this DMD matrix-target API"), so a multi-target dataset

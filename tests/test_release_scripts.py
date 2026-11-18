@@ -20,6 +20,7 @@ from scripts.normalize_wheel import binding_pep440_version, normalize_wheel
 from scripts.release_paths import CANONICAL_SOURCE, normalize_source_strings, refuse_source_path_leaks
 from scripts.rust_reproducibility import reproducible_rust_env
 from scripts.scan_artifact_paths import scan_paths
+from scripts.stage_browser_release import RECEIPT_NAME, build_receipt, stage
 from scripts.verify_release_tag import verify
 from scripts.write_deterministic_zip import write_zip
 from scripts.write_release_receipt import reproducibility_covers, required_artifact_status, source_matches
@@ -52,6 +53,7 @@ def test_publication_waits_for_source_oracle_and_binding_validation() -> None:
         ("release-r.yml", "publish-release-asset"),
         ("release-source.yml", "source-release"),
         ("release-matlab.yml", "matlab-package"),
+        ("release-browser.yml", "browser-package"),
     ):
         jobs = load(name)["jobs"]
         assert jobs["release-validation"]["uses"] == "./.github/workflows/release-validation.yml"
@@ -181,6 +183,78 @@ def test_json_path_normalization_handles_escaped_windows_form() -> None:
         {"bom-ref": f"path+file://{CANONICAL_SOURCE}/bindings/python#nirs4all-io-py@0.1.12"},
         ROOT,
     )
+
+
+def _browser_pkg(root: Path, version: str = "1.2.3") -> Path:
+    pkg = root / "pkg"
+    (pkg / "snippets" / "dep-0123" / "wasm").mkdir(parents=True)
+    for name in ("nirs4all_io_wasm.js", "nirs4all_io_wasm.d.ts", "nirs4all_io_wasm_bg.wasm", "nirs4all_io_wasm_bg.wasm.d.ts"):
+        (pkg / name).write_bytes(name.encode())
+    (pkg / "package.json").write_text(json.dumps({"name": "nirs4all-io-wasm", "version": version}), encoding="utf-8")
+    (pkg / "snippets" / "dep-0123" / "wasm" / "inline.js").write_text("export {}", encoding="utf-8")
+    for ignored in (".gitignore", "README.md", "LICENSE"):
+        (pkg / ignored).write_text("ignored", encoding="utf-8")
+    return pkg
+
+
+def _browser_receipt(pkg: Path, version: str = "1.2.3") -> dict:
+    return build_receipt(
+        pkg=pkg,
+        version=version,
+        tag="v1.2.3",
+        commit="c" * 40,
+        tree="t" * 40,
+        tool="wasm-pack 0.15.0",
+        rustc="rustc 1.96.0",
+        lock_sha256="0" * 64,
+        host="Linux x86_64",
+        run_url="https://github.com/GBeurier/nirs4all-io/actions/runs/1",
+    )
+
+
+def test_browser_release_keeps_the_pinned_asset_names_and_receipt_format(tmp_path: Path) -> None:
+    pkg = _browser_pkg(tmp_path)
+    receipt = _browser_receipt(pkg)
+    # nirs4all-web pins these exact keys, asset names and URLs.
+    assert list(receipt) == [
+        "schema", "owner", "version", "source_tag", "source_commit", "source_tree",
+        "operation", "build", "qualification", "provenance", "files",
+    ]
+    assert receipt["schema"] == "nirs4all.owner-browser-release.v1"
+    assert receipt["build"]["command"] == "wasm-pack build bindings/wasm --target web --release -- --locked"
+    assert list(receipt["build"]) == ["tool", "target", "profile", "cargo_locked", "lock_sha256", "command", "host"]
+    assert list(receipt["files"]) == [
+        "nirs4all_io_wasm.js", "nirs4all_io_wasm.d.ts", "nirs4all_io_wasm_bg.wasm",
+        "nirs4all_io_wasm_bg.wasm.d.ts", "package.json", "snippets/dep-0123/wasm/inline.js",
+    ]
+    snippet = receipt["files"]["snippets/dep-0123/wasm/inline.js"]
+    assert snippet["asset"] == "nirs4all-io-browser-web-snippets__dep-0123__wasm__inline.js"
+    assert snippet["url"] == (
+        "https://github.com/GBeurier/nirs4all-io/releases/download/v1.2.3/"
+        "nirs4all-io-browser-web-snippets__dep-0123__wasm__inline.js"
+    )
+    out = tmp_path / "dist"
+    stage(pkg, out, receipt)
+    assert sorted(path.name for path in out.iterdir()) == sorted(
+        [fact["asset"] for fact in receipt["files"].values()] + [RECEIPT_NAME]
+    )
+    for relative, fact in receipt["files"].items():
+        assert (out / fact["asset"]).read_bytes() == (pkg / relative).read_bytes()
+    text = (out / RECEIPT_NAME).read_text(encoding="utf-8")
+    assert text.endswith("\n}\n") and json.loads(text) == receipt
+
+
+def test_browser_release_refuses_unexpected_output_and_version_drift(tmp_path: Path) -> None:
+    pkg = _browser_pkg(tmp_path)
+    with pytest.raises(SystemExit, match="workspace version"):
+        _browser_receipt(pkg, version="1.2.4")
+    (pkg / "extra.js").write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit, match="unexpected wasm-pack output: extra.js"):
+        _browser_receipt(pkg)
+    (pkg / "extra.js").unlink()
+    (pkg / "nirs4all_io_wasm_bg.wasm").unlink()
+    with pytest.raises(SystemExit, match="missing nirs4all_io_wasm_bg.wasm"):
+        _browser_receipt(pkg)
 
 
 def test_rust_environment_remaps_ephemeral_build_root(tmp_path: Path) -> None:
