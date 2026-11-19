@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.7 - Unreleased
+
+- The declared multimodal import accepts categorical targets: an optional
+  `targetKind: "categorical"` with an ordered `classes` vocabulary in the
+  metadata declaration yields `target.kind`, `target.classes` and class-index
+  values; undeclared labels refuse. Numeric targets, their output and their
+  fingerprints are unchanged (additive).
+
 ## 0.3.6 - Unreleased
 
 - Release tags now build and attach the browser payload themselves: the new

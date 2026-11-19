@@ -105,3 +105,95 @@ fn genotype_and_png_profiles_join_neutral_decodes_by_exact_id() {
         );
     }
 }
+
+#[test]
+fn categorical_targets_use_the_declared_class_vocabulary() {
+    let declaration = |metadata: serde_json::Value| -> ImportManifest {
+        serde_json::from_value(json!({"schema":"nirs4all.multimodal-import.v1","caseId":"spectroscopy","name":"fixture",
+            "metadata":metadata,
+            "sources":[{"id":"nir","label":"NIR","modality":"spectroscopy","profile":"numeric_csv","file":"x.csv","sampleId":"sample_id","features":["1000","1002"],
+                "axis":{"values":[1000.0,1002.0],"unit":"nm","kind":"wavelength"}}]}))
+        .unwrap()
+    };
+    let files = BTreeMap::from([
+        (
+            "meta.csv".into(),
+            b"sample_id,variety\na,beta\nb,alpha\nc,beta\n".to_vec(),
+        ),
+        (
+            "x.csv".into(),
+            b"sample_id,1000,1002\nc,5,6\na,1,2\nb,3,4\n".to_vec(),
+        ),
+    ]);
+    let limits = TabularReadLimits::new(4096, 4096, 100, 100, 1000);
+    let categorical = declaration(
+        json!({"file":"meta.csv","sampleId":"sample_id","target":"variety","targetUnit":"class",
+        "targetKind":"categorical","classes":["alpha","beta"]}),
+    );
+    let assembled =
+        assemble_multimodal_files(&categorical, &files, &BTreeMap::new(), limits).unwrap();
+    assert_eq!(assembled.target["kind"], "categorical");
+    assert_eq!(assembled.target["classes"], json!(["alpha", "beta"]));
+    assert_eq!(assembled.target["values"], json!([1.0, 0.0, 1.0]));
+
+    // The vocabulary is declared, never discovered: undeclared labels, missing
+    // declarations and classes without the categorical kind refuse.
+    let refuse = |metadata: serde_json::Value| {
+        assert!(
+            assemble_multimodal_files(&declaration(metadata), &files, &BTreeMap::new(), limits)
+                .is_err()
+        )
+    };
+    refuse(
+        json!({"file":"meta.csv","sampleId":"sample_id","target":"variety","targetUnit":"class","targetKind":"categorical","classes":["alpha","gamma"]}),
+    );
+    refuse(
+        json!({"file":"meta.csv","sampleId":"sample_id","target":"variety","targetUnit":"class","targetKind":"categorical"}),
+    );
+    refuse(
+        json!({"file":"meta.csv","sampleId":"sample_id","target":"variety","targetUnit":"class","targetKind":"categorical","classes":["alpha","alpha"]}),
+    );
+    refuse(
+        json!({"file":"meta.csv","sampleId":"sample_id","target":"variety","targetUnit":"class","classes":["alpha","beta"]}),
+    );
+    refuse(
+        json!({"file":"meta.csv","sampleId":"sample_id","target":"variety","targetUnit":"class","targetKind":"ordinal","classes":["alpha","beta"]}),
+    );
+    // Without a declared kind the target stays numeric (and refuses labels).
+    refuse(
+        json!({"file":"meta.csv","sampleId":"sample_id","target":"variety","targetUnit":"class"}),
+    );
+}
+
+#[test]
+fn continuous_targets_keep_their_output_and_fingerprint() {
+    let manifest = |kind: Option<&str>| -> ImportManifest {
+        let mut metadata =
+            json!({"file":"meta.csv","sampleId":"sample_id","target":"y","targetUnit":"a.u."});
+        if let Some(kind) = kind {
+            metadata["targetKind"] = json!(kind);
+        }
+        serde_json::from_value(json!({"schema":"nirs4all.multimodal-import.v1","caseId":"genetics","name":"fixture","metadata":metadata,
+            "sources":[{"id":"markers","label":"Markers","modality":"genetics","profile":"numeric_csv","file":"x.csv","sampleId":"sample_id","features":["m0"]}]}))
+        .unwrap()
+    };
+    let files = BTreeMap::from([
+        ("meta.csv".into(), b"sample_id,y\na,1.5\nb,2\n".to_vec()),
+        ("x.csv".into(), b"sample_id,m0\na,0\nb,2\n".to_vec()),
+    ]);
+    let limits = TabularReadLimits::new(4096, 4096, 100, 100, 1000);
+    let implicit =
+        assemble_multimodal_files(&manifest(None), &files, &BTreeMap::new(), limits).unwrap();
+    let explicit = assemble_multimodal_files(
+        &manifest(Some("continuous")),
+        &files,
+        &BTreeMap::new(),
+        limits,
+    )
+    .unwrap();
+    assert_eq!(
+        implicit.target,
+        json!({"name":"y","unit":"a.u.","values":[1.5,2.0]})
+    );
+    assert_eq!(implicit.fingerprint, explicit.fingerprint);
+}
