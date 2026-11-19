@@ -138,9 +138,10 @@ of every package name, version, and SPDX expression returned by locked Cargo
 metadata makes any other closure change fail closed pending a fresh audit.
 
 The same staging command emits `nirs4all-io-wasm.cdx.json`, a deterministic
-CycloneDX 1.6 SBOM with all 55 locked Cargo components, their SPDX expressions,
+CycloneDX 1.6 SBOM with all 56 locked Cargo components, their SPDX expressions,
 crate hashes, purls, and dependency edges. Its subject is `nirs4all-io-wasm`
-`0.1.14`; source properties attest the full Git commit and tree. Timestamps,
+at the selected workspace version; source properties attest the full Git commit
+and tree. Timestamps,
 UUIDs, local paths, and other volatile fields are intentionally excluded.
 
 ## Test
