@@ -31,6 +31,12 @@ pub struct MetadataDeclaration {
     pub target_unit: String,
     pub group: Option<String>,
     pub partition: Option<String>,
+    /// `"categorical"` declares a class target; absent (or `"continuous"`) keeps numeric targets.
+    #[serde(default)]
+    pub target_kind: Option<String>,
+    /// Ordered class vocabulary of a categorical target; cells must match one entry exactly.
+    #[serde(default)]
+    pub classes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -288,11 +294,51 @@ pub fn assemble_multimodal_files(
     let metadata = table(&manifest.metadata.file, files, limits)?;
     let sample_ids = metadata.strings(&manifest.metadata.sample_id)?;
     distinct(&sample_ids, "metadata sample IDs")?;
-    let target_values = metadata
-        .strings(&manifest.metadata.target)?
-        .iter()
-        .map(|value| numeric(value)?.ok_or_else(|| err("target values must be complete")))
-        .collect::<Result<Vec<_>, _>>()?;
+    let target_cells = metadata.strings(&manifest.metadata.target)?;
+    // A categorical target carries its declared, ordered vocabulary: classes are never
+    // discovered from the data, and each value is the index of its declared class.
+    let categorical = match manifest.metadata.target_kind.as_deref() {
+        None | Some("continuous") => {
+            if manifest.metadata.classes.is_some() {
+                return Err(err("declared classes require targetKind \"categorical\""));
+            }
+            None
+        }
+        Some("categorical") => {
+            let classes = manifest
+                .metadata
+                .classes
+                .clone()
+                .ok_or_else(|| err("a categorical target requires its declared classes"))?;
+            distinct(&classes, "declared classes")?;
+            if classes.len() < 2 {
+                return Err(err(
+                    "a categorical target requires at least two declared classes",
+                ));
+            }
+            Some(classes)
+        }
+        Some(other) => return Err(err(format!("unsupported targetKind '{other}'"))),
+    };
+    let target_values = match &categorical {
+        None => target_cells
+            .iter()
+            .map(|value| numeric(value)?.ok_or_else(|| err("target values must be complete")))
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(classes) => target_cells
+            .iter()
+            .map(|value| {
+                if value.trim().is_empty() {
+                    return Err(err("target values must be complete"));
+                }
+                classes
+                    .iter()
+                    .position(|class| class == value)
+                    .map(|index| index as f64)
+                    .ok_or_else(|| err(format!("target value '{value}' is not a declared class")))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
     let groups = manifest
         .metadata
         .group
@@ -556,7 +602,11 @@ pub fn assemble_multimodal_files(
         sources.push(result);
     }
     let provenance = json!({"profile":MULTIMODAL_IMPORT_PROFILE,"metadataSourceSha256":format!("{:x}",Sha256::digest(&files[&manifest.metadata.file])),"declaration":manifest.provenance,"missingPolicy":"complete-data training refuses preserved missing cells; no imputation"});
-    let target = json!({"name":manifest.metadata.target,"unit":manifest.metadata.target_unit,"values":target_values});
+    let mut target = json!({"name":manifest.metadata.target,"unit":manifest.metadata.target_unit,"values":target_values});
+    if let Some(classes) = categorical {
+        target["kind"] = json!("categorical");
+        target["classes"] = json!(classes);
+    }
     let mut result = ImportedDataset {
         case_id: manifest.case_id.clone(),
         name: manifest.name.clone(),

@@ -41,6 +41,15 @@ unit and kind. Genetics dosage CSV uses modality `genetics`, profile
 `NaN` in any case, or empty). Missing source cells retain zero storage plus validity=false;
 targets must be complete. No missing value is silently filled for training.
 
+Targets are numeric by default. A class target declares `"targetKind":
+"categorical"` and its ordered `"classes"` vocabulary in the metadata
+declaration; every target cell must equal one declared class exactly, and the
+assembled `target` carries `kind: "categorical"`, `classes` and the class index
+of each sample in `values`. The vocabulary is declared, never discovered from the
+data. `classes` without the categorical kind, an undeclared or blank label,
+duplicate classes, fewer than two classes and other kinds refuse. Without
+`targetKind` (or with `"continuous"`) the output and fingerprint are unchanged.
+
 `png_manifest` declares image modality, a fixed `shape:[H,W,C]`, and a mapping
 CSV containing exactly `sample_id,file`. Files decode through Formats `png8`;
 every image must match the declared shape and raw HWC layout. Grayscale C=1,
