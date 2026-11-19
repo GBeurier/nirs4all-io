@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.8 - Unreleased
+
+- Add the standalone WASM package subpath `./assembled-wire`, exposing
+  `decodeAssembledFull` to decode native assembled-schema-3 records into the
+  existing WASM logical-array shape. It preserves exact observed values,
+  masks, metadata and identity, and refuses malformed or unsupported packets.
+  Existing operations, wire versions, numerical results and C ABI stay unchanged.
+
 ## 0.3.7 - Unreleased
 
 - The declared multimodal import accepts categorical targets: an optional

@@ -38,3 +38,5 @@ jobs:
         run: node bindings/wasm/tests/target_subset_selection.mjs
       - name: Numeric coordinate corpus
         run: node --test bindings/wasm/tests/numeric-wire.mjs
+      - name: Native assembled-wire decoder (includes WASM assembleDataset cross-check)
+        run: node --test bindings/wasm/tests/assembled-wire.mjs

@@ -21,7 +21,7 @@ const legalMirrors = [
   "crates/nirs4all-io-capi",
   "crates/nirs4all-io-cli",
 ];
-const wasmLicenseClosureChecksum = "4736ac4cfbfb8ad6ac912a9f775504e7e155542ac2a106049ed8fc9a57e41c8e";
+const wasmLicenseClosureChecksum = "91b1093dd0328d6e41db96bc901a4fa978b6fc6fbc2b335aca31d2cc306102fe";
 const lockedLicenseSources = [
   {
     packageName: "ryu",
@@ -350,6 +350,8 @@ manifest.files = [...new Set([
   "public-dataset.d.ts",
   "numeric-wire.mjs",
   "numeric-wire.d.ts",
+  "assembled-wire.mjs",
+  "assembled-wire.d.ts",
   "types/nirs4all-io.d.ts",
   "LICENSE",
   "LICENSES",
@@ -375,6 +377,11 @@ manifest.exports = {
     default: "./numeric-wire.mjs",
   },
   "./types": { types: "./types/nirs4all-io.d.ts" },
+  "./assembled-wire": {
+    types: "./assembled-wire.d.ts",
+    import: "./assembled-wire.mjs",
+    default: "./assembled-wire.mjs",
+  },
   "./public-dataset": {
     types: "./public-dataset.d.ts",
     import: "./public-dataset.mjs",
@@ -390,6 +397,8 @@ fs.copyFileSync(path.join(wasm, "public-dataset.mjs"), path.join(pkgDir, "public
 fs.copyFileSync(path.join(wasm, "public-dataset.d.ts"), path.join(pkgDir, "public-dataset.d.ts"));
 fs.copyFileSync(path.join(wasm, "numeric-wire.mjs"), path.join(pkgDir, "numeric-wire.mjs"));
 fs.copyFileSync(path.join(wasm, "numeric-wire.d.ts"), path.join(pkgDir, "numeric-wire.d.ts"));
+fs.copyFileSync(path.join(wasm, "assembled-wire.mjs"), path.join(pkgDir, "assembled-wire.mjs"));
+fs.copyFileSync(path.join(wasm, "assembled-wire.d.ts"), path.join(pkgDir, "assembled-wire.d.ts"));
 fs.copyFileSync(
   path.join(wasm, "types/nirs4all-io.d.ts"),
   path.join(pkgDir, "types/nirs4all-io.d.ts"),

@@ -87,6 +87,10 @@ Notes:
   `proposeDataset(files, recordSets, {conventions?, confirmed?})`,
   `describeTables(files, {params?, distinct?})`,
   `assembleDataset(files, recordSets, specJson)`, `version()`.
+  The JS-only `@nirs4all/io-wasm/assembled-wire` entry exports
+  `decodeAssembledFull(value)`: it decodes a native `assembled_full` value
+  (`assembled_schema_version` 3) into the `assembleDataset` JS shape and refuses
+  any other version. Decoding only; no assembly.
 
 `describeTables` inspects original named byte buffers independently with the
 assembler's table reader and NA forced to `ignore`. It returns effective parsing

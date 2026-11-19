@@ -138,9 +138,10 @@ of every package name, version, and SPDX expression returned by locked Cargo
 metadata makes any other closure change fail closed pending a fresh audit.
 
 The same staging command emits `nirs4all-io-wasm.cdx.json`, a deterministic
-CycloneDX 1.6 SBOM with all 55 locked Cargo components, their SPDX expressions,
+CycloneDX 1.6 SBOM with all 56 locked Cargo components, their SPDX expressions,
 crate hashes, purls, and dependency edges. Its subject is `nirs4all-io-wasm`
-`0.1.14`; source properties attest the full Git commit and tree. Timestamps,
+at the selected workspace version; source properties attest the full Git commit
+and tree. Timestamps,
 UUIDs, local paths, and other volatile fields are intentionally excluded.
 
 ## Test
@@ -154,3 +155,41 @@ node bindings/wasm/tests/idiomatic_smoke.mjs     # idiomatic.mjs wrapper
 The release workflow runs both smokes again against the staged npm package and
 retains the exact `.tgz`, including the wrapper, detailed types, and canonical
 project license/provenance inventory plus the closure-specific CycloneDX SBOM.
+
+## Decoding native assembled datasets
+
+The additive `@nirs4all/io-wasm/assembled-wire` entry (`assembled-wire.mjs`,
+typed by `assembled-wire.d.ts`) exports `decodeAssembledFull(value)`. It takes the
+JSON value returned by a native host's `assembled_full` (pyo3, CLI or C ABI;
+`assembled_schema_version` 3) and returns the JS shape that `assembleDataset`
+returns for the same inputs. A browser can therefore read a dataset prepared
+natively without running the WASM module.
+
+- Each `x` and `processings[*][*].matrix` packet keeps its exact fields
+  (`dtype`, shape, `data_bytes_hex`, `validity`, `precision`) and gains a
+  logical `data` `Float64Array`.
+- `y` keeps its typed `columns` and gains a row-major `data` `Float64Array`. A
+  `classification_string` cell holds its index in
+  `y_categorical[name].categories`.
+- `weights` becomes a `Float64Array`, as in `assembleDataset`. Its validity is
+  the NaN pattern; like `assembleDataset`, this view does not keep the weights
+  precision record.
+- Masked cells are NaN. Observed float32/float64 values, signed zero and
+  subnormals are kept exactly. Metadata, identity, axes, vocabularies, folds,
+  warnings and audits are cloned unchanged. The input is not mutated.
+
+The function throws `TypeError` for any other schema version, including the
+schema 2 wire of IO 0.2.x. It also throws for malformed packets, non-canonical
+hex, a masked placeholder other than `+0`, nonfinite observed values, unsafe
+integer shapes, row-count mismatches and labels outside their vocabulary. It
+performs no assembly, encoding, imputation, filtering or reordering.
+
+```js
+import { decodeAssembledFull } from "@nirs4all/io-wasm/assembled-wire";
+const dataset = decodeAssembledFull(JSON.parse(text)); // same shape as assembleDataset()
+```
+
+`node --test bindings/wasm/tests/assembled-wire.mjs` checks literal values from a
+native sample and from synthetic packets, plus each refusal. If a built glue
+module exists at `bindings/wasm/pkg/` (or is named by `IO_WASM_GLUE`), the test
+also requires `deepStrictEqual` with `assembleDataset` on the same CSV and spec.
