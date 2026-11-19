@@ -101,6 +101,16 @@ test('synthetic packets: subnormal, signed zero, integer classes, labels, proces
   assert.deepEqual(decoded.folds, [[[0], [1]]]);
 });
 
+test('observed string labels preserve a leading UTF-8 byte-order mark', () => {
+  for (const categories of [['b', '\uFEFFb'], ['\uFEFFb']]) {
+    const input = syntheticFull();
+    input.blocks.train.y.columns[1].block.data_bytes_hex = '0400000000000000efbbbf620000000000000000';
+    input.blocks.train.y_categorical.site.categories = categories;
+    const decoded = decodeAssembledFull(input);
+    assertLogical(decoded.blocks.train.y.data, [2, categories.indexOf('\uFEFFb'), NaN, NaN], 'literal BOM label code');
+  }
+});
+
 const refusals = [
   ['schema 2 wire', (f) => { f.assembled_schema_version = 2; }, /unsupported assembled_schema_version 2/],
   ['missing schema', (f) => { delete f.assembled_schema_version; }, /unsupported assembled_schema_version/],

@@ -129,7 +129,8 @@ function stringLabels(packet, label) {
   }
   const bytes = hexBytes(packet.data_bytes_hex, packet.data_bytes_hex.length / 2, label);
   const view = new DataView(bytes.buffer);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  // These are framed label values; a leading U+FEFF is part of the category.
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const labels = [];
   let offset = 0;
   for (let row = 0; row < nRows; row += 1) {
