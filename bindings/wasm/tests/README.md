@@ -32,3 +32,14 @@ Keep provenance limits explicit and distinguish the masked canonical positive
 zero bytes from logical typed-array NaNs. The fixtures retain their source and
 explicit-confirmation provenance; they are synthetic test data, not measured
 material or a general identity/decoder certificate.
+
+## Native assembled-wire decoder
+
+`assembled-wire.mjs` (`node --test`) checks `decodeAssembledFull` against literal
+values. Its inputs are `fixtures/assembled-full-native.json`, which holds the
+output of the public native `assembled_full` for a synthetic CSV, both with
+default storage and with requested float32 storage, plus synthetic packets
+(subnormal, signed zero, integer classes, string labels, processings). It also
+tests each refusal. When a built glue module is present at `../pkg` or set by
+`IO_WASM_GLUE` (Node or web target), the decoded native sample must equal
+`assembleDataset` on the same CSV and spec. Otherwise that case is skipped.

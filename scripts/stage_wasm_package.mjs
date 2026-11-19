@@ -350,6 +350,8 @@ manifest.files = [...new Set([
   "public-dataset.d.ts",
   "numeric-wire.mjs",
   "numeric-wire.d.ts",
+  "assembled-wire.mjs",
+  "assembled-wire.d.ts",
   "types/nirs4all-io.d.ts",
   "LICENSE",
   "LICENSES",
@@ -375,6 +377,11 @@ manifest.exports = {
     default: "./numeric-wire.mjs",
   },
   "./types": { types: "./types/nirs4all-io.d.ts" },
+  "./assembled-wire": {
+    types: "./assembled-wire.d.ts",
+    import: "./assembled-wire.mjs",
+    default: "./assembled-wire.mjs",
+  },
   "./public-dataset": {
     types: "./public-dataset.d.ts",
     import: "./public-dataset.mjs",
@@ -390,6 +397,8 @@ fs.copyFileSync(path.join(wasm, "public-dataset.mjs"), path.join(pkgDir, "public
 fs.copyFileSync(path.join(wasm, "public-dataset.d.ts"), path.join(pkgDir, "public-dataset.d.ts"));
 fs.copyFileSync(path.join(wasm, "numeric-wire.mjs"), path.join(pkgDir, "numeric-wire.mjs"));
 fs.copyFileSync(path.join(wasm, "numeric-wire.d.ts"), path.join(pkgDir, "numeric-wire.d.ts"));
+fs.copyFileSync(path.join(wasm, "assembled-wire.mjs"), path.join(pkgDir, "assembled-wire.mjs"));
+fs.copyFileSync(path.join(wasm, "assembled-wire.d.ts"), path.join(pkgDir, "assembled-wire.d.ts"));
 fs.copyFileSync(
   path.join(wasm, "types/nirs4all-io.d.ts"),
   path.join(pkgDir, "types/nirs4all-io.d.ts"),

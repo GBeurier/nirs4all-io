@@ -1,0 +1,500 @@
+{
+ "schema": "nirs4all.io.assembled-wire-native-sample.v1",
+ "provenance": {
+  "producer": "public nirs4all_io.assembled_full of an installed native pyo3 wheel",
+  "native_version": "0.3.2+server.20261113.1",
+  "calls": {
+   "full_default": "assembled_full(spec)",
+   "full_float32": "assembled_full(spec, storage={'features': 'float32'})"
+  },
+  "data": "Synthetic five-line CSV written for this test; not measured material.",
+  "use": "Decoder input only. Expected logical values are literals in tests/assembled-wire.mjs."
+ },
+ "files": [
+  {
+   "name": "data.csv",
+   "text": "id;1000;1100;y;cls;k;w\ns1;0.1;0.25;1.5;a;3;1\ns2;0.2;;2.5;b;7;\ns3;-0;0.35;;a;3;0.5\n"
+  }
+ ],
+ "spec": {
+  "name": "tiny",
+  "sources": [
+   {
+    "id": "m",
+    "role": "mixed",
+    "input": "data.csv",
+    "params": {
+     "delimiter": ";",
+     "na": {
+      "policy": "ignore"
+     }
+    },
+    "columns": {
+     "metadata": [
+      "id"
+     ],
+     "features": [
+      "1000",
+      "1100"
+     ],
+     "targets": [
+      "y",
+      "cls",
+      "k"
+     ],
+     "weights": "w"
+    }
+   }
+  ]
+ },
+ "full_default": {
+  "partition_order": [
+   "train"
+  ],
+  "assembled_schema_version": 3,
+  "name": "tiny",
+  "task_type": "auto",
+  "signal_type": "auto",
+  "n_sources": 1,
+  "blocks": {
+   "train": {
+    "n_samples": 3,
+    "source_ids": [
+     "m"
+    ],
+    "x": [
+     {
+      "dtype": "float64",
+      "n_rows": 3,
+      "n_cols": 2,
+      "data_bytes_hex": "9a9999999999b93f000000000000d03f9a9999999999c93f00000000000000000000000000000080666666666666d63f",
+      "validity": [
+       true,
+       true,
+       true,
+       false,
+       true,
+       true
+      ],
+      "precision": {
+       "dtype": "float64",
+       "origin": "default",
+       "source_dtype": null,
+       "requested_dtype": null,
+       "consumer": null
+      }
+     }
+    ],
+    "feature_headers": [
+     [
+      "1000",
+      "1100"
+     ]
+    ],
+    "feature_names": [
+     [
+      "1000",
+      "1100"
+     ]
+    ],
+    "feature_axes": [
+     [
+      {
+       "name": "feature",
+       "unit": null,
+       "coordinates": {
+        "kind": "numeric",
+        "count": 2,
+        "data_bytes_hex": "0000000000408f400000000000309140"
+       }
+      }
+     ]
+    ],
+    "representation_ids": [
+     "signal_1d"
+    ],
+    "header_units": [
+     "text"
+    ],
+    "signal_types": [
+     null
+    ],
+    "y": {
+     "columns": [
+      {
+       "name": "y",
+       "kind": "numeric",
+       "block": {
+        "dtype": "float64",
+        "n_rows": 3,
+        "n_cols": 1,
+        "data_bytes_hex": "000000000000f83f00000000000004400000000000000000",
+        "validity": [
+         true,
+         true,
+         false
+        ],
+        "precision": {
+         "dtype": "float64",
+         "origin": "default",
+         "source_dtype": null,
+         "requested_dtype": null,
+         "consumer": null
+        }
+       }
+      },
+      {
+       "name": "cls",
+       "kind": "classification_string",
+       "block": {
+        "dtype": "string-label",
+        "n_rows": 3,
+        "n_cols": 1,
+        "data_bytes_hex": "010000000000000061010000000000000062010000000000000061",
+        "validity": [
+         true,
+         true,
+         true
+        ],
+        "precision": {
+         "dtype": "string-label",
+         "origin": "default",
+         "source_dtype": null,
+         "requested_dtype": null,
+         "consumer": null
+        }
+       }
+      },
+      {
+       "name": "k",
+       "kind": "numeric",
+       "block": {
+        "dtype": "float64",
+        "n_rows": 3,
+        "n_cols": 1,
+        "data_bytes_hex": "00000000000008400000000000001c400000000000000840",
+        "validity": [
+         true,
+         true,
+         true
+        ],
+        "precision": {
+         "dtype": "float64",
+         "origin": "default",
+         "source_dtype": null,
+         "requested_dtype": null,
+         "consumer": null
+        }
+       }
+      }
+     ]
+    },
+    "y_headers": [
+     "y",
+     "cls",
+     "k"
+    ],
+    "y_categorical": {
+     "cls": {
+      "categories": [
+       "a",
+       "b"
+      ]
+     }
+    },
+    "metadata": {
+     "n_rows": 3,
+     "columns": [
+      {
+       "name": "id",
+       "values": [
+        "s1",
+        "s2",
+        "s3"
+       ]
+      }
+     ]
+    },
+    "weights": {
+     "dtype": "float64",
+     "n_rows": 3,
+     "n_cols": 1,
+     "data_bytes_hex": "000000000000f03f0000000000000000000000000000e03f",
+     "validity": [
+      true,
+      false,
+      true
+     ],
+     "precision": {
+      "dtype": "float64",
+      "origin": "default",
+      "source_dtype": null,
+      "requested_dtype": null,
+      "consumer": null
+     }
+    },
+    "weights_header": "w",
+    "processings": [
+     []
+    ]
+   }
+  },
+  "folds": [],
+  "fold_provenance": [],
+  "identity": {
+   "provenance": {
+    "source_ids": [
+     "m"
+    ],
+    "sample_id": null,
+    "observation_id": null,
+    "repetition_id": null,
+    "group_id": null
+   }
+  },
+  "repetition": null,
+  "aggregate": null,
+  "warnings": [],
+  "audits": [
+   {
+    "source": "m",
+    "na": {
+     "strategy": "ignore",
+     "na_detected": true,
+     "na_count": 3,
+     "na_samples": 2,
+     "na_features": 3,
+     "removed_samples": [],
+     "removed_features": [],
+     "fill_method": null,
+     "na_preserved": true
+    }
+   }
+  ]
+ },
+ "full_float32": {
+  "partition_order": [
+   "train"
+  ],
+  "assembled_schema_version": 3,
+  "name": "tiny",
+  "task_type": "auto",
+  "signal_type": "auto",
+  "n_sources": 1,
+  "blocks": {
+   "train": {
+    "n_samples": 3,
+    "source_ids": [
+     "m"
+    ],
+    "x": [
+     {
+      "dtype": "float32",
+      "n_rows": 3,
+      "n_cols": 2,
+      "data_bytes_hex": "cdcccc3d0000803ecdcc4c3e00000000000000803333b33e",
+      "validity": [
+       true,
+       true,
+       true,
+       false,
+       true,
+       true
+      ],
+      "precision": {
+       "dtype": "float32",
+       "origin": "requested",
+       "source_dtype": null,
+       "requested_dtype": "float32",
+       "consumer": null
+      }
+     }
+    ],
+    "feature_headers": [
+     [
+      "1000",
+      "1100"
+     ]
+    ],
+    "feature_names": [
+     [
+      "1000",
+      "1100"
+     ]
+    ],
+    "feature_axes": [
+     [
+      {
+       "name": "feature",
+       "unit": null,
+       "coordinates": {
+        "kind": "numeric",
+        "count": 2,
+        "data_bytes_hex": "0000000000408f400000000000309140"
+       }
+      }
+     ]
+    ],
+    "representation_ids": [
+     "signal_1d"
+    ],
+    "header_units": [
+     "text"
+    ],
+    "signal_types": [
+     null
+    ],
+    "y": {
+     "columns": [
+      {
+       "name": "y",
+       "kind": "numeric",
+       "block": {
+        "dtype": "float64",
+        "n_rows": 3,
+        "n_cols": 1,
+        "data_bytes_hex": "000000000000f83f00000000000004400000000000000000",
+        "validity": [
+         true,
+         true,
+         false
+        ],
+        "precision": {
+         "dtype": "float64",
+         "origin": "default",
+         "source_dtype": null,
+         "requested_dtype": null,
+         "consumer": null
+        }
+       }
+      },
+      {
+       "name": "cls",
+       "kind": "classification_string",
+       "block": {
+        "dtype": "string-label",
+        "n_rows": 3,
+        "n_cols": 1,
+        "data_bytes_hex": "010000000000000061010000000000000062010000000000000061",
+        "validity": [
+         true,
+         true,
+         true
+        ],
+        "precision": {
+         "dtype": "string-label",
+         "origin": "default",
+         "source_dtype": null,
+         "requested_dtype": null,
+         "consumer": null
+        }
+       }
+      },
+      {
+       "name": "k",
+       "kind": "numeric",
+       "block": {
+        "dtype": "float64",
+        "n_rows": 3,
+        "n_cols": 1,
+        "data_bytes_hex": "00000000000008400000000000001c400000000000000840",
+        "validity": [
+         true,
+         true,
+         true
+        ],
+        "precision": {
+         "dtype": "float64",
+         "origin": "default",
+         "source_dtype": null,
+         "requested_dtype": null,
+         "consumer": null
+        }
+       }
+      }
+     ]
+    },
+    "y_headers": [
+     "y",
+     "cls",
+     "k"
+    ],
+    "y_categorical": {
+     "cls": {
+      "categories": [
+       "a",
+       "b"
+      ]
+     }
+    },
+    "metadata": {
+     "n_rows": 3,
+     "columns": [
+      {
+       "name": "id",
+       "values": [
+        "s1",
+        "s2",
+        "s3"
+       ]
+      }
+     ]
+    },
+    "weights": {
+     "dtype": "float64",
+     "n_rows": 3,
+     "n_cols": 1,
+     "data_bytes_hex": "000000000000f03f0000000000000000000000000000e03f",
+     "validity": [
+      true,
+      false,
+      true
+     ],
+     "precision": {
+      "dtype": "float64",
+      "origin": "default",
+      "source_dtype": null,
+      "requested_dtype": null,
+      "consumer": null
+     }
+    },
+    "weights_header": "w",
+    "processings": [
+     []
+    ]
+   }
+  },
+  "folds": [],
+  "fold_provenance": [],
+  "identity": {
+   "provenance": {
+    "source_ids": [
+     "m"
+    ],
+    "sample_id": null,
+    "observation_id": null,
+    "repetition_id": null,
+    "group_id": null
+   }
+  },
+  "repetition": null,
+  "aggregate": null,
+  "warnings": [],
+  "audits": [
+   {
+    "source": "m",
+    "na": {
+     "strategy": "ignore",
+     "na_detected": true,
+     "na_count": 3,
+     "na_samples": 2,
+     "na_features": 3,
+     "removed_samples": [],
+     "removed_features": [],
+     "fill_method": null,
+     "na_preserved": true
+    }
+   }
+  ]
+ }
+}
