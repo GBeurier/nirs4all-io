@@ -36,7 +36,16 @@ be complete; partitions are `train` or `test`, and a group cannot cross them.
 
 The numeric profile requires explicit ordered `features` and its `sampleId`
 column; spectral sources also require an independent finite monotonic axis,
-unit and kind. Genetics dosage CSV uses modality `genetics`, profile
+unit and kind. Time-series sources (case and modality `timeseries`, for example the daily
+weather before harvest or process sensor logs) are one multivariate series per
+sample, declared with profile `timeseries_csv` in long format: one row per
+(sample, time step), the declared `sampleId` and `time` columns, and one column
+per variable listed in `features`. The source's own `axis` (`"kind": "time"`,
+explicit unit such as `day`) declares the ordered time steps; every sample must
+have each declared step exactly once, in any row order. The series assembles as
+`series_mv` with shape `[time, variable]`, time-major per sample; missing
+variable cells keep validity=false. Undeclared, repeated or missing time steps
+refuse: nothing is resampled, interpolated or positionally repaired. Genetics dosage CSV uses modality `genetics`, profile
 `numeric_csv`, and accepts only 0/1/2 or declared missing tokens (`NA`, `N/A`,
 `NaN` in any case, or empty). Missing source cells retain zero storage plus validity=false;
 targets must be complete. No missing value is silently filled for training.

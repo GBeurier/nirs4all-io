@@ -51,6 +51,8 @@ pub struct SourceDeclaration {
     pub features: Option<Vec<String>>,
     pub axis: Option<AxisDeclaration>,
     pub shape: Option<Vec<usize>>,
+    /// `timeseries_csv` only: the column holding each row's declared time step.
+    pub time: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -228,6 +230,100 @@ fn order(canonical: &[String], actual: &[String], source: &str) -> Result<Vec<us
     Ok(canonical.iter().map(|id| lookup[id]).collect())
 }
 
+/// Assemble a long-format multivariate time series: one row per (sample, declared
+/// time step), one column per variable. Every sample needs every declared step
+/// exactly once; nothing is resampled, interpolated or positionally repaired.
+/// Storage is time-major `[time, variable]` per sample (`series_mv`).
+fn timeseries_source(
+    source: &SourceDeclaration,
+    sample_ids: &[String],
+    files: &BTreeMap<String, Vec<u8>>,
+    limits: TabularReadLimits,
+    result: &mut ImportedSource,
+) -> Result<(), SpecError> {
+    let values = table(&source.file, files, limits)?;
+    let identity = source
+        .sample_id
+        .as_ref()
+        .ok_or_else(|| err("timeseries_csv requires a declared sampleId column"))?;
+    let time = source
+        .time
+        .as_ref()
+        .ok_or_else(|| err("timeseries_csv requires a declared time column"))?;
+    let variables = source
+        .features
+        .as_ref()
+        .ok_or_else(|| err("timeseries_csv requires explicit ordered variables in features"))?;
+    distinct(variables, "time-series variables")?;
+    if variables.contains(identity) || variables.contains(time) || identity == time {
+        return Err(err(
+            "sample ID and time columns cannot be time-series variables",
+        ));
+    }
+    let steps = &source
+        .axis
+        .as_ref()
+        .ok_or_else(|| err("time-series sources require their own explicit axis and units"))?
+        .values;
+    let columns = variables
+        .iter()
+        .map(|name| values.column(name))
+        .collect::<Result<Vec<_>, _>>()?;
+    let (id_column, time_column) = (values.column(identity)?, values.column(time)?);
+    let position = sample_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = vec![vec![None; steps.len()]; sample_ids.len()];
+    let mut extra = BTreeSet::new();
+    for (row_index, row) in values.rows.iter().enumerate() {
+        let Some(&sample) = position.get(row[id_column].as_str()) else {
+            extra.insert(row[id_column].clone());
+            continue;
+        };
+        let step = numeric(&row[time_column])?
+            .and_then(|value| steps.iter().position(|declared| *declared == value))
+            .ok_or_else(|| {
+                err(format!(
+                    "source '{}' row {} has an undeclared time step '{}'",
+                    source.id,
+                    row_index + 2,
+                    row[time_column]
+                ))
+            })?;
+        if rows[sample][step].replace(row_index).is_some() {
+            return Err(err(format!(
+                "source '{}' repeats time step '{}' for one sample",
+                source.id, row[time_column]
+            )));
+        }
+    }
+    let incomplete = rows
+        .iter()
+        .filter(|steps| steps.iter().any(Option::is_none))
+        .count();
+    if incomplete != 0 || !extra.is_empty() {
+        return Err(err(format!("source '{}' identity/time mismatch: {} complete, {incomplete} incomplete, {} unassigned; positional repair is forbidden",
+            source.id, sample_ids.len() - incomplete, extra.len())));
+    }
+    for sample in rows {
+        for row in sample.into_iter().flatten() {
+            for &column in &columns {
+                let value = numeric(&values.rows[row][column])?;
+                result.data.push(value.unwrap_or(0.0));
+                result.validity.push(u8::from(value.is_some()));
+            }
+        }
+    }
+    result.shape = vec![steps.len(), columns.len()];
+    result.feature_names = variables.clone();
+    result.representation = "series_mv".into();
+    result.provenance = json!({"profile":"timeseries_csv","layout":"time-major [time, variable]","sourceSha256":format!("{:x}",Sha256::digest(&files[&source.file])),
+        "missingPolicy":"preserve validity; no imputation, resampling or interpolation"});
+    Ok(())
+}
+
 /// Discover the exact declared non-spectral assets a host must decode in Formats.
 pub fn multimodal_decode_requests(
     manifest: &ImportManifest,
@@ -237,7 +333,7 @@ pub fn multimodal_decode_requests(
     let mut requests = BTreeMap::new();
     for source in &manifest.sources {
         match source.profile.as_str() {
-            "numeric_csv" => {}
+            "numeric_csv" | "timeseries_csv" => {}
             "vcf_gt_dosage" => {
                 if let Some(existing) = requests.insert(source.file.clone(), "vcf_gt_dosage".into())
                 {
@@ -284,7 +380,8 @@ pub fn assemble_multimodal_files(
     limits: TabularReadLimits,
 ) -> Result<ImportedDataset, SpecError> {
     if manifest.schema != MULTIMODAL_IMPORT_PROFILE
-        || !["spectroscopy", "genetics", "images"].contains(&manifest.case_id.as_str())
+        || !["spectroscopy", "genetics", "images", "timeseries"]
+            .contains(&manifest.case_id.as_str())
         || manifest.name.trim().is_empty()
     {
         return Err(err(
@@ -388,7 +485,8 @@ pub fn assemble_multimodal_files(
     let mut alignment = Vec::new();
     let mut total_cells = target_values.len() as u64;
     for source in &manifest.sources {
-        if !["spectroscopy", "genetics", "image"].contains(&source.modality.as_str()) {
+        if !["spectroscopy", "genetics", "image", "timeseries"].contains(&source.modality.as_str())
+        {
             return Err(err("unsupported declared modality"));
         }
         let mut result = ImportedSource {
@@ -408,6 +506,11 @@ pub fn assemble_multimodal_files(
             "numeric_csv" => {
                 if source.modality == "image" {
                     return Err(err("images require the declared PNG manifest profile"));
+                }
+                if source.modality == "timeseries" {
+                    return Err(err(
+                        "time series require the declared timeseries_csv profile",
+                    ));
                 }
                 let values = table(&source.file, files, limits)?;
                 let identity = source
@@ -571,6 +674,12 @@ pub fn assemble_multimodal_files(
                     .collect();
                 result.provenance = json!({"profile":"png_manifest","files":hashes,"layout":"HWC","intensityRange":[0,255],"resize":"none","colourManagement":"none"});
             }
+            "timeseries_csv" => {
+                if source.modality != "timeseries" {
+                    return Err(err("timeseries_csv requires timeseries modality"));
+                }
+                timeseries_source(source, &sample_ids, files, limits, &mut result)?;
+            }
             _ => return Err(err("unsupported multimodal source profile")),
         }
         total_cells = total_cells
@@ -581,8 +690,10 @@ pub fn assemble_multimodal_files(
                 "assembled multimodal numeric storage exceeds the host cell budget",
             ));
         }
+        let ordered = ["spectroscopy", "timeseries"].contains(&source.modality.as_str());
         if let Some(axis) = &source.axis {
-            if source.modality != "spectroscopy"
+            if !ordered
+                || (source.modality == "timeseries" && axis.kind != "time")
                 || axis.values.len() != result.shape[0]
                 || axis.values.iter().any(|value| !value.is_finite())
                 || axis.unit.is_empty()
@@ -590,11 +701,11 @@ pub fn assemble_multimodal_files(
                 || !(axis.values.windows(2).all(|pair| pair[0] < pair[1])
                     || axis.values.windows(2).all(|pair| pair[0] > pair[1]))
             {
-                return Err(err("spectral axis must match source features and be finite, monotonic and independently labelled"));
+                return Err(err("spectral or time axis must match the source and be finite, monotonic and independently labelled"));
             }
-        } else if source.modality == "spectroscopy" {
+        } else if ordered {
             return Err(err(
-                "spectroscopy source requires its own explicit axis and units",
+                "spectroscopy and time-series sources require their own explicit axis and units",
             ));
         }
         alignment
