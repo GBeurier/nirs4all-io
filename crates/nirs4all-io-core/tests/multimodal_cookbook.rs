@@ -197,3 +197,75 @@ fn continuous_targets_keep_their_output_and_fingerprint() {
     );
     assert_eq!(implicit.fingerprint, explicit.fingerprint);
 }
+
+#[test]
+fn time_series_sources_are_multivariate_series_over_a_declared_time_axis() {
+    let manifest = |source: serde_json::Value| -> ImportManifest {
+        serde_json::from_value(json!({"schema":"nirs4all.multimodal-import.v1","caseId":"timeseries","name":"fixture",
+            "metadata":{"file":"meta.csv","sampleId":"sample_id","target":"y","targetUnit":"%"},
+            "sources":[{"id":"nir","label":"NIR","modality":"spectroscopy","profile":"numeric_csv","file":"nir.csv","sampleId":"sample_id",
+                "features":["700","710"],"axis":{"values":[700.0,710.0],"unit":"nm","kind":"wavelength"}}, source]}))
+        .unwrap()
+    };
+    let weather = json!({"id":"weather","label":"Daily weather","modality":"timeseries","profile":"timeseries_csv","file":"w.csv",
+        "sampleId":"sample_id","time":"day","features":["t_mean","rain"],"axis":{"values":[-2.0,-1.0,0.0],"unit":"day","kind":"time"}});
+    // One row per (sample, time step), one column per variable, in any row order.
+    let mut files = BTreeMap::from([
+        ("meta.csv".into(), b"sample_id,y\na,15.5\nb,17\n".to_vec()),
+        ("nir.csv".into(), b"sample_id,700,710\nb,0.2,0.3\na,0.1,0.2\n".to_vec()),
+        ("w.csv".into(), b"sample_id,day,t_mean,rain\nb,0,28.5,0\na,-2,25,1.5\na,-1,26.5,NA\nb,-2,30,0\na,0,27,0\nb,-1,29,4\n".to_vec()),
+    ]);
+    let limits = TabularReadLimits::new(4096, 4096, 100, 100, 1000);
+    let assembled =
+        assemble_multimodal_files(&manifest(weather.clone()), &files, &BTreeMap::new(), limits)
+            .unwrap();
+    let series = &assembled.sources[1];
+    assert_eq!(
+        (series.modality.as_str(), series.representation.as_str()),
+        ("timeseries", "series_mv")
+    );
+    assert_eq!(series.shape, [3, 2]);
+    assert_eq!(series.feature_names, ["t_mean", "rain"]);
+    // Time-major [time, variable] per sample, in metadata sample order; a missing cell keeps validity=false.
+    assert_eq!(
+        series.data,
+        [25.0, 1.5, 26.5, 0.0, 27.0, 0.0, 30.0, 0.0, 29.0, 4.0, 28.5, 0.0]
+    );
+    assert_eq!(series.validity, [1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
+    let refuse = |files: &BTreeMap<String, Vec<u8>>, source: serde_json::Value| {
+        assert!(
+            assemble_multimodal_files(&manifest(source), files, &BTreeMap::new(), limits).is_err()
+        );
+    };
+    // A time series needs its own time axis, and only the timeseries_csv profile reads one.
+    let mut no_axis = weather.clone();
+    no_axis.as_object_mut().unwrap().remove("axis");
+    refuse(&files, no_axis);
+    let mut wavelength = weather.clone();
+    wavelength["axis"]["kind"] = json!("wavelength");
+    refuse(&files, wavelength);
+    let mut wide = weather.clone();
+    wide["profile"] = json!("numeric_csv");
+    refuse(&files, wide);
+    // The time column is required, belongs to timeseries_csv only, and the series declares no shape.
+    let mut no_time = weather.clone();
+    no_time.as_object_mut().unwrap().remove("time");
+    refuse(&files, no_time);
+    let mut shaped = weather.clone();
+    shaped["shape"] = json!([3, 2]);
+    refuse(&files, shaped);
+    // An unassigned sample identity refuses (no positional repair).
+    let mut extra = files.clone();
+    extra.insert(
+        "w.csv".into(),
+        [&files["w.csv"][..], &b"c,0,20,0\n"[..]].concat(),
+    );
+    refuse(&extra, weather.clone());
+    // Undeclared, repeated or missing time steps refuse instead of being resampled.
+    for bad in [&b"sample_id,day,t_mean,rain\na,-2,25,1\na,-1,26,1\na,0,27,0\nb,-2,30,0\nb,-1,29,4\nb,1,28,0\n"[..],
+                &b"sample_id,day,t_mean,rain\na,-2,25,1\na,-2,26,1\na,0,27,0\nb,-2,30,0\nb,-1,29,4\nb,0,28,0\n"[..],
+                &b"sample_id,day,t_mean,rain\na,-2,25,1\na,0,27,0\nb,-2,30,0\nb,-1,29,4\nb,0,28,0\n"[..]] {
+        files.insert("w.csv".into(), bad.to_vec());
+        refuse(&files, weather.clone());
+    }
+}

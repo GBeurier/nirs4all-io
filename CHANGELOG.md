@@ -1,6 +1,16 @@
 # Changelog
 
-## 0.3.8 - Unreleased
+## 0.3.9 - Unreleased
+
+- The declared multimodal import (`nirs4all.multimodal-import.v1`) accepts the
+  `timeseries` case and source modality with the new long-format
+  `timeseries_csv` profile (declared `sampleId`, `time` column, variables in
+  `features`, required time `axis`): each sample's multivariate series
+  assembles as `series_mv`, shape `[time, variable]`. Undeclared, repeated or
+  missing time steps refuse; nothing is resampled. Existing cases, profiles,
+  outputs and fingerprints are unchanged; older readers refuse the new values.
+
+## 0.3.8
 
 - Add the standalone WASM package subpath `./assembled-wire`, exposing
   `decodeAssembledFull` to decode native assembled-schema-3 records into the
