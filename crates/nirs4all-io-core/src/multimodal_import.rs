@@ -489,6 +489,14 @@ pub fn assemble_multimodal_files(
         {
             return Err(err("unsupported declared modality"));
         }
+        // `time` belongs to long-format series only, and a series' shape comes from its axis and variables.
+        if (source.profile == "timeseries_csv") != source.time.is_some()
+            || (source.profile == "timeseries_csv" && source.shape.is_some())
+        {
+            return Err(err(
+                "only timeseries_csv declares a time column, and it declares no shape",
+            ));
+        }
         let mut result = ImportedSource {
             id: source.id.clone(),
             label: source.label.clone(),

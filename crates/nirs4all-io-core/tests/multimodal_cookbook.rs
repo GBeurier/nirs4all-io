@@ -247,6 +247,20 @@ fn time_series_sources_are_multivariate_series_over_a_declared_time_axis() {
     let mut wide = weather.clone();
     wide["profile"] = json!("numeric_csv");
     refuse(&files, wide);
+    // The time column is required, belongs to timeseries_csv only, and the series declares no shape.
+    let mut no_time = weather.clone();
+    no_time.as_object_mut().unwrap().remove("time");
+    refuse(&files, no_time);
+    let mut shaped = weather.clone();
+    shaped["shape"] = json!([3, 2]);
+    refuse(&files, shaped);
+    // An unassigned sample identity refuses (no positional repair).
+    let mut extra = files.clone();
+    extra.insert(
+        "w.csv".into(),
+        [&files["w.csv"][..], &b"c,0,20,0\n"[..]].concat(),
+    );
+    refuse(&extra, weather.clone());
     // Undeclared, repeated or missing time steps refuse instead of being resampled.
     for bad in [&b"sample_id,day,t_mean,rain\na,-2,25,1\na,-1,26,1\na,0,27,0\nb,-2,30,0\nb,-1,29,4\nb,1,28,0\n"[..],
                 &b"sample_id,day,t_mean,rain\na,-2,25,1\na,-2,26,1\na,0,27,0\nb,-2,30,0\nb,-1,29,4\nb,0,28,0\n"[..],

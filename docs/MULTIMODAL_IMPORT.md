@@ -45,7 +45,10 @@ explicit unit such as `day`) declares the ordered time steps; every sample must
 have each declared step exactly once, in any row order. The series assembles as
 `series_mv` with shape `[time, variable]`, time-major per sample; missing
 variable cells keep validity=false. Undeclared, repeated or missing time steps
-refuse: nothing is resampled, interpolated or positionally repaired. Genetics dosage CSV uses modality `genetics`, profile
+refuse: nothing is resampled, interpolated or positionally repaired. For a series,
+`featureNames` lists the variables (one per variable, not one per stored value); a
+consumer that needs one name per stored column derives it from the time axis and
+the variables in the time-major storage order. Genetics dosage CSV uses modality `genetics`, profile
 `numeric_csv`, and accepts only 0/1/2 or declared missing tokens (`NA`, `N/A`,
 `NaN` in any case, or empty). Missing source cells retain zero storage plus validity=false;
 targets must be complete. No missing value is silently filled for training.
