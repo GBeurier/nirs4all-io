@@ -159,7 +159,7 @@ node() {
 
 def test_formats_python_oracle_uses_a_minor_level_range() -> None:
     # Cross-repository owners are declared at minor granularity (docs/VERSIONING.md).
-    expected = "nirs4all-formats>=0.2,<0.3"
+    expected = "nirs4all-formats>=0.3,<0.4"
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     assert project["optional-dependencies"]["formats"] == [expected]
     assert expected in project["optional-dependencies"]["dev"]
@@ -170,7 +170,7 @@ def test_formats_vendored_web_snapshot_retains_its_exact_version() -> None:
     # a rebuild from an unreleased checkout must not relabel its bytes.
     web_package = json.loads((ROOT / "web/pkg/formats/package.json").read_text(encoding="utf-8"))
     assert web_package["name"] == "nirs4all-formats-wasm"
-    assert web_package["version"] == "0.2.14"
+    assert web_package["version"] == "0.3.1"
 
 
 def test_json_path_normalization_handles_escaped_windows_form() -> None:

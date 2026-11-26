@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Adopt Formats 0.3 for vendor imports. Zero WinISI and ISIscan constituents now decode as missing, and JSON numeric reads use correct rounding.
+
 ## 0.3.9 - Unreleased
 
 - The declared multimodal import (`nirs4all.multimodal-import.v1`) accepts the

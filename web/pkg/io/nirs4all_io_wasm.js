@@ -11,10 +11,9 @@
  * sources (exact, then file-stem, then glob). Returns `AssembledDataset` as a
  * plain JS object (per-partition `blocks` with `x`/`y`/headers/metadata + `folds`).
  *
- * Every numeric matrix `data` (X, y, processings) and `weights` is a
- * `Float64Array` in which a missing value is `NaN`. JSON has no NaN, so a
- * plain array would carry it as `null`, which JS arithmetic reads as 0.
- * Metadata cells stay JSON values; a missing metadata cell is `null`.
+ * The owner full value carries exact assembled3 bytes and explicit masks.
+ * The existing typed-array view is retained; its DTO/mask interoperability
+ * requires separate stage4 qualification beyond this Rust type propagation.
  *
  * `index_file`/`folds.file` partitions are not browser-reachable here (no fs) and
  * raise an error — column/inline partitions and folds work.
@@ -27,6 +26,40 @@ export function assembleDataset(files, record_sets, spec) {
     const ptr0 = passStringToWasm0(spec, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.assembleDataset(files, record_sets, ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Explicit multimodal file profile. IO parses declarations/CSV and aligns IDs;
+ * the supplied synchronous Formats owner callback decodes non-spectral bytes.
+ * @param {string} manifest_json
+ * @param {any} files
+ * @param {Function} decode
+ * @param {number} max_decoded_bytes
+ * @returns {any}
+ */
+export function assembleMultimodalFiles(manifest_json, files, decode, max_decoded_bytes) {
+    const ptr0 = passStringToWasm0(manifest_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.assembleMultimodalFiles(ptr0, len0, files, decode, max_decoded_bytes);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Inspect each original table independently, retaining NA and assembler column names.
+ * Per-file read refusals are returned in the descriptions; invalid arguments throw.
+ * @param {any} files
+ * @param {any} options
+ * @returns {any}
+ */
+export function describeTables(files, options) {
+    const ret = wasm.describeTables(files, options);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
@@ -57,6 +90,7 @@ export function inferDataset(files, record_sets, options) {
  * `files` must be an array of `{name, bytes}` where `bytes` is a
  * `Uint8Array`. `options.conventions` can override the default
  * `nirs4all-classic` convention list.
+ * `options.params` and exact-name `options.file_params` apply before inference reads.
  * @param {any} files
  * @param {any} options
  * @returns {any}
@@ -280,6 +314,10 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_1506f2235d1bdba0: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
+        __wbg_call_6e37a87ff352da3d: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4) {
+            const ret = arg0.call(arg1, arg2, arg3, arg4);
+            return ret;
+        }, arguments); },
         __wbg_call_8a89609d89f6608a: function() { return handleError(function (arg0, arg1) {
             const ret = arg0.call(arg1);
             return ret;
@@ -370,6 +408,10 @@ function __wbg_get_imports() {
             const ret = new Uint8Array(arg0);
             return ret;
         },
+        __wbg_new_from_slice_18fa1f71286d66b8: function(arg0, arg1) {
+            const ret = new Uint8Array(getArrayU8FromWasm0(arg0, arg1));
+            return ret;
+        },
         __wbg_new_from_slice_3c93d0bc613de8f0: function(arg0, arg1) {
             const ret = new Float64Array(getArrayF64FromWasm0(arg0, arg1));
             return ret;
@@ -406,16 +448,21 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0) {
+            // Cast intrinsic for `F64 -> Externref`.
+            const ret = arg0;
+            return ret;
+        },
+        __wbindgen_cast_0000000000000002: function(arg0) {
             // Cast intrinsic for `I64 -> Externref`.
             const ret = arg0;
             return ret;
         },
-        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
+        __wbindgen_cast_0000000000000003: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
             return ret;
         },
-        __wbindgen_cast_0000000000000003: function(arg0) {
+        __wbindgen_cast_0000000000000004: function(arg0) {
             // Cast intrinsic for `U64 -> Externref`.
             const ret = BigInt.asUintN(64, arg0);
             return ret;

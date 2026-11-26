@@ -4,6 +4,16 @@
 export function _start(): void;
 
 /**
+ * Decode an explicitly declared non-spectral PNG/VCF profile through the Rust owner.
+ */
+export function decodeMultimodalBytes(profile: string, bytes: Uint8Array | number[], max_decoded_bytes: number): any;
+
+/**
+ * Export formats, software presets and the requirements of each format.
+ */
+export function exportTargets(): any;
+
+/**
  * Feature flags the WASM build was compiled with. Useful for runtime checks
  * from JS ("does this WASM bundle have HDF5 support?").
  *
@@ -11,6 +21,8 @@ export function _start(): void;
  * `fmt-parquet`, including snappy, uncompressed, and zstd Parquet pages.
  */
 export function features(): any;
+
+export function multimodalReaderCatalog(): any;
 
 /**
  * Decode a file by name + bytes. Returns the spectral records as a JS array
@@ -21,7 +33,7 @@ export function features(): any;
  * Single-file HDF5 / NetCDF payloads decode directly through this entry
  * point now that `fmt-hdf5` is on.
  */
-export function openBytes(filename: string, bytes: Uint8Array): any;
+export function openBytes(filename: string, bytes: Uint8Array | number[]): any;
 
 /**
  * Decode a file by name + bytes plus a map of sidecar names → byte
@@ -30,7 +42,17 @@ export function openBytes(filename: string, bytes: Uint8Array): any;
  * AVIRIS/ERDAS LAN and the HDF5-backed sidecar formats (FGI XML+HDF5,
  * NetCDF MFRSR with its QC YAML) now that `fmt-hdf5` is on.
  */
-export function openWithSidecars(filename: string, bytes: Uint8Array, sidecars: any): any;
+export function openWithSidecars(filename: string, bytes: Uint8Array | number[], sidecars: any): any;
+
+/**
+ * Plan the conversions that make `records` writable for `target`.
+ *
+ * `target` is a writer format or software preset, or `null`/`undefined` to
+ * plan the options alone (for example `{ signal_type: "absorbance" }`).
+ * Returns the plan: abstract steps naming the nirs4all-methods method that
+ * computes each, questions to answer through the options, and refusals.
+ */
+export function planConversion(records: any, target: string | null | undefined, options: any): any;
 
 /**
  * Probe a file by name + bytes. Returns the ordered candidate readers.
@@ -40,7 +62,7 @@ export function openWithSidecars(filename: string, bytes: Uint8Array, sidecars: 
  * inspected; pass the entire buffer or just the head — the implementation is
  * the same.
  */
-export function probeBytes(filename: string, bytes: Uint8Array): any;
+export function probeBytes(filename: string, bytes: Uint8Array | number[]): any;
 
 /**
  * Readers compiled into this WASM bundle.
@@ -58,23 +80,38 @@ export function recommended_chunk_size_mb(): number;
  * payload. The rules live inside each format module; this binding only
  * serializes them for browser UIs.
  */
-export function sidecarRequirements(filename: string, bytes: Uint8Array): any;
+export function sidecarRequirements(filename: string, bytes: Uint8Array | number[]): any;
 
 /**
  * Crate version exposed to JS.
  */
 export function version(): string;
 
+/**
+ * Write records to an export format or software preset.
+ *
+ * `records` are the objects returned by `openBytes`; `options` is an object
+ * with any of `signal`, `base_name`, `extension`, `axis_tolerance`, `multi`,
+ * `delimiter` and `zip`. Returns `{ format, files: [{ name, media_type,
+ * bytes }], losses, conversions }`.
+ */
+export function writeRecords(records: any, target: string, options: any): any;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly _start: () => void;
+    readonly decodeMultimodalBytes: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly exportTargets: () => [number, number, number];
     readonly features: () => [number, number, number];
+    readonly multimodalReaderCatalog: () => [number, number, number];
     readonly openBytes: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly openWithSidecars: (a: number, b: number, c: number, d: number, e: any) => [number, number, number];
+    readonly planConversion: (a: any, b: number, c: number, d: any) => [number, number, number];
     readonly probeBytes: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly readerCatalog: () => [number, number, number];
+    readonly recommended_chunk_size_mb: () => number;
     readonly sidecarRequirements: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly version: () => [number, number];
     readonly rust_zstd_wasm_shim_calloc: (a: number, b: number) => number;
@@ -85,14 +122,14 @@ export interface InitOutput {
     readonly rust_zstd_wasm_shim_memmove: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_memset: (a: number, b: number, c: number) => number;
     readonly rust_zstd_wasm_shim_qsort: (a: number, b: number, c: number, d: number) => void;
-    readonly recommended_chunk_size_mb: () => number;
+    readonly writeRecords: (a: any, b: number, c: number, d: any) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 
