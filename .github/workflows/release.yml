@@ -312,6 +312,15 @@ jobs:
             exit 1
           fi
           echo "${{ steps.identity.outputs.release_tag }} matches built package version ${dist_version}."
+      - name: Stage the Windows wheels for first publication
+        run: |
+          mkdir windows-dist
+          mv dist/*-win_amd64.whl windows-dist/
+      - name: Publish Windows wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: windows-dist
+          skip-existing: true
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist

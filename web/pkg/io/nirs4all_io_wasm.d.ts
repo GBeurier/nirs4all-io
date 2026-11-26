@@ -12,15 +12,26 @@
  * sources (exact, then file-stem, then glob). Returns `AssembledDataset` as a
  * plain JS object (per-partition `blocks` with `x`/`y`/headers/metadata + `folds`).
  *
- * Every numeric matrix `data` (X, y, processings) and `weights` is a
- * `Float64Array` in which a missing value is `NaN`. JSON has no NaN, so a
- * plain array would carry it as `null`, which JS arithmetic reads as 0.
- * Metadata cells stay JSON values; a missing metadata cell is `null`.
+ * The owner full value carries exact assembled3 bytes and explicit masks.
+ * The existing typed-array view is retained; its DTO/mask interoperability
+ * requires separate stage4 qualification beyond this Rust type propagation.
  *
  * `index_file`/`folds.file` partitions are not browser-reachable here (no fs) and
  * raise an error — column/inline partitions and folds work.
  */
 export function assembleDataset(files: any, record_sets: any, spec: string): any;
+
+/**
+ * Explicit multimodal file profile. IO parses declarations/CSV and aligns IDs;
+ * the supplied synchronous Formats owner callback decodes non-spectral bytes.
+ */
+export function assembleMultimodalFiles(manifest_json: string, files: any, decode: Function, max_decoded_bytes: number): any;
+
+/**
+ * Inspect each original table independently, retaining NA and assembler column names.
+ * Per-file read refusals are returned in the descriptions; invalid arguments throw.
+ */
+export function describeTables(files: any, options: any): any;
 
 /**
  * Infer a browser dataset plan from raw files and decoded spectral records.
@@ -36,6 +47,7 @@ export function inferDataset(files: any, record_sets: any, options: any): any;
  * `files` must be an array of `{name, bytes}` where `bytes` is a
  * `Uint8Array`. `options.conventions` can override the default
  * `nirs4all-classic` convention list.
+ * `options.params` and exact-name `options.file_params` apply before inference reads.
  */
 export function inferFiles(files: any, options: any): any;
 
@@ -88,6 +100,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly assembleDataset: (a: any, b: any, c: number, d: number) => [number, number, number];
+    readonly assembleMultimodalFiles: (a: number, b: number, c: any, d: any, e: number) => [number, number, number];
+    readonly describeTables: (a: any, b: any) => [number, number, number];
     readonly inferDataset: (a: any, b: any, c: any) => [number, number, number];
     readonly inferFiles: (a: any, b: any) => [number, number, number];
     readonly inferRecords: (a: any) => [number, number, number];
