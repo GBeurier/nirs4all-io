@@ -264,9 +264,9 @@ fn filesystem_inference_vectors_bind_used_refs_before_reading() {
                 .all(|name| std::path::Path::new(name).is_absolute()));
             let physical_name = case["files"].as_object().unwrap().keys().next().unwrap();
             let identity = std::fs::canonicalize(tmp.path().join(physical_name)).unwrap();
-            assert!(inputs
-                .iter()
-                .all(|name| *name == identity.to_str().unwrap()));
+            for name in inputs {
+                assert_eq!(std::fs::canonicalize(name).unwrap(), identity);
+            }
             continue;
         }
         if case["expected"]["load_error"] == true {
@@ -518,9 +518,11 @@ fn a1_literal_directory_never_selects_cwd_file() {
         let result = assemble(&spec, &tmp.path().join(case["base"].as_str().unwrap()));
         std::env::set_current_dir(original).unwrap();
         let error = result.unwrap_err();
-        let scoped = tmp
+        let scoped: std::path::PathBuf = tmp
             .path()
-            .join(case["expected"]["vendor_path"].as_str().unwrap());
+            .join(case["expected"]["vendor_path"].as_str().unwrap())
+            .components()
+            .collect();
         assert!(
             error.message.contains(scoped.to_str().unwrap()),
             "{}",
